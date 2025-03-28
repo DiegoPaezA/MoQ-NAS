@@ -30,31 +30,46 @@ class BaseTrainer:
         if not os.path.exists(self.params['model_path']):
             os.makedirs(self.params['model_path'])
 
+    def _forward_pass(self, inputs, labels):
+        """
+        Common forward pass: moves inputs/labels to device, adjusts labels for multi-class,
+        runs the model under autocast, and computes the loss.
+        """
+        # Move data to device
+        inputs = inputs.to(self.device)
+        labels = labels.to(self.device)
+        
+        # Adjust labels for multi-class tasks
+        task = self.params.get('task', 'classification')
+        if task == 'multi-class':
+            labels = labels.squeeze().long()
+        
+        # Run forward pass with mixed precision if enabled
+        with autocast(dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
+            outputs = self.model(inputs)
+            loss = self.criterion(outputs, labels)
+        
+        return outputs, loss, labels
+    
     def train_epoch(self):
         self.model.train()
         epoch_loss = 0.0
         correct = 0
         total = 0
-        
-        mixed_precision = self.params.get('mixed_precision', False)
-        task = self.params.get('task', 'classification')
         for inputs, labels in self.train_loader:
-            inputs, labels = inputs.to(self.device), labels.to(self.device)
             self.optimizer.zero_grad()
-            # Use autocast for mixed precision training.
-            with autocast(dtype=torch.float16, enabled=mixed_precision):
-                outputs = self.model(inputs)
-                if task == 'multi-class':
-                    labels = labels.squeeze().long()
-                loss = self.criterion(outputs, labels)
+            outputs, loss, labels = self._forward_pass(inputs, labels)
+            
+            # Backpropagation with mixed precision scaling
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
-
+            
             epoch_loss += loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
+            
         avg_loss = epoch_loss / len(self.train_loader)
         accuracy = 100 * correct / total
         return avg_loss, accuracy
@@ -64,27 +79,22 @@ class BaseTrainer:
         epoch_loss = 0.0
         correct = 0
         total = 0
-        mixed_precision = self.params.get('mixed_precision', False)
-        task = self.params.get('task', 'classification')
         with torch.no_grad():
             for inputs, labels in loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
-                if self.params.get('task', 'classification') == 'multi-class':
-                    labels = labels.squeeze().long()
-                with autocast(dtype=torch.float16, enabled=mixed_precision):
-                    outputs = self.model(inputs)
-                    loss = self.criterion(outputs, labels)
+                outputs, loss, labels = self._forward_pass(inputs, labels)
                 epoch_loss += loss.item()
                 _, predicted = outputs.max(1)
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
+                
         avg_loss = epoch_loss / len(loader)
         accuracy = 100 * correct / total
         return avg_loss, accuracy
 
     def compute_additional_metrics(self, loader):
         """
-        Compute additional metrics such as loss, accuracy, confusion matrix, and, for multi-class tasks, AUC.
+        Compute additional metrics such as loss, accuracy, confusion matrix, and,
+        for multi-class tasks, AUC. Uses a shared forward pass helper.
         """
         self.model.eval()
         total_loss = 0.0
@@ -92,33 +102,25 @@ class BaseTrainer:
         total = 0
         all_labels = []
         all_predictions = []
-        y_scores = []  # Will store softmax outputs if needed
+        y_scores = []  # For storing softmax outputs if needed
         
-        mixed_precision = self.params.get('mixed_precision', False)
         task = self.params.get('task', 'classification')
         
         with torch.no_grad():
             for inputs, labels in loader:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
+                # Use the helper to move data, perform forward pass, and compute loss
+                outputs, loss, labels = self._forward_pass(inputs, labels)
                 
-                if task == 'multi-class':
-                    labels = labels.squeeze().long()
-                    
-                with autocast(dtype=torch.float16, enabled=mixed_precision):
-                    outputs = self.model(inputs)
-                    loss = self.criterion(outputs, labels)
-                    
                 total_loss += loss.item()
                 _, predicted = outputs.max(1)
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
                 
-                # Save labels and predictions for confusion matrix computation
+                # Collect labels and predictions for the confusion matrix
                 all_labels.extend(labels.cpu().numpy())
                 all_predictions.extend(predicted.cpu().numpy())
                 
-                # For multi-class tasks, store the softmax probabilities
+                # For multi-class tasks, store softmax outputs
                 if task == 'multi-class':
                     y_scores.append(outputs.softmax(dim=-1).cpu())
         
@@ -129,7 +131,7 @@ class BaseTrainer:
         auc = 0.0
         evaluator_acc = 0.0
         if task == 'multi-class' and y_scores:
-            # Concatenate accumulated softmax outputs and evaluate AUC
+            # Concatenate softmax outputs and evaluate AUC
             y_score = torch.cat(y_scores, dim=0).numpy()
             evaluator = Evaluator(self.params['dataset'], split='test', root=self.params['data_path'])
             auc, evaluator_acc = evaluator.evaluate(y_score)
