@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.cuda.amp import GradScaler, autocast
 from util import create_info_file, init_log, load_yaml
-from cnn import metrics, model  # Assuming ModelMetrics and NetworkGraph are here
+from cnn import metrics, model, fitness_utils, model_resnet
 from sklearn.metrics import confusion_matrix
 from medmnist import Evaluator
 
@@ -24,6 +24,7 @@ class BaseTrainer:
         self.logger = logger or init_log("INFO", name=__name__)
         self.scaler = GradScaler(enabled=self.params.get('mixed_precision', False))
         self.best_accuracy = 0.0
+        self.best_validation_loss = float('inf')
         self.best_epoch = 0
         self.best_model_path = os.path.join(self.params['model_path'], 'best_model.pth')
         if not os.path.exists(self.params['model_path']):
@@ -34,13 +35,16 @@ class BaseTrainer:
         epoch_loss = 0.0
         correct = 0
         total = 0
+        
+        mixed_precision = self.params.get('mixed_precision', False)
+        task = self.params.get('task', 'classification')
         for inputs, labels in self.train_loader:
             inputs, labels = inputs.to(self.device), labels.to(self.device)
             self.optimizer.zero_grad()
             # Use autocast for mixed precision training.
-            with autocast(dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
+            with autocast(dtype=torch.float16, enabled=mixed_precision):
                 outputs = self.model(inputs)
-                if self.params.get('task', 'classification') == 'multi-class':
+                if task == 'multi-class':
                     labels = labels.squeeze().long()
                 loss = self.criterion(outputs, labels)
             self.scaler.scale(loss).backward()
@@ -60,13 +64,15 @@ class BaseTrainer:
         epoch_loss = 0.0
         correct = 0
         total = 0
+        mixed_precision = self.params.get('mixed_precision', False)
+        task = self.params.get('task', 'classification')
         with torch.no_grad():
             for inputs, labels in loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                with autocast(dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
+                if self.params.get('task', 'classification') == 'multi-class':
+                    labels = labels.squeeze().long()
+                with autocast(dtype=torch.float16, enabled=mixed_precision):
                     outputs = self.model(inputs)
-                    if self.params.get('task', 'classification') == 'multi-class':
-                        labels = labels.squeeze().long()
                     loss = self.criterion(outputs, labels)
                 epoch_loss += loss.item()
                 _, predicted = outputs.max(1)
@@ -77,27 +83,58 @@ class BaseTrainer:
         return avg_loss, accuracy
 
     def compute_additional_metrics(self, loader):
+        """
+        Compute additional metrics such as loss, accuracy, confusion matrix, and, for multi-class tasks, AUC.
+        """
         self.model.eval()
+        total_loss = 0.0
+        correct = 0
+        total = 0
         all_labels = []
         all_predictions = []
-        y_score = torch.tensor([]).to(self.device)
+        y_scores = []  # Will store softmax outputs if needed
+        
+        mixed_precision = self.params.get('mixed_precision', False)
+        task = self.params.get('task', 'classification')
+        
         with torch.no_grad():
             for inputs, labels in loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
-                outputs = self.model(inputs)
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
+                
+                if task == 'multi-class':
+                    labels = labels.squeeze().long()
+                    
+                with autocast(dtype=torch.float16, enabled=mixed_precision):
+                    outputs = self.model(inputs)
+                    loss = self.criterion(outputs, labels)
+                    
+                total_loss += loss.item()
                 _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+                
+                # Save labels and predictions for confusion matrix computation
                 all_labels.extend(labels.cpu().numpy())
                 all_predictions.extend(predicted.cpu().numpy())
-                if self.params.get('task') == 'multi-class':
-                    y_score = torch.cat((y_score, outputs.softmax(dim=-1)), 0)
-        if self.params.get('task') == 'multi-class':
-            y_score = y_score.cpu().detach().numpy()
-            evaluator = Evaluator(self.params['dataset'], split='test', root=self.params['data_path'])
-            auc, acc = evaluator.evaluate(y_score)
-        else:
-            auc, acc = 0, 0
+                
+                # For multi-class tasks, store the softmax probabilities
+                if task == 'multi-class':
+                    y_scores.append(outputs.softmax(dim=-1).cpu())
+        
+        avg_loss = total_loss / len(loader)
+        test_acc = 100 * correct / total
         conf_matrix = confusion_matrix(all_labels, all_predictions)
-        return conf_matrix, auc, acc
+        
+        auc = 0.0
+        evaluator_acc = 0.0
+        if task == 'multi-class' and y_scores:
+            # Concatenate accumulated softmax outputs and evaluate AUC
+            y_score = torch.cat(y_scores, dim=0).numpy()
+            evaluator = Evaluator(self.params['dataset'], split='test', root=self.params['data_path'])
+            auc, evaluator_acc = evaluator.evaluate(y_score)
+        
+        return test_acc, avg_loss, conf_matrix, auc, evaluator_acc
 
     def update_scheduler(self, scheduler, metric=None):
         if scheduler is not None:
@@ -108,10 +145,10 @@ class BaseTrainer:
 
     def release_gpu_memory(self):
         if not torch.cuda.is_available():
-            self.logger.info("CUDA is not available. No GPU memory to release.")
+            #self.logger.info("CUDA is not available. No GPU memory to release.")
             return
         torch.cuda.empty_cache()
-        self.logger.info("GPU cache cleared.")
+        #self.logger.info("GPU cache cleared.")
 
     def reset_and_load_best_model(self, best_model_path):
         # Reinitialize the model and load weights from the best model checkpoint.
@@ -139,7 +176,7 @@ class BaseTrainer:
             return CosineAnnealingLR(self.optimizer, T_max=max_epochs, eta_min=0)
         elif self.params.get('lr_scheduler') == 'multistep':
             from torch.optim.lr_scheduler import MultiStepLR
-            milestones = [0.5 * max_epochs, 0.75 * max_epochs]
+            milestones = [int(0.5 * max_epochs), int(0.75 * max_epochs)]
             return MultiStepLR(self.optimizer, milestones=milestones, gamma=0.1)
         else:
             return None
@@ -148,9 +185,51 @@ class BaseTrainer:
         phase = self.params.get('phase')
         if phase == 'evolution' and epoch > start_eval_epoch:
             return True
-        elif phase == 'retrain':
+        elif phase == 'retrain' or phase == 'resnet':
             return True
         return False
+    
+    def compute_mo_fitness(self, total_params, cuda_inference_time):
+        fitness_metric = self.params.get('fitness_metric')
+        mo_base_metric = self.params.get('mo_metric_base')
+        if fitness_metric == 'best_accuracy' or (fitness_metric == 'scalar_multi_objective' and mo_base_metric == 'accuracy'):
+            metric_value = self.best_accuracy
+            metric_type = 'accuracy'
+        elif fitness_metric == 'best_loss' or (fitness_metric == 'scalar_multi_objective' and mo_base_metric == 'loss'):
+            metric_value = self.best_validation_loss
+            metric_type = 'loss'
+        else:
+            raise ValueError(f"Invalid fitness_metric: {fitness_metric}")
+        
+        # Scalarized multi-objective function.
+        scalar_multi_objective = fitness_utils.mofitness(metric_value=metric_value,
+                                                        params=total_params,
+                                                        inference_time=cuda_inference_time,
+                                                        T_p=self.params['max_params'],
+                                                        T_t=self.params['max_inference_time'],
+                                                        metric_type=metric_type)
+        fitness_val_loss = (1 / (1 + self.best_validation_loss)) * 100.0
+        return scalar_multi_objective, fitness_val_loss
+    
+    def get_final_metrics(self):
+        """
+        Compute final metrics for the current model:
+        - CUDA inference time (in microseconds)
+        - Total trainable parameters
+        - Total FLOPs (as measured on the input shape)
+        - Model memory usage (in MB)
+        
+        Returns:
+            tuple: (cuda_inference_time, total_params, total_flops, model_memory_usage)
+        """
+        model_metrics = metrics.ModelMetrics(self.model, device=self.params['device'])
+        # Get a small batch from the validation loader for measuring inference time.
+        inference_images = next(iter(self.val_loader))[0][:10].to(self.params['device'])
+        cuda_inference_time = model_metrics.measure_inference_time(inference_images)
+        total_params = model_metrics.measure_parameters()
+        total_flops = model_metrics.measure_flops(self.params['input_shape'])
+        model_memory_usage = model_metrics.measure_memory(self.params['input_shape']) / (1024 ** 2)  # Convert bytes to MB
+        return cuda_inference_time, total_params, total_flops, model_memory_usage
 
     def train(self):
         max_epochs = self.params['max_epochs']
@@ -168,7 +247,7 @@ class BaseTrainer:
             training_accuracies.append(train_acc)
             
             if epoch < start_eval_epoch and (time.time() - t0) > TRAIN_TIMEOUT and self.params.get('phase') != 'retrain':
-                print("Timeout reached")
+                self.logger.info("Timeout reached")
                 raise TimeoutError()
             
             self.logger.info(f"Epoch {epoch}/{max_epochs}: Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%")
@@ -184,6 +263,9 @@ class BaseTrainer:
                     self.best_epoch = epoch
                     torch.save(self.model.state_dict(), self.best_model_path)
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
+                    
+                if val_loss < self.best_validation_loss:
+                    self.best_validation_loss = val_loss
                 
                 if self.params.get('phase') == 'retrain':
                     self.update_scheduler(scheduler, metric=val_loss)
@@ -195,21 +277,33 @@ class BaseTrainer:
         
         # Handle retrain phase: load best model and compute test metrics.
         phase = self.params.get('phase')
-        if phase == 'retrain':
+        if (phase == 'retrain' or phase == 'resnet') and self.test_loader is not None:
             self.model = self.reset_and_load_best_model(self.best_model_path)
-            conf_matrix, auc, acc = self.compute_additional_metrics(self.test_loader)
+            test_acc, test_loss, conf_matrix, auc, acc = self.compute_additional_metrics(self.test_loader)
         else:
-            conf_matrix, auc, acc = None, None, None
+            test_acc, test_loss, conf_matrix, auc, acc = None, None, None, None, None
         
-        # Compute additional metrics (inference time, parameter count, FLOPs)
-        model_metrics = metrics.ModelMetrics(self.model, device=self.params['device'])
-        inference_images = next(iter(self.val_loader))[0][:10].to(self.params['device'])
-        cuda_inference_time = model_metrics.measure_inference_time(inference_images)
-        total_params = model_metrics.measure_parameters()
-        total_flops = model_metrics.measure_flops(self.params['input_shape'])
+        cuda_inference_time, total_params, total_flops, model_memory_usage = self.get_final_metrics()
+
+        # If in evolution phase, compute the fitness metrics.
+        if self.params.get('phase') == 'evolution':
+            scalar_multi_objective, fitness_val_loss = self.compute_mo_fitness(total_params, cuda_inference_time)
+        else:
+            scalar_multi_objective, fitness_val_loss = None, None
         
+        self.params['total_trainable_params'] = total_params
+        self.params['cuda_inference_time'] = cuda_inference_time
+        self.params['model_memory_usage'] = model_memory_usage
+        self.params['total_flops'] = total_flops
+        self.params['best_accuracy'] = self.best_accuracy
+        self.params['best_validation_loss'] = self.best_validation_loss
+        self.params['fitness_val_loss'] = fitness_val_loss
+        self.params['scalar_multi_objective'] = scalar_multi_objective
+        self.params['test_accuracy'] = test_acc
+        self.params['test_loss'] = test_loss
+
         
-        
+        create_info_file(self.params['model_path'], self.params, 'training_params.txt')
         
         results = {
             'training_losses': training_losses,
@@ -221,11 +315,48 @@ class BaseTrainer:
             'training_time': total_training_time,
             'cuda_inference_time': cuda_inference_time,
             'total_trainable_params': total_params,
+            'model_memory_usage': model_memory_usage,
+            'fitness_val_loss': fitness_val_loss,
+            'scalar_multi_objective': scalar_multi_objective,
             'total_flops': total_flops,
             'confusion_matrix': conf_matrix.tolist() if conf_matrix is not None else None,
-            'auc': auc,
-            'acc_test': acc
+            'auc_score': auc,
+            'acc_medmnist': acc,
+            'test_accuracy': test_acc,
+            'test_loss': test_loss,
+            
         }
         
         self.release_gpu_memory()
         return results
+    
+class ResNetTrainer(BaseTrainer):
+    def __init__(self, model, criterion, optimizer, train_loader, val_loader, test_loader,
+                params: dict, logger=None):
+        # Call the parent constructor
+        super().__init__(model, criterion, optimizer, train_loader, val_loader, test_loader, params, logger)
+        # Use a parameter to decide which ResNet to use (default to 'resnet18')
+        self.model_flag = self.params.get('model_flag', 'resnet18')
+
+    def reset_and_load_best_model(self, best_model_path):
+        """
+        For ResNet models, we instantiate the model using our model_resnet module and
+        load the state dictionary from the best checkpoint.
+        """
+        # Define which ResNet classes are available.
+        model_classes = {
+            'resnet18': model_resnet.ResNet18,
+            'resnet50': model_resnet.ResNet50
+        }
+        if self.model_flag not in model_classes:
+            raise ValueError(f"Unsupported model_flag: {self.model_flag}")
+        
+        # Instantiate the chosen ResNet model.
+        best_model = model_classes[self.model_flag](
+            in_channels=self.params['input_shape'][1],
+            num_classes=self.params['num_classes']
+        )
+        # Load the saved state.
+        best_model.load_state_dict(torch.load(best_model_path))
+        best_model.to(self.params['device'])
+        return best_model
