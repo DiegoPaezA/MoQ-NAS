@@ -1,3 +1,12 @@
+""" Copyright (c) 2025, Diego Páez
+* Licensed under the MIT license
+
+- trainer module handles the training and evaluation of CNN models for evolutionary
+    algorithms.
+- It includes a base trainer class and a specialized ResNet trainer class.
+
+"""
+
 import os
 import time
 import torch

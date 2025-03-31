@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+""" Copyright (c) 2025, Diego Páez
+* Licensed under the MIT license
+
+- Master module for training and evaluating CNN models.
+
+"""
 import os
 
 import torch
