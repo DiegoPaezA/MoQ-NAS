@@ -282,6 +282,7 @@ def retrain(params: Dict[str, Any],
     """
     try:
         results_dict = run_training_phase(params, fn_dict, net_list, None, train_loader, val_loader, test_loader)
+        LOGGER.info(f"Retraining finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
         if "out of memory" in str(e):
@@ -316,6 +317,7 @@ def resnet_train(params: Dict[str, Any],
     """
     try:
         results_dict = run_training_phase(params, None, None, None, train_loader, val_loader, test_loader)
+        LOGGER.info(f"ResNet training finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
         if "out of memory" in str(e):
