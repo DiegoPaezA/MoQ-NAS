@@ -172,3 +172,20 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+# Dataset files
+cifar10_data/
+cifar100_data/
+octmnist_data/
+organamnist_data/
+organcmnist_data/
+pathmnist_data/
+tissuemnist_data/
+atleta_axial_data/
+atleta_coronal_data/
+
+# Results
+exp*/
+# Logs
+logs/
