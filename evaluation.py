@@ -7,10 +7,9 @@
 import torch.multiprocessing as mp
 from typing import Dict, Any, List
 import numpy as np
-from cnn import train
 from util import init_log
 import torch
-from cnn import input
+from cnn import input, master
 import time
 
 class EvalPopulation(object):
@@ -147,10 +146,11 @@ class EvalPopulation(object):
     def run_individuals(self, generation,  train_params, fn_dict,train_loader, val_loader, individuals_selected_thread, gpu_device):
         for individual, selected_thread, decoded_net, decoded_params, return_val in individuals_selected_thread:
             self.train_params['device'] = gpu_device
-            train.fitness_calculation(f"{generation}_{individual}",
+            master.fitness(f"{generation}_{individual}",
                                         {**train_params},
                                         fn_dict,
                                         decoded_net,
+                                        decoded_params,
                                         train_loader,
                                         val_loader, 
                                         return_val)
