@@ -51,7 +51,8 @@ class ConfigParameters(object):
             allowed = {'decay': (1e-6, 1.0),
                         'learning_rate': (1e-6, 1.0),
                         'momentum': (0.0, 1.0),
-                        'weight_decay': (1e-10, 1e-1)}
+                        'weight_decay': (1e-10, 1e-1),
+                        'layers': (0.1, 1.0),}
 
             for key, value in ranges.items():
                 if type(value) is list:
