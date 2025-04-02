@@ -242,7 +242,7 @@ class BaseTrainer:
         model_memory_usage = model_metrics.measure_memory(self.params['input_shape']) / (1024 ** 2)  # Convert bytes to MB
         return cuda_inference_time, total_params, total_flops, model_memory_usage
 
-    def train(self):
+    def train(self, debug=False):
         max_epochs = self.params['max_epochs']
         epochs_to_eval = self.params['epochs_to_eval']
         start_eval_epoch = max_epochs - epochs_to_eval
@@ -260,15 +260,11 @@ class BaseTrainer:
             if epoch < start_eval_epoch and (time.time() - t0) > TRAIN_TIMEOUT and self.params.get('phase') != 'retrain':
                 self.logger.info("Timeout reached")
                 raise TimeoutError()
-            
-            self.logger.info(f"Epoch {epoch}/{max_epochs}: Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%")
-            
+                        
             if self.should_evaluate(epoch, start_eval_epoch):
                 val_loss, val_acc = self.evaluate(self.val_loader)
                 validation_losses.append(val_loss)
-                validation_accuracies.append(val_acc)
-                self.logger.info(f"Epoch {epoch}/{max_epochs}: Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
-                
+                validation_accuracies.append(val_acc)                
                 if val_acc > self.best_accuracy:
                     self.best_accuracy = val_acc
                     self.best_epoch = epoch
@@ -282,7 +278,12 @@ class BaseTrainer:
                     self.update_scheduler(scheduler, metric=val_loss)
                     if epoch % 25 == 0:
                         self.logger.info(f"Epoch [{epoch}/{max_epochs}] - Train Loss: {train_loss:.2f} - Val Loss: {val_loss:.2f} - Val Acc: {val_acc:.2f}%")
-                
+            if debug:
+                if epoch >= start_eval_epoch:
+                    print(f"Epoch [{epoch}/{max_epochs}] - Training Loss: {train_loss:.4f} - Validation Loss: {val_loss:.4f} - Validation Accuracy: {val_acc:.2f}%")
+                elif epoch % 5 == 0:
+                    print(f"Epoch [{epoch}/{max_epochs}] - Training Loss: {train_loss:.4f} - Training Accuracy: {train_acc:.2f}%")
+
         total_training_time = time.time() - t0
         self.params['training_time'] = total_training_time
         
