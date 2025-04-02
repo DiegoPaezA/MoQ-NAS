@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
+import torchvision.models as models
+from torchvision.models import MobileNet_V3_Small_Weights
 from torchvision.ops import DeformConv2d
 
 class ChannelAttention(nn.Module):
@@ -1020,61 +1022,54 @@ functions_dict = {
     'no_op': NoOp}
 
 class NetworkGraph(nn.Module):
-    def __init__(self, num_classes, in_channels=3, network_gap=False, network_config = 'default'):
-        """ Initialize NetworkGraph.
-
+    def __init__(self, num_classes, in_channels=3, network_gap=False, 
+                 network_config='default', backbone_percentage=0.7):
+        """
+        Initialize NetworkGraph.
+        
         Args:
-            num_classes: int 
-                number of classes for classification model.
-            in_channels: int
-                number of input channels.
-            network_gap: bool
-                flag to apply Global Average Pooling (GAP) in the Tail block.
-            network_config: str
-                network configuration to use for the model.
-        Returns:
-            output logits tensor.
+            num_classes: int, number of classes.
+            in_channels: int, number of input channels.
+            network_gap: bool, use GAP in Tail block.
+            network_config: str, configuration type ('default', 'dense', 'backbone').
+            backbone_percentage: float, fraction of pretrained backbone layers to use.
         """
         super().__init__()
-
         self.num_classes = num_classes
         self.in_channels = in_channels
         self.use_gap = network_gap
         self.network_config = network_config
+        self.backbone_percentage = backbone_percentage
         self.layers = None
         self.fc = None
+        self.model = None  # Used in sequential configurations
+        self.backbone = None  # For the 'backbone' configuration
 
-        
     def create_functions(self, net_list, fn_dict, cbam=False):
-        """ Dynamically create network layers.
-
-        Args:
-            net_list: List of layer names.
-            fn_dict: dict with definitions of the functions (name and parameters);
-                format --> {'fn_name': ['FNClass', {'param1': value1, 'param2': value2}]}.
-            cbam: Boolean flag to modify network for CBAM.
-        """
         # Define sets for blocks that need special handling.
         primary_blocks = {
             'ConvBlock', 'DWConvBlock', 'SEConvBlock', 'ResidualV1CBAM',
             'MBConv', 'MBConvV2', 'MBConv_EPPGA', 'ResidualV1', 'ResidualV1Pr'
         }
+        
         if self.network_config == 'default':
             in_channels = self.in_channels
             self.layers = []
-            # Optionally insert a 1x1 convolution for CBAM in default config.
             if cbam:
                 net_list.insert(0, 'conv_1_1_32')
-                conv_1_1_info = {'conv_1_1_32': {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 32}}}
+                conv_1_1_info = {
+                    'conv_1_1_32': {
+                        'function': 'ConvBlock',
+                        'params': {'kernel': 1, 'strides': 1, 'filters': 32}
+                    }
+                }
                 fn_dict.update(conv_1_1_info)
-
-
+            
             for name in net_list:
                 parameters = fn_dict[name]
-                func = parameters['function']  # Cache the function name
+                func = parameters['function']
                 if func == 'NoOp':
                     continue
-
                 if func in primary_blocks:
                     parameters['params']['in_channels'] = in_channels
                     in_channels = parameters['params']['filters']
@@ -1082,75 +1077,75 @@ class NetworkGraph(nn.Module):
                     parameters['params']['in_channels'] = in_channels
 
                 self.layers.append(functions_dict[func](**parameters['params']))
-                
+            
             self.model = nn.Sequential(*self.layers)
             self.fc = None
+
         elif self.network_config == 'dense':
-            # Dense connectivity: use a ModuleList and build cumulative channels.
-            cumulative_channels = self.in_channels  # e.g., initial channels (e.g., 3)
-            self.layers = []  # List to store layers
-
-            # Insert Stem block if desired.
-            stem_params = {
-                'in_channels': cumulative_channels,
-                'filters': 32,
-                'stride': 1,
-            }
+            # (Dense branch as before.)
+            cumulative_channels = self.in_channels
+            self.layers = []
+            stem_params = {'in_channels': cumulative_channels, 'filters': 32, 'stride': 1}
             self.layers.append(StemBlock(**stem_params))
-            cumulative_channels += stem_params['filters']  # Add stem's output channels
-
-            # For each layer, update parameters based on whether it is a pooling operation.
+            cumulative_channels += stem_params['filters']
             for name in net_list:
                 parameters = fn_dict[name]
-                #print(f'Function name: {parameters["function"]}')
                 if parameters['function'] == 'NoOp':
                     continue
-
-                # Make a copy of the parameters to avoid modifying the original dictionary.
                 params = parameters['params'].copy()
-
-                # If the function name indicates a pooling operation, remove "in_channels"
                 if "pool" in parameters['function'].lower():
-                    # Remove in_channels if it exists (pooling layers don't expect it)
                     params.pop('in_channels', None)
-                    # Do not update cumulative_channels (pooling doesn't change channel count)
                 else:
-                    # For non-pooling blocks, override in_channels with the current cumulative count.
                     params['in_channels'] = cumulative_channels
-                    # If the block defines an output channel count, update cumulative_channels.
                     if 'filters' in params:
                         cumulative_channels += params['filters']
-
-                #print(f'Instantiating {parameters["function"]} with params: {params}')
                 self.layers.append(functions_dict[parameters['function']](**params))
-
-            # Optionally add a Tail block.
-            tail_params = {
-                'in_channels': cumulative_channels,
-                'filters': cumulative_channels,
-                'use_gap': self.use_gap
-            }
+            tail_params = {'in_channels': cumulative_channels, 'filters': cumulative_channels, 'use_gap': self.use_gap}
             self.layers.append(TailBlock(**tail_params))
-
-            # Wrap layers in a ModuleList for custom forward pass.
             self.layers = nn.ModuleList(self.layers)
-            self.model = None  # Not using a sequential model.
-            self.fc = None     # Fully connected layer will be initialized later.
+            self.model = None
+            self.fc = None
+
+        elif self.network_config == 'backbone':
+            # If the backbone is not set, load and set it up.
+            if self.backbone is None:
+                pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
+                backbone_layers = list(pretrained_model.features)
+                num_layers = len(backbone_layers)
+                num_to_use = max(1, int(self.backbone_percentage * num_layers))
+                selected_layers = backbone_layers[:num_to_use]
+                self.backbone = nn.Sequential(*selected_layers)
+                for param in self.backbone.parameters():
+                    param.requires_grad = False
+                # Forward a dummy input to determine output channels.
+                dummy_input = torch.zeros(1, self.in_channels, 32, 32)
+                with torch.no_grad():
+                    backbone_out = self.backbone(dummy_input)
+                self.backbone_out_channels = backbone_out.shape[1]
+            # Reuse the cached backbone output channels.
+            in_channels = self.backbone_out_channels
+
+            # Build additional layers from the search space.
+            self.layers = []
+            for name in net_list:
+                parameters = fn_dict[name]
+                func = parameters['function']
+                if func == 'NoOp':
+                    continue
+                if func in primary_blocks:
+                    parameters['params']['in_channels'] = in_channels
+                    in_channels = parameters['params']['filters']
+                elif func == 'CBAMBlock':
+                    parameters['params']['in_channels'] = in_channels
+                self.layers.append(functions_dict[func](**parameters['params']))
+            self.model = nn.Sequential(*self.layers)
+            self.fc = None
+
         else:
             raise ValueError(f"Invalid network configuration: {self.network_config}")
+
     def forward(self, inputs, debug=False):
-        """
-        Forward pass through the network.
-        
-        Args:
-            inputs: Input tensor.
-            debug: Boolean flag for printing debug information.
-        
-        Returns:
-            Logits tensor.
-        """
         if self.network_config == 'default':
-            # Standard forward using self.model.
             if debug:
                 for layer in self.model:
                     inputs = layer(inputs)
@@ -1158,36 +1153,28 @@ class NetworkGraph(nn.Module):
             else:
                 inputs = self.model(inputs)
         elif self.network_config == 'dense':
-            # Dense connectivity: accumulate features in a list.
             features = [inputs]
             for layer in self.layers:
-                # Compute common spatial size among all current features.
                 common_h = min(feat.shape[2] for feat in features)
                 common_w = min(feat.shape[3] for feat in features)
-                # Resize all features to the common size.
-                resized_features = [F.interpolate(feat, size=(common_h, common_w),
-                                                mode='bilinear', align_corners=False)
-                                    for feat in features]
-                # Concatenate along the channel dimension.
+                resized_features = [F.interpolate(feat, size=(common_h, common_w), mode='bilinear', align_corners=False) for feat in features]
                 concatenated = torch.cat(resized_features, dim=1)
                 out = layer(concatenated)
-                # If the current layer is a pooling operation, reset the features list.
                 if isinstance(layer, (AvgPooling, MaxPooling, StochasticPooling)):
                     features = [out]
                 else:
                     features.append(out)
-                if debug:
-                    print(f"{layer.__class__.__name__}: concatenated shape = {concatenated.shape}, "
-                        f"output shape = {out.shape}")
-            
-            # Before the FC layer, adjust all features to a common spatial size.
             common_h = min(feat.shape[2] for feat in features)
             common_w = min(feat.shape[3] for feat in features)
-            adjusted_features = [F.interpolate(feat, size=(common_h, common_w),
-                                            mode='bilinear', align_corners=False)
-                                for feat in features]
+            adjusted_features = [F.interpolate(feat, size=(common_h, common_w), mode='bilinear', align_corners=False) for feat in features]
             inputs = torch.cat(adjusted_features, dim=1)
-        
+        elif self.network_config == 'backbone':
+            x = self.backbone(inputs)
+            x = self.model(x)
+            inputs = x
+        else:
+            raise ValueError(f"Invalid network configuration: {self.network_config}")
+
         inputs = torch.flatten(inputs, 1)
         if self.fc is None:
             self.fc = FullyConnected(input_features=inputs.size(1), units=self.num_classes)
