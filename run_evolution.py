@@ -85,7 +85,7 @@ if __name__ == '__main__':
     parser.add_argument('--network_gap', action='store_true',
                     help='Enable network gap during evolution. Default = False.')
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
-                        choices=['default', 'dense'])
+                        choices=['default', 'dense', 'backbone'])
 
     arguments = parser.parse_args()
 
