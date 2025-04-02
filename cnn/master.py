@@ -166,7 +166,7 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
 def run_training_phase(params: Dict[str, Any],
                         fn_dict: Dict[str, Any] = None,
                         net_list: List[str] = None,
-                        id_num: str = None,
+                        id_num: str = None, debug: bool = False,
                         train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
     """
     Generic function to update parameters, create the trainer, and run training.
@@ -201,12 +201,13 @@ def run_training_phase(params: Dict[str, Any],
     
     trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
 
-    results_dict = trainer.train()
+    results_dict = trainer.train(debug=debug)
         
     return results_dict
 
 def fitness(id_num: str, params: Dict[str, Any], 
             fn_dict: Dict[str, Any], net_list: List[str],
+            decoded_params: Dict[str, Any],
             train_loader: torch.utils.data.DataLoader, 
             val_loader: torch.utils.data.DataLoader,
             return_val, debug: bool = False) -> Dict[str, Any]:
@@ -230,8 +231,9 @@ def fitness(id_num: str, params: Dict[str, Any],
     Raises:
         Exception: Propagates any exception encountered during training after setting return_val to zeros.
     """
+    print(decoded_params)
     try:
-        results_dict = run_training_phase(params, fn_dict, net_list, id_num, train_loader, val_loader, None)
+        results_dict = run_training_phase(params, fn_dict, net_list, id_num, debug, train_loader, val_loader, None)
         if debug:
             return results_dict
         else:
