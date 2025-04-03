@@ -1108,7 +1108,7 @@ class NetworkGraph(nn.Module):
                 if self.backbone_name == 'mobilenet_v3_small':
                     pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
                     backbone_layers = list(pretrained_model.features)
-                elif self.backbone_type == "mobilenet_v3_small":
+                elif self.backbone_name == "mobilenet_v3_small":
                     pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
                     backbone_layers = list(pretrained_model.features)
                 else:
