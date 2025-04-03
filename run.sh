@@ -6,7 +6,7 @@ fitness_metric="best_accuracy"
 data_path="${dataset}_data"
 log_level="INFO"
 network_config="backbone"
-backbone_type="mobilenet_v3_large"
+backbone_name="mobilenet_v3_large"
 
 dataset_sample_size=10000
 
@@ -34,7 +34,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --fitness_metric "$fitness_metric" \
             --early_stopping \
             --network_config "$network_config" \
-            --backbone_type "$backbone_type" \
+            --backbone_name "$backbone_type" \
             --en_pop_crossover \
             --log_level "$log_level"
     done
