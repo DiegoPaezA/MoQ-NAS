@@ -2,11 +2,11 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 2
-    max_num_nodes: 5
-    num_quantum_ind: 1
+    max_generations: 50
+    max_num_nodes: 10
+    num_quantum_ind: 5
     penalize_number: 3
-    repetition: 2
+    repetition: 4
     replace_method: best
     update_quantum_gen: 5
     update_quantum_rate: 0.1
@@ -21,7 +21,7 @@ QNAS:
         learning_rate: 0.001
         momentum: 0.0
         weight_decay: 1.0e-4
-        layers: [0.1, 0.999]
+        backbone_percentage: [0.1, 0.999]
 
     function_dict:  {'conv_1_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
                      'conv_1_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
@@ -58,7 +58,7 @@ train:
     # Tensorflow
     save_checkpoints_epochs: 5
     save_summary_epochs: 0.25
-    threads: 20
+    threads: 2
 
     # penalization parameters - scalarized fitness
     max_params: 114090 # 1.9M
@@ -66,4 +66,4 @@ train:
 
     # Network structure Configuration
     network_config: default
-    network_gap: False
+    backbone_name: mobilenet_v3_small
