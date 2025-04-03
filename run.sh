@@ -34,7 +34,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --fitness_metric "$fitness_metric" \
             --early_stopping \
             --network_config "$network_config" \
-            --backbone_name "$backbone_type" \
+            --backbone_name "$backbone_name" \
             --en_pop_crossover \
             --log_level "$log_level"
     done

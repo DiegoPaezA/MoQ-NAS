@@ -1108,8 +1108,8 @@ class NetworkGraph(nn.Module):
                 if self.backbone_name == 'mobilenet_v3_small':
                     pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
                     backbone_layers = list(pretrained_model.features)
-                elif self.backbone_name == "mobilenet_v3_small":
-                    pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
+                elif self.backbone_name == "mobilenet_v3_large":
+                    pretrained_model = models.mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.DEFAULT)
                     backbone_layers = list(pretrained_model.features)
                 else:
                     raise ValueError(f"Unsupported backbone: {self.backbone_name}")
