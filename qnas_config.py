@@ -52,7 +52,7 @@ class ConfigParameters(object):
                         'learning_rate': (1e-6, 1.0),
                         'momentum': (0.0, 1.0),
                         'weight_decay': (1e-10, 1e-1),
-                        'layers': (0.1, 1.0),}
+                        'backbone_percentage': (0.1, 1.0),}
 
             for key, value in ranges.items():
                 if type(value) is list:
@@ -119,7 +119,7 @@ class ConfigParameters(object):
                                 ('subtract_mean', bool),
                                 ('limit_data', bool),
                                 ('limit_data_value', int),
-                                ('network_gap', bool),
+                                ('backbone_name', str),
                                 ('network_config', str),
                                 ('save_checkpoints_epochs', int),
                                 ('save_summary_epochs', float),
@@ -165,7 +165,7 @@ class ConfigParameters(object):
         self.train_spec['optimizer'] = self.args['optimizer']
         self.train_spec['data_augmentation'] = self.args['data_augmentation']
         self.train_spec['network_config'] = self.args['network_config']
-        self.train_spec['network_gap'] = self.args['network_gap']
+        self.train_spec['backbone_name'] = self.args['backbone_name']
         self.train_spec['save_checkpoints_epochs'] = self.args['save_checkpoints_epochs']
         self.train_spec['dataset'] = self.args['dataset']
         self.train_spec['data_path'] = self.args['data_path']

@@ -82,8 +82,8 @@ if __name__ == '__main__':
                         help='Number of epochs to save the model. Default = 5.')
     parser.add_argument('--limit_data_value', type=int, default=10000,
                         help='Number of samples to be used during evolution and training. Default = 10000.')
-    parser.add_argument('--network_gap', action='store_true',
-                    help='Enable network gap during evolution. Default = False.')
+    parser.add_argument('--backbone_name', type=str, default='mobilenet_v3_small', choices=['mobilenet_v3_small', 'mobilenet_v3_large', 'mobilenet_v2', 'resnet18', 'resnet50',],
+                        help='Backbone name to be used during training. Default = mobilenet_v3_small.')
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
                         choices=['default', 'dense', 'backbone'])
 

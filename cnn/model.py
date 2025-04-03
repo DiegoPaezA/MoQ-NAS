@@ -973,9 +973,8 @@ class StemBlock(nn.Module):
 class TailBlock(nn.Module):
     """
     Fixed Tail block: a 3x3 convolution that aggregates extracted features.
-    Optionally applies Global Average Pooling (GAP) to reduce each feature map to a single value.
     """
-    def __init__(self, in_channels, filters=None, use_gap=True):
+    def __init__(self, in_channels, filters=None):
         super(TailBlock, self).__init__()
         # If no specific number of filters is provided, maintain the same channel size.
         if filters is None:
@@ -984,16 +983,11 @@ class TailBlock(nn.Module):
         init.kaiming_normal_(self.conv.weight, nonlinearity='relu')
         self.bn = nn.BatchNorm2d(filters)
         self.relu = nn.ReLU()
-        self.use_gap = use_gap
-        if self.use_gap:
-            self.gap = nn.AdaptiveAvgPool2d((1, 1))
 
     def forward(self, x):
         x = self.conv(x)
         x = self.bn(x)
         x = self.relu(x)
-        if self.use_gap:
-            x = self.gap(x)
         return x
     
 class NoOp(nn.Module):
@@ -1022,22 +1016,24 @@ functions_dict = {
     'no_op': NoOp}
 
 class NetworkGraph(nn.Module):
-    def __init__(self, num_classes, in_channels=3, network_gap=False, 
-                 network_config='default', backbone_percentage=0.7):
+    def __init__(self, num_classes, in_channels=3, input_shape = (1, 3, 32, 32),
+                network_config='default', backbone_name='mobilenet_v3_small', backbone_percentage=0.7):
         """
         Initialize NetworkGraph.
         
         Args:
             num_classes: int, number of classes.
             in_channels: int, number of input channels.
-            network_gap: bool, use GAP in Tail block.
+            backbone_name: bool, use GAP in Tail block.
             network_config: str, configuration type ('default', 'dense', 'backbone').
-            backbone_percentage: float, fraction of pretrained backbone layers to use.
+            backbone_name: str, name of the pretrained backbone to use.
+            backbone_percentage: float, fraction of the backbone layers to use.
         """
         super().__init__()
         self.num_classes = num_classes
         self.in_channels = in_channels
-        self.use_gap = network_gap
+        self.input_shape = input_shape
+        self.backbone_name = backbone_name
         self.network_config = network_config
         self.backbone_percentage = backbone_percentage
         self.layers = None
@@ -1100,7 +1096,7 @@ class NetworkGraph(nn.Module):
                     if 'filters' in params:
                         cumulative_channels += params['filters']
                 self.layers.append(functions_dict[parameters['function']](**params))
-            tail_params = {'in_channels': cumulative_channels, 'filters': cumulative_channels, 'use_gap': self.use_gap}
+            tail_params = {'in_channels': cumulative_channels, 'filters': cumulative_channels}
             self.layers.append(TailBlock(**tail_params))
             self.layers = nn.ModuleList(self.layers)
             self.model = None
@@ -1109,16 +1105,20 @@ class NetworkGraph(nn.Module):
         elif self.network_config == 'backbone':
             # If the backbone is not set, load and set it up.
             if self.backbone is None:
-                pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
-                backbone_layers = list(pretrained_model.features)
+                if self.backbone_name == 'mobilenet_v3_small':
+                    pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
+                    backbone_layers = list(pretrained_model.features)
+                else:
+                    raise ValueError(f"Unsupported backbone: {self.backbone_name}")
                 num_layers = len(backbone_layers)
                 num_to_use = max(1, int(self.backbone_percentage * num_layers))
                 selected_layers = backbone_layers[:num_to_use]
                 self.backbone = nn.Sequential(*selected_layers)
                 for param in self.backbone.parameters():
                     param.requires_grad = False
+                    
                 # Forward a dummy input to determine output channels.
-                dummy_input = torch.zeros(1, self.in_channels, 32, 32)
+                dummy_input = torch.zeros(self.input_shape)
                 with torch.no_grad():
                     backbone_out = self.backbone(dummy_input)
                 self.backbone_out_channels = backbone_out.shape[1]
