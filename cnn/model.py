@@ -12,8 +12,8 @@ import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
 import torchvision.models as models
-from torchvision.models import MobileNet_V3_Small_Weights
 from torchvision.ops import DeformConv2d
+from torchvision.models import MobileNet_V3_Small_Weights, MobileNet_V3_Large_Weights
 
 class ChannelAttention(nn.Module):
     """
@@ -1106,6 +1106,9 @@ class NetworkGraph(nn.Module):
             # If the backbone is not set, load and set it up.
             if self.backbone is None:
                 if self.backbone_name == 'mobilenet_v3_small':
+                    pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
+                    backbone_layers = list(pretrained_model.features)
+                elif self.backbone_type == "mobilenet_v3_small":
                     pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
                     backbone_layers = list(pretrained_model.features)
                 else:
