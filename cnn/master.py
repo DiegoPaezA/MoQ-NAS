@@ -147,8 +147,10 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
     else:
         # For evolution or retrain phases, use the generic BaseTrainer
         net = model.NetworkGraph(num_classes=params['num_classes'],
+                                input_shape=params['input_shape'],
                                 network_config=params['network_config'],
-                                network_gap=params['network_gap'])
+                                backbone_name=params['backbone_name'],
+                                backbone_percentage=params['backbone_percentage'])
         # Create functions using fn_dict and net_list from params
         filtered_dict = {key: val for key, val in params['fn_dict'].items() if key in params['net_list']}
         has_cbam_key = any(key.startswith('cbam') for key in filtered_dict)
@@ -165,7 +167,7 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
 
 def run_training_phase(params: Dict[str, Any],
                         fn_dict: Dict[str, Any] = None,
-                        net_list: List[str] = None,
+                        net_list: List[str] = None, decoded_params: Dict[str, Any] = None,
                         id_num: str = None, debug: bool = False,
                         train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
     """
@@ -192,6 +194,10 @@ def run_training_phase(params: Dict[str, Any],
         params['net_list'] = net_list
     if id_num is not None:
         params = setup_additional_params(params, id_num=id_num)
+        
+    if decoded_params is not None:
+        if decoded_params['backbone_percentage'] is not None:
+            params['backbone_percentage'] = decoded_params['backbone_percentage']
         
     # For retrain and resnet, ensure model path is created
     if params['phase'] in ['retrain', 'resnet']:
@@ -231,9 +237,8 @@ def fitness(id_num: str, params: Dict[str, Any],
     Raises:
         Exception: Propagates any exception encountered during training after setting return_val to zeros.
     """
-    print(decoded_params)
     try:
-        results_dict = run_training_phase(params, fn_dict, net_list, id_num, debug, train_loader, val_loader, None)
+        results_dict = run_training_phase(params, fn_dict, net_list, decoded_params, id_num, debug, train_loader, val_loader, None)
         if debug:
             return results_dict
         else:
@@ -283,7 +288,7 @@ def retrain(params: Dict[str, Any],
         Exception: Propagates any exception encountered during training.
     """
     try:
-        results_dict = run_training_phase(params, fn_dict, net_list, None, train_loader, val_loader, test_loader)
+        results_dict = run_training_phase(params, fn_dict, net_list, None, None, train_loader, val_loader, test_loader)
         LOGGER.info(f"Retraining finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
@@ -318,7 +323,7 @@ def resnet_train(params: Dict[str, Any],
         Exception: Propagates any exception encountered during training.
     """
     try:
-        results_dict = run_training_phase(params, None, None, None, train_loader, val_loader, test_loader)
+        results_dict = run_training_phase(params, None, None,None, None, train_loader, val_loader, test_loader)
         LOGGER.info(f"ResNet training finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
