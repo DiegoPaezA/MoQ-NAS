@@ -13,7 +13,7 @@ import torch.nn.init as init
 import torch.nn.functional as F
 import torchvision.models as models
 from torchvision.ops import DeformConv2d
-from torchvision.models import MobileNet_V3_Small_Weights, MobileNet_V3_Large_Weights
+from torchvision.models import MobileNet_V3_Small_Weights, MobileNet_V3_Large_Weights, ResNet18_Weights
 
 class ChannelAttention(nn.Module):
     """
@@ -1111,6 +1111,12 @@ class NetworkGraph(nn.Module):
                 elif self.backbone_name == "mobilenet_v3_large":
                     pretrained_model = models.mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.DEFAULT)
                     backbone_layers = list(pretrained_model.features)
+                elif self.backbone_name == "resnet18":
+                    pretrained_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+                    # ResNet-18 children: conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool, fc.
+                    # We remove avgpool and fc to use the convolutional part.
+                    backbone_layers = list(pretrained_model.children())[:-2]
+
                 else:
                     raise ValueError(f"Unsupported backbone: {self.backbone_name}")
                 num_layers = len(backbone_layers)
