@@ -164,8 +164,11 @@ class BaseTrainer:
     def reset_and_load_best_model(self, best_model_path):
         # Reinitialize the model and load weights from the best model checkpoint.
         best_model = model.NetworkGraph(num_classes=self.params["num_classes"],
-                                        network_config=self.params['network_config'], 
-                                        network_gap=self.params['network_gap'])
+                                        input_shape=self.params['input_shape'],
+                                        network_config=self.params['network_config'],
+                                        backbone_name=self.params['backbone_name'],
+                                        backbone_percentage=self.params['backbone_percentage'])
+        
         filtered_dict = {key: item for key, item in self.params['fn_dict'].items() if key in self.params['net_list']}
         best_model.create_functions(fn_dict=filtered_dict, net_list=self.params['net_list'])
         input_random = torch.randn(self.params['input_shape'])
@@ -292,6 +295,7 @@ class BaseTrainer:
         if (phase == 'retrain' or phase == 'resnet') and self.test_loader is not None:
             self.model = self.reset_and_load_best_model(self.best_model_path)
             test_acc, test_loss, conf_matrix, auc, acc = self.compute_additional_metrics(self.test_loader)
+            self.logger.info(f"Experiment: {self.params['experiment_path']} - Test loss: {test_loss:.2f} - Test accuracy: {test_acc:.2f}%")
         else:
             test_acc, test_loss, conf_matrix, auc, acc = None, None, None, None, None
         
@@ -303,7 +307,7 @@ class BaseTrainer:
         else:
             scalar_multi_objective, fitness_val_loss = None, None
         
-        self.params['total_trainable_params'] = total_params
+        self.params['total_params'] = total_params
         self.params['cuda_inference_time'] = cuda_inference_time
         self.params['model_memory_usage'] = model_memory_usage
         self.params['total_flops'] = total_flops
@@ -326,7 +330,7 @@ class BaseTrainer:
             'best_epoch': self.best_epoch,
             'training_time': total_training_time,
             'cuda_inference_time': cuda_inference_time,
-            'total_trainable_params': total_params,
+            'total_params': total_params,
             'model_memory_usage': model_memory_usage,
             'fitness_val_loss': fitness_val_loss,
             'scalar_multi_objective': scalar_multi_objective,

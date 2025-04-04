@@ -327,6 +327,9 @@ def init_log(log_level, name, file_path=None):
     """
 
     logger = logging.getLogger(name)
+        # Eliminar handlers existentes para evitar duplicación
+    if logger.hasHandlers():
+        logger.handlers.clear()
 
     if file_path is None:
         handler = logging.StreamHandler()

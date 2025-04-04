@@ -288,7 +288,7 @@ def retrain(params: Dict[str, Any],
         Exception: Propagates any exception encountered during training.
     """
     try:
-        results_dict = run_training_phase(params, fn_dict, net_list, None, None, train_loader, val_loader, test_loader)
+        results_dict = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
         LOGGER.info(f"Retraining finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
