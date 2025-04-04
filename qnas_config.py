@@ -368,13 +368,17 @@ class ConfigParameters(object):
         net_list = best_individual_info.get('net_list', [])
         generation = best_individual_info.get('generation', 0)
         individual = best_individual_info.get('individual', 0)
+        backbone_name = best_individual_info.get('backbone_name', None)
+        backbone_percentage = best_individual_info.get('backbone_percentage', 0)
         
         if generation == 0 and individual == 0: # only for old format
                 matches = re.search(r'(\d+)_(\d+)$', best_result_folder)
                 generation = int(matches.group(1))
                 individual = int(matches.group(2))
 
-        self.evolved_params = {'params': None, 'net': net_list, 'generation': generation, 'individual': individual}
+        self.evolved_params = {'params': None, 'net': net_list, 'generation': generation, 
+                               'individual': individual, 'backbone_name':backbone_name, 
+                               'backbone_percentage':backbone_percentage}
 
     def override_train_params(self, new_params_dict):
         """ Override *self.train_spec* parameters with the ones in *new_params_dict*. Update

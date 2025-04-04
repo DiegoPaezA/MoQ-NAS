@@ -8,8 +8,7 @@ import argparse
 import os
 import qnas_config as cfg
 from util import check_files, init_log, save_results_file
-from cnn import input
-from cnn import train_detailed as train
+from cnn import input, master
 import time
 
 def main(**args):
@@ -35,13 +34,14 @@ def main(**args):
     
     # update experiment path name to retrain_"config_code"_1
     config.train_spec['experiment_path'] = os.path.join(experiment_path, f"retrain_{config_code}_{1}")
-    
+    config.train_spec['backbone_name'] = config.evolved_params['backbone_name']
+    config.train_spec['backbone_percentage'] = config.evolved_params['backbone_percentage']
     output_dict = {}
     # Retrain model for the number of repetitions
     for i in range(1, args['num_repetitions']+1):
         logger.info(f"Retraining {experiment_path} repetition {i} ...")
         start_time = time.perf_counter()
-        results_dict = train.train_and_eval(params=config.train_spec, fn_dict=config.fn_dict, net_list=config.evolved_params['net'], 
+        results_dict = master.retrain(params=config.train_spec, fn_dict=config.fn_dict, net_list=config.evolved_params['net'], 
                             train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)    
         config.train_spec['experiment_path'] = os.path.join(experiment_path, f"retrain_{config_code}_{i+1}")
         
@@ -83,6 +83,8 @@ if __name__ == '__main__':
                         help='Logging information level.')
     parser.add_argument('--max_epochs', type=int, default=300,
                         help='The maximum number of epochs during training. Default = 300.')
+    parser.add_argument('--epochs_to_eval', type=int, default=300,
+                        help='The maximum number of epochs during training. Default = 300.')
     parser.add_argument('--batch_size', type=int, default=256,
                         help='Size of the batch that will be divided into multiple GPUs.'
                             ' Default = 128.')
@@ -106,10 +108,10 @@ if __name__ == '__main__':
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5,
                         help='Number of epochs to save the model. Default = 10.')
     
-    parser.add_argument('--network_gap', action='store_true',
-                    help='Enable network gap during evolution. Default = False.')
+    parser.add_argument('--backbone_name', type=str, default='mobilenet_v3_small', choices=['mobilenet_v3_small', 'mobilenet_v3_large', 'mobilenet_v2', 'resnet18', 'resnet50',],
+                        help='Backbone name to be used during training. Default = mobilenet_v3_small.')
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
-                        choices=['default', 'dense'])
+                        choices=['default', 'dense', 'backbone'])
     arguments = parser.parse_args()
 
     main(**vars(arguments))
