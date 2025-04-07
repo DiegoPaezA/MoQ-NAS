@@ -19,9 +19,14 @@ from medmnist import Evaluator
 
 TRAIN_TIMEOUT = 5400
 
+current_directory = os.path.dirname(os.path.dirname(__file__))
+log_directory = os.path.join(current_directory, 'logs')
+if not os.path.exists(log_directory):
+    os.makedirs(log_directory)
+
 class BaseTrainer:
     def __init__(self, model, criterion, optimizer, train_loader, val_loader, test_loader,
-                params: dict, logger=None):
+                params: dict):
         self.model = model.to(params['device'])
         self.criterion = criterion
         self.optimizer = optimizer
@@ -30,7 +35,7 @@ class BaseTrainer:
         self.test_loader = test_loader
         self.params = params
         self.device = torch.device(params['device'])
-        self.logger = logger or init_log("INFO", name=__name__)
+
         self.scaler = GradScaler(enabled=self.params.get('mixed_precision', False))
         self.best_accuracy = 0.0
         self.best_validation_loss = float('inf')
@@ -38,6 +43,17 @@ class BaseTrainer:
         self.best_model_path = os.path.join(self.params['model_path'], 'best_model.pth')
         if not os.path.exists(self.params['model_path']):
             os.makedirs(self.params['model_path'])
+            
+        # Initialize the logger
+        phase = self.params.get('phase', 'evolution')
+        if phase == 'retrain':
+            log_file = os.path.join(log_directory, "retrain.log")
+        elif phase == 'evolution':
+            log_file = os.path.join(log_directory, "evolution.log")
+        else:
+            log_file = os.path.join(log_directory, "default.log")
+        
+        self.logger = init_log(log_level="INFO", name=__name__, file_path=log_file)
 
     def _forward_pass(self, inputs, labels):
         """
