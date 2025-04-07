@@ -244,15 +244,15 @@ def fitness(id_num: str, params: Dict[str, Any],
         else:
             if params['fitness_metric'] == 'best_accuracy':
                 return_val[:] = [results_dict['best_accuracy'],
-                                results_dict['total_trainable_params'],
+                                results_dict['total_params'],
                                 results_dict['cuda_inference_time']]
             elif params['fitness_metric'] == 'best_loss':
                 return_val[:] = [results_dict['fitness_val_loss'],
-                                results_dict['total_trainable_params'],
+                                results_dict['total_params'],
                                 results_dict['cuda_inference_time']]
             elif params['fitness_metric'] == 'scalar_multi_objective':
                 return_val[:] = [results_dict['scalar_multi_objective'],
-                                results_dict['total_trainable_params'],
+                                results_dict['total_params'],
                                 results_dict['cuda_inference_time']]
             else:
                 raise ValueError(f"Invalid fitness metric: {params['fitness_metric']}")
