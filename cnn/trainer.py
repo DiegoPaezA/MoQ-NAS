@@ -296,12 +296,12 @@ class BaseTrainer:
                 if self.params.get('phase') == 'retrain':
                     self.update_scheduler(scheduler, metric=val_loss)
                     if epoch % 25 == 0:
-                        self.logger.info(f"Epoch [{epoch}/{max_epochs}] - Train Loss: {train_loss:.2f} - Val Loss: {val_loss:.2f} - Val Acc: {val_acc:.2f}%")
+                        self.logger.info(f"Experiment: {self.params['experiment_path']}: Epoch [{epoch}/{max_epochs}] - Train Loss: {train_loss:.2f} - Val Loss: {val_loss:.2f} - Val Acc: {val_acc:.2f}%")
             if debug:
                 if epoch >= start_eval_epoch:
-                    print(f"Epoch [{epoch}/{max_epochs}] - Training Loss: {train_loss:.4f} - Validation Loss: {val_loss:.4f} - Validation Accuracy: {val_acc:.2f}%")
+                    self.logger.info(f"Epoch [{epoch}/{max_epochs}] - Training Loss: {train_loss:.4f} - Validation Loss: {val_loss:.4f} - Validation Accuracy: {val_acc:.2f}%")
                 elif epoch % 5 == 0:
-                    print(f"Epoch [{epoch}/{max_epochs}] - Training Loss: {train_loss:.4f} - Training Accuracy: {train_acc:.2f}%")
+                    self.logger.info(f"Epoch [{epoch}/{max_epochs}] - Training Loss: {train_loss:.4f} - Training Accuracy: {train_acc:.2f}%")
 
         total_training_time = time.time() - t0
         self.params['training_time'] = total_training_time
