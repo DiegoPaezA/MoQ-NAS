@@ -118,12 +118,9 @@ class EvalPopulation(object):
         for idx in range(self.train_params['threads']):
             individuals_selected_thread = list(filter(lambda x: x[1]==idx, individual_per_thread))
             gpu_device = self.gpus[idx%len(self.gpus)]
-            train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
             process = mp.Process(target=self.run_individuals, args=(generation,
                                                 self.train_params,
                                                 self.fn_dict,
-                                                train_loader,
-                                                val_loader,
                                                 individuals_selected_thread,
                                                 gpu_device))
             process.start()
@@ -143,7 +140,8 @@ class EvalPopulation(object):
         return evaluations
             
             
-    def run_individuals(self, generation,  train_params, fn_dict,train_loader, val_loader, individuals_selected_thread, gpu_device):
+    def run_individuals(self, generation,  train_params, fn_dict, individuals_selected_thread, gpu_device):
+        train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
         for individual, selected_thread, decoded_net, decoded_params, return_val in individuals_selected_thread:
             self.train_params['device'] = gpu_device
             master.fitness(f"{generation}_{individual}",
