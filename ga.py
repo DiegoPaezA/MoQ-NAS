@@ -229,7 +229,7 @@ class GA(object):
 
             new_population.extend([child1, child2])
         # Trim in case population exceeded population_size
-        self.population = new_population[:self.population_size]
+        self.population = np.array(new_population[:self.population_size])
         self.logger.info("Offspring generated for generation %d", self.current_gen)
     
     def log_data(self):
@@ -317,9 +317,9 @@ class GA(object):
             self.generate_offspring()
             # End-of-generation update
             self.go_next_gen()
-            # Optionally check for early stopping
-            if self.check_early_stopping():
-                break
+            # # Optionally check for early stopping
+            # if self.check_early_stopping():
+            #     break
         
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
@@ -387,7 +387,7 @@ if __name__ == "__main__":
             log_level=config.train_spec['log_level'], 
             data_file=config.files_spec['data_file'])
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
-    ga.initialize_ga(population_size=2, num_generations=50, max_num_nodes=10,
+    ga.initialize_ga(population_size=5, num_generations=3, max_num_nodes=10,
                     crossover_rate=0.7, mutation_rate=0.1, elitism=True, patience=10, fn_list=config.QNAS_spec['fn_list'])
     
     # Run the evolution
