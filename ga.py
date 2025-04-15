@@ -2,9 +2,10 @@ import os
 import time
 import datetime
 import numpy as np
+import evaluation
+import qnas_config as cfg
 from pickle import dump, load, HIGHEST_PROTOCOL
-import logging
-from util import delete_old_dirs, init_log, load_pkl, calculate_time
+from util import delete_old_dirs, init_log, check_files, download_dataset
 
 
 class GA(object):
@@ -130,10 +131,14 @@ class GA(object):
         The eval_func should return a list or array of fitness values for all individuals.
         """
 
+        decoded_net = self.decode_pop(None, self.population)
+        # Create the backbone_percentage variable (a NumPy array) with shape (population_size, 1) # test
+        backbone_percentage_array = np.array([np.random.uniform(0.0, 1.0) for _ in range(len(decoded_net))]).reshape(-1, 1)
 
-        decoded_population = self.decode_pop(None, self.population)
-        fitness = self.eval_func(decoded_population, generation=self.current_gen)
-        fitnesses.append(fitness)
+        # Package the variable into a dictionary, then into a list
+        decoded_params = [{'backbone_percentage': backbone_percentage_array[i]} for i in range(len(backbone_percentage_array))]
+        
+        fitnesses = self.eval_func(decoded_params, decoded_net, generation=self.current_gen)
         
         self.fitnesses = np.array(fitnesses)
         self.update_best_id(self.fitnesses)
@@ -326,29 +331,64 @@ class GA(object):
 
 # Example usage:
 if __name__ == "__main__":
-    # Dummy evaluation function for demonstration.
-    # In practice, this function should decode the individual, build the network,
-    # train it for a few epochs, and return the accuracy (or any other relevant metric).
-    def dummy_eval(individual, generation):
-        # For example, sum the genes to act as a 'fitness'
-        return np.sum(individual)
+    # Define parameters similar to those defined in your .sh script
+    args = {
+        "experiment_path": "experiment_cifar10_ga/exp1_repeat_1",
+        "data_path": "cifar10_data",
+        "dataset": "cifar10",
+        "config_file": "config_files_cifar/config0.txt",
+        "continue_path": "",
+        "log_level": "DEBUG",  # Using DEBUG for detailed output during development
+        "optimizer": "AdamW",
+        "fitness_metric": "best_accuracy",
+        "data_augmentation": False,  # Set as needed for your experiment
+        "early_stopping": True,
+        "en_pop_crossover": True,
+        "save_checkpoints_epochs": 5,
+        "limit_data_value": 10000,
+        "backbone_name": "resnet18",
+        "network_config": "default",
+    }
+
+    logger = init_log(args['log_level'], name=__name__)
+
+    if not os.path.exists(args['experiment_path']):
+        logger.info(f"Creating {args['experiment_path']} ...")
+        os.makedirs(args['experiment_path'])
+
+    # Evolution or continue previous evolution
+    if not args['continue_path']:
+        phase = 'evolution'
+    else:
+        phase = 'continue_evolution'
+        logger.info(f"Continue evolution from: {args['continue_path']}. Checking files ...")
+        check_files(args['continue_path'])
+
+    logger.info(f"Getting parameters from {args['config_file']} ...")
+    config = cfg.ConfigParameters(args, phase=phase)
+    config.get_parameters()
+    logger.info(f"Saving parameters for {config.phase} phase ...")
+    config.save_params_logfile()
     
-    # Define paths for experiment logging and saving
-    experiment_path = "./experiment_GA"
-    log_file = os.path.join(experiment_path, "ga_log.txt")
-    data_file = os.path.join(experiment_path, "ga_data.pkl")
-    
-    # Create experiment folder if not exists
-    if not os.path.exists(experiment_path):
-        os.makedirs(experiment_path)
+    if config.train_spec['mixed_precision']:
+        logger.info(f"Using mixed precision training ...")
         
-    fn_list = ['conv1', 'conv2', 'pool', 'fc', 'relu']  # Example function list
+    # Download dataset
+    dataset_status = download_dataset(params=config.train_spec)
+    status_message = "Dataset is already downloaded." if dataset_status else "Dataset downloaded successfully."
+    logger.info(status_message)
     
+    eval_pop = evaluation.EvalPopulation(params=config.train_spec,
+                                                fn_dict=config.fn_dict,
+                                                log_level=config.train_spec['log_level'])
     # Initialize GA instance
-    ga = GA(dummy_eval, experiment_path, log_file, log_level="INFO", data_file=data_file)
+    ga = GA(eval_pop, config.train_spec['experiment_path'], 
+            config.files_spec['log_file'], 
+            log_level=config.train_spec['log_level'], 
+            data_file=config.files_spec['data_file'])
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
-    ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=10,
-                    crossover_rate=0.7, mutation_rate=0.1, elitism=True, patience=10, fn_list=fn_list)
+    ga.initialize_ga(population_size=2, num_generations=50, max_num_nodes=10,
+                    crossover_rate=0.7, mutation_rate=0.1, elitism=True, patience=10, fn_list=config.QNAS_spec['fn_list'])
     
     # Run the evolution
     population, fitnesses, best_fitness, best_id = ga.evolve()
