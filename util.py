@@ -22,7 +22,7 @@ import torch
 import torch.cuda as cuda
 from cnn import model, input
 import GPUtil
-
+from pickle import dump, load, HIGHEST_PROTOCOL
 
 def natural_key(string):
     """ Key to use with sort() in order to sort string lists in natural order.
@@ -559,3 +559,30 @@ def get_gpu_memory():
     if gpus:
         return gpus[0].memoryUsed  # Assuming single-GPU use; modify if using multiple GPUs
     return None
+
+
+def backup_cache(data, file_path: str = None) -> None:
+    """
+    Backup the cache of evaluated individuals (self.evaluated) to a file.
+    
+    Args:
+        file_path: The path to the backup file.
+    """
+    file_name = os.path.join(file_path, "cache_backup.pkl")
+    with open(file_name, "wb") as f:
+        dump(data, f, protocol=HIGHEST_PROTOCOL)
+
+def load_cache(file_path: str) -> None:
+    """
+    Load a cache backup from file into self.evaluated.
+
+    Args:
+        file_path: The path to the backup file.
+    """
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            data = load(f)
+    else:
+        print(f"Cache backup file {file_path} not found. Starting with empty cache.")
+        data = {}
+    return data
