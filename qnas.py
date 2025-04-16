@@ -283,6 +283,7 @@ class QNAS(object):
 
         for i in range(num_individuals):
             decoded_params[i] = self.qpop_params.chromosome.decode(pop_params[i])
+            decoded_params[i]['candidate_id'] = i
             decoded_nets[i] = self.qpop_net.chromosome.decode(pop_net[i, :])
 
         return decoded_params, decoded_nets
