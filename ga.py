@@ -47,7 +47,8 @@ class GA(object):
         self.experiment_path = experiment_path
         self.data_file = data_file
         # Initialize the cache for evaluated individuals.
-        self.evaluated = {}
+        cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
+        self.evaluated = load_cache(cache_file)
         # Create a logger using the provided utility function (or basicConfig)
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
     
@@ -403,13 +404,6 @@ class GA(object):
         """
         Main evolution loop. Repeats until maximum generations is reached or early stopping is triggered.
         """
-        # Check if cache backup exists and load it
-        cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
-        if os.path.exists(cache_file):
-            self.evaluated = load_cache(cache_file)
-        else:
-            self.logger.info("No cache file found. Starting with a fresh cache.")
-
         start_time = time.time()
         self.logger.info("Starting evolution for %d generations", self.num_generations)
         
