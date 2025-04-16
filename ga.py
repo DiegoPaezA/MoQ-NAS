@@ -32,6 +32,7 @@ class GA(object):
 
         # GA state variables
         self.population = None
+        self.current_population = None
         self.fitnesses = None
         self.best_so_far = -np.inf
         self.best_so_far_id = None
@@ -136,49 +137,45 @@ class GA(object):
         Returns:
             fitnesses: a NumPy array with the fitness values for the population.
         """
-        # Decode the population of networks.
         decoded_net = self.decode_pop(None, self.population)
-
-        # Create the backbone_percentage variable for all candidates,
-        # using a vectorized call, resulting in a (population_size, 1) array.
+        
+        # only for test
         backbone_percentage_array = np.random.uniform(0.0, 1.0, size=(len(decoded_net), 1))
         
-        # Prepare lists for candidates that need evaluation.
         indices_to_evaluate = []
-        eval_dp = []  # List of decoded parameters (e.g., backbone percentages) for evaluation.
-        eval_net = [] # List of decoded networks corresponding to each candidate.
+        eval_dp = []  
+        eval_net = [] 
         
-        # Prepare a fitness list of the same length as the population.
         fitness_list = [None] * len(decoded_net)
         
         # Loop once over the population to determine which candidates are new.
         for idx, individual in enumerate(self.population):
             key = tuple(individual.tolist())
             if key in self.evaluated:
-                # Use cached fitness value.
                 fitness_list[idx] = self.evaluated[key]
             else:
                 indices_to_evaluate.append(idx)
-                # Package the candidate's parameters (backbone_percentage) into a dict.
-                dp = {'backbone_percentage': backbone_percentage_array[idx, 0]}
+                dp = {'backbone_percentage': backbone_percentage_array[idx, 0],
+                    'candidate_id': idx}
                 eval_dp.append(dp)
                 eval_net.append(decoded_net[idx])
         
-        # If there are new candidates to evaluate, call eval_func once with the batch.
         if indices_to_evaluate:
             new_fitness_values = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
-            # Assume new_fitness_values is a list or array with one fitness per candidate.
             for i, idx in enumerate(indices_to_evaluate):
                 key = tuple(self.population[idx].tolist())
                 fitness_val = new_fitness_values[i]
-                self.evaluated[key] = fitness_val  # Cache the result.
+                self.evaluated[key] = fitness_val
                 fitness_list[idx] = fitness_val
-                self.total_eval += 1
+                self.total_eval += 1    
         
         # Convert the fitness list into a NumPy array.
         self.fitnesses = np.array(fitness_list)
-        self.order_population()
         self.update_best_id(self.fitnesses)
+        
+        self.order_population()
+        self.current_population = self.population.copy()
+        
         self.log_data()
         return self.fitnesses
 
@@ -344,36 +341,33 @@ class GA(object):
 
     def save_data(self):
         """
-        Save current evolution data to self.data_file (pickle format)
-        so that the evolution process may be resumed or analysed.
+        Save current evolution data to self.data_file (pickle format) while
+        preserving data from previous generations. The dictionary is updated
+        so that if the generation already exists, its data is overwritten.
         """
-        data = {
-            'current_gen': self.current_gen,
+        # If the file exists, load the current data; otherwise, start with an empty dictionary.
+        if os.path.exists(self.data_file):
+            with open(self.data_file, 'rb') as f:
+                data = load(f)
+        else:
+            data = {}
+        
+        # Create the current generation's data dictionary.
+        current_data = {
+            'time': str(datetime.datetime.now()),
             'total_eval': self.total_eval,
             'best_so_far': self.best_so_far,
             'best_so_far_id': self.best_so_far_id,
-            'population': self.population,
-            'fitnesses': self.fitnesses
+            'fitnesses': self.fitnesses,
+            'net_pop': self.current_population,
         }
+        
+        # Update (or add) the current generation in the data dictionary.
+        data[self.current_gen] = current_data
+
+        # Save the merged dictionary back to the file.
         with open(self.data_file, 'wb') as f:
             dump(data, f, protocol=HIGHEST_PROTOCOL)
-        #self.logger.info("Evolution data saved at generation %d", self.current_gen)
-
-    def load_data(self, file_path):
-        """
-        Load evolution data from a pickle file.
-        Args:
-            file_path: path to the pickle file with saved data.
-        """
-        with open(file_path, 'rb') as f:
-            data = load(f)
-        self.current_gen = data['current_gen']
-        self.total_eval = data['total_eval']
-        self.best_so_far = data['best_so_far']
-        self.best_so_far_id = data['best_so_far_id']
-        self.population = data['population']
-        self.fitnesses = data['fitnesses']
-        self.logger.info("Evolution data loaded from %s at generation %d", file_path, self.current_gen)
     
     def check_early_stopping(self):
         """
@@ -493,8 +487,8 @@ if __name__ == "__main__":
             log_level=config.train_spec['log_level'], 
             data_file=config.files_spec['data_file'])
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
-    ga.initialize_ga(population_size=5, num_generations=10, max_num_nodes=10,
-                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=10, fn_list=config.QNAS_spec['fn_list'])
+    ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
+                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20, fn_list=config.QNAS_spec['fn_list'])
     
     # Run the evolution
     population, fitnesses, best_fitness, best_id = ga.evolve()
