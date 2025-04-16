@@ -140,18 +140,20 @@ class EvalPopulation(object):
         return evaluations
             
             
-    def run_individuals(self, generation,  train_params, fn_dict, individuals_selected_thread, gpu_device):
+    def run_individuals(self, generation, train_params, fn_dict, individuals_selected_thread, gpu_device):
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
-        for individual, selected_thread, decoded_net, decoded_params, return_val in individuals_selected_thread:
+        for candidate_data in individuals_selected_thread:
+            original_index, selected_thread, decoded_net, decoded_params, return_val = candidate_data
+            candidate_id = decoded_params.get('candidate_id', str(original_index))
             self.train_params['device'] = gpu_device
-            master.fitness(f"{generation}_{individual}",
-                                        {**train_params},
-                                        fn_dict,
-                                        decoded_net,
-                                        decoded_params,
-                                        train_loader,
-                                        val_loader, 
-                                        return_val)
-            self.logger.info(f"Calculated fitness of individual {individual} on thread {selected_thread} with "
+            master.fitness(f"{generation}_{candidate_id}",
+                        {**train_params},
+                        fn_dict,
+                        decoded_net,
+                        decoded_params,
+                        train_loader,
+                        val_loader, 
+                        return_val)
+            self.logger.info(f"Calculated fitness of candidate {candidate_id} on thread {selected_thread} with "
                             f"Best Metric: {round(return_val[0], 3)}, Params: {round(return_val[1], 2)}M, "
                             f"Inference Time: {round(return_val[2], 3)} uS")

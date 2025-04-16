@@ -12,7 +12,7 @@ import numpy as np
 import time
 
 from population import QPopulationNetwork, QPopulationParams
-from util import delete_old_dirs, init_log, load_pkl, calculate_time
+from util import delete_old_dirs, init_log, load_pkl, calculate_time, backup_cache, load_cache
 
 
 class QNAS(object):
@@ -54,6 +54,10 @@ class QNAS(object):
 
         self.qpop_params = None
         self.qpop_net = None
+        
+        cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
+        self.evaluated = load_cache(cache_file)
+
 
     def initialize_qnas(self, num_quantum_ind, params_ranges, repetition, max_generations,
                         crossover_rate, update_quantum_gen, replace_method, fn_list,
@@ -283,6 +287,7 @@ class QNAS(object):
 
         for i in range(num_individuals):
             decoded_params[i] = self.qpop_params.chromosome.decode(pop_params[i])
+            decoded_params[i]['candidate_id'] = i
             decoded_nets[i] = self.qpop_net.chromosome.decode(pop_net[i, :])
 
         return decoded_params, decoded_nets
@@ -299,10 +304,46 @@ class QNAS(object):
             no penalization is applied.
         """
 
+        # Decode the population (here pop_params is used by qpop_params.decode and similarly for pop_net)
         decoded_params, decoded_nets = self.decode_pop(pop_params, pop_net)
 
-        self.logger.info('Evaluating new population ...')
-        fitnesses = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
+        self.logger.info("Evaluating new population ...")
+        
+        num_individuals = pop_net.shape[0]
+        fitness_list = [None] * num_individuals
+        indices_to_evaluate = []
+        eval_dp = []  # List for new decoded parameters to evaluate.
+        eval_net = [] # List for new decoded network architectures.
+        
+        # Loop once over the population to determine which candidates are new.
+        # We use the candidate’s genotype (row of pop_net) converted to a tuple as the key.
+        for idx in range(num_individuals):
+            key = tuple(pop_net[idx].tolist())
+            if key in self.evaluated:
+                # Candidate already evaluated; use its cached fitness.
+                fitness_list[idx] = self.evaluated[key]
+                self.logger.debug(f"Candidate {idx} with key {key} already evaluated: fitness={self.evaluated[key]}")
+            else:
+                # Mark candidate for evaluation; also store its original index in candidate_id.
+                indices_to_evaluate.append(idx)
+                decoded_params[idx]['candidate_id'] = idx  # Using the original index as candidate ID.
+                eval_dp.append(decoded_params[idx])
+                eval_net.append(decoded_nets[idx])
+        
+        # Evaluate new candidates in batch if there are any.
+        if indices_to_evaluate:
+            new_fitness_values = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            # Assume new_fitness_values is a list/array matching the order of eval_dp.
+            for i, idx in enumerate(indices_to_evaluate):
+                key = tuple(pop_net[idx].tolist())
+                fitness_val = new_fitness_values[i]
+                self.evaluated[key] = fitness_val  # Cache the result.
+                fitness_list[idx] = fitness_val
+                self.total_eval += 1
+                self.logger.debug(f"Evaluated candidate {idx} with key {key}: new fitness={fitness_val}")
+        
+        # Convert the accumulated fitness list to a NumPy array.
+        fitnesses = np.array(fitness_list)
         penalized_fitnesses = np.copy(fitnesses)
 
         if self.penalize_number:
@@ -454,7 +495,7 @@ class QNAS(object):
         """
 
         self.update_quantum()
-
+        backup_cache(self.evaluated, file_path=self.experiment_path)
         self.save_data()
         self.log_data()
         #self.save_train_data()

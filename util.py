@@ -22,7 +22,7 @@ import torch
 import torch.cuda as cuda
 from cnn import model, input
 import GPUtil
-
+from pickle import dump, load, HIGHEST_PROTOCOL
 
 def natural_key(string):
     """ Key to use with sort() in order to sort string lists in natural order.
@@ -559,3 +559,52 @@ def get_gpu_memory():
     if gpus:
         return gpus[0].memoryUsed  # Assuming single-GPU use; modify if using multiple GPUs
     return None
+
+
+def backup_cache(data, file_path: str = None) -> None:
+    """
+    Backup (update) the cache of evaluated individuals to a file.
+    
+    If the backup file exists, load its contents, update them with `data`,
+    then write the merged dictionary back to the file. Otherwise, simply
+    write `data` to the file.
+    
+    Args:
+        data: dictionary containing evaluated individuals (e.g. self.evaluated).
+        file_path: The path to the directory where the backup file is stored.
+                If None, you can set a default path.
+    """
+    if file_path is None:
+        file_path = os.getcwd()  # or some default directory
+    file_name = os.path.join(file_path, "cache_backup.pkl")
+    
+    # Load existing cache if it exists
+    if os.path.exists(file_name):
+        with open(file_name, "rb") as f:
+            existing_data = load(f)
+        # If both existing_data and data are dictionaries, update the existing data
+        if isinstance(existing_data, dict) and isinstance(data, dict):
+            existing_data.update(data)
+            combined_data = existing_data
+        else:
+            combined_data = data
+    else:
+        combined_data = data
+    
+    with open(file_name, "wb") as f:
+        dump(combined_data, f, protocol=HIGHEST_PROTOCOL)
+
+def load_cache(file_path: str) -> None:
+    """
+    Load a cache backup from file into self.evaluated.
+
+    Args:
+        file_path: The path to the backup file.
+    """
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            data = load(f)
+    else:
+        print(f"Cache backup file {file_path} not found. Starting with empty cache.")
+        data = {}
+    return data
