@@ -53,8 +53,8 @@ class GA(object):
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
     
 
-    def initialize_ga(self, population_size, num_generations, max_num_nodes,fn_list,
-                    crossover_rate, mutation_rate, elitism=False, patience=20):
+    def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list,
+                    crossover_rate, mutation_rate, elitism=False, patience=60):
         """
         Initialize GA parameters and create the initial random population.
 
