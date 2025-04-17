@@ -33,7 +33,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
     echo "=== Running ${dataset} / ${configs[$j]} on GPU ${cuda_device} ==="
 
-    for ((i=1; i<=1; i++)); do  # change 1 to your number of repeats
+    for ((i=1; i<=3; i++)); do  # change 1 to your number of repeats
         exp_path="${exp_path_base}/${exp_name}_repeat_${i}"
 
         CUDA_VISIBLE_DEVICES="$cuda_device" python run_ga_evolution.py \
