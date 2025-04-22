@@ -7,7 +7,7 @@
 import torch.multiprocessing as mp
 from typing import Dict, Any, List
 import numpy as np
-from util import init_log
+from util import init_log, setup_dataset_info
 import torch
 from cnn import input, master
 import time
@@ -62,11 +62,12 @@ class EvalPopulation(object):
             The logging level for the internal logger (default is 'INFO').
         """
         
-        self.train_params = params
+        self.train_params = setup_dataset_info(params)
         self.fn_dict = fn_dict
         self.logger = init_log(log_level, name=__name__)
         self.gpus = [f'cuda:{i}' for i in range(torch.cuda.device_count())]
         self.loader = input.GenericDataLoader(params=self.train_params)
+        
         #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
         self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
         
