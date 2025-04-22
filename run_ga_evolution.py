@@ -63,8 +63,9 @@ def main(**args):
     logger.info(f"Starting evolution ...")
     population, fitnesses, best_fitness, best_id = ga_cnn.evolve()
     logger.info(f"Evolution finished.")
-    logger.info("Best fitness:", best_fitness)
-    logger.info("Best individual (at generation, index):", best_id)
+    logger.info(f"Best fitness: {best_fitness}")
+    logger.info(f"Best individual (generation, index): {best_id}")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
