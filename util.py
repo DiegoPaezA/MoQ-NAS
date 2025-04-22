@@ -548,6 +548,53 @@ def download_dataset(params: dict):
     else:
         return True
 
+dataset_cache = {}
+
+def setup_dataset_info(params):
+    """
+    Update the configuration parameters with dataset-specific information.
+    If the dataset is available in input.available_datasets, use that information;
+    otherwise, load the dataset info from a YAML file.
+
+    Args:
+        params (Dict[str, Any]): Configuration dictionary containing keys 'dataset', 
+            'data_path', and 'batch_size'.
+
+    Returns:
+        Dict[str, Any]: Updated configuration dictionary with 'num_classes', 'task',
+                        and 'input_shape' set.
+    """
+    dataset_name = params['dataset'].lower()
+    
+    if dataset_name in input.available_datasets:
+        dataset_info = input.available_datasets[dataset_name]
+    else:
+        # Check if the dataset info is already cached
+        if dataset_name in dataset_cache:
+            print(f"Loading dataset info for {dataset_name} from cache.")
+            dataset_info = dataset_cache[dataset_name]
+        else:
+            print(f"Loading dataset info for {dataset_name} from YAML...")
+            # Load the dataset info from the YAML file
+            dataset_info = load_yaml(os.path.join(params['data_path'], 'data_info.txt'))
+
+            # If the dataset info is valid, cache it
+            if dataset_info:
+                dataset_cache[dataset_name] = dataset_info
+            else:
+                # Handle the case where loading the dataset info failed
+                raise ValueError(f"Failed to load dataset info for {dataset_name}. Make sure the dataset exists or the YAML file is correct.")
+    
+
+    # Check if dataset_info is None
+    if dataset_info is None:
+        raise ValueError(f"Failed to load dataset info for {dataset_name}. Make sure the dataset exists or the YAML file is correct.")
+    
+    params['num_classes'] = dataset_info['num_classes']
+    params['task'] = dataset_info['task']
+    params['input_shape'] = [params['batch_size']] + dataset_info['shape']
+    return params
+
 def get_gpu_memory():
     """
     Retrieve GPU memory usage using GPUtil.

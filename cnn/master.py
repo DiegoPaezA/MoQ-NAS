@@ -11,7 +11,7 @@ import torch.nn as nn
 
 from typing import Dict, List, Union, Any
 from cnn import input, model, model_resnet, trainer
-from util import init_log, load_yaml
+from util import init_log
 
 # Initialize a logger (assumed to be defined in init_log)
 current_directory = os.path.dirname(os.path.dirname(__file__))
@@ -82,30 +82,6 @@ def setup_additional_params(params, id_num=None):
         params['model_path'] = model_path
         params['generation'] = id_num.split('_')[0]
         params['individual'] = id_num.split('_')[1]
-    return params
-
-def setup_dataset_info(params):
-    """
-    Update the configuration parameters with dataset-specific information.
-    If the dataset is available in input.available_datasets, use that information;
-    otherwise, load the dataset info from a YAML file.
-
-    Args:
-        params (Dict[str, Any]): Configuration dictionary containing keys 'dataset', 
-            'data_path', and 'batch_size'.
-
-    Returns:
-        Dict[str, Any]: Updated configuration dictionary with 'num_classes', 'task',
-                        and 'input_shape' set.
-    """
-    if params['dataset'].lower() in input.available_datasets:
-        dataset_info = input.available_datasets[params['dataset'].lower()]
-    else:
-        dataset_info = load_yaml(os.path.join(params['data_path'], 'data_info.txt'))
-    
-    params['num_classes'] = dataset_info['num_classes']
-    params['task'] = dataset_info['task']
-    params['input_shape'] = [params['batch_size']] + dataset_info['shape']
     return params
 
 def create_model_and_trainer(params, train_loader, val_loader, test_loader):
@@ -208,9 +184,7 @@ def run_training_phase(params: Dict[str, Any],
     # For retrain and resnet, ensure model path is created
     if params['phase'] in ['retrain', 'resnet']:
         params = ensure_model_path(params)
-    params = setup_dataset_info(params)
 
-    
     trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
 
     results_dict = trainer.train(debug=debug)
