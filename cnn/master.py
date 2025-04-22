@@ -11,7 +11,7 @@ import torch.nn as nn
 
 from typing import Dict, List, Union, Any
 from cnn import input, model, model_resnet, trainer
-from util import init_log
+from util import init_log, setup_dataset_info
 
 # Initialize a logger (assumed to be defined in init_log)
 current_directory = os.path.dirname(os.path.dirname(__file__))
@@ -183,6 +183,7 @@ def run_training_phase(params: Dict[str, Any],
         
     # For retrain and resnet, ensure model path is created
     if params['phase'] in ['retrain', 'resnet']:
+        params = setup_dataset_info(params)
         params = ensure_model_path(params)
 
     trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
