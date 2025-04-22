@@ -326,7 +326,6 @@ class QNAS(object):
             else:
                 # Mark candidate for evaluation; also store its original index in candidate_id.
                 indices_to_evaluate.append(idx)
-                decoded_params[idx]['candidate_id'] = idx  # Using the original index as candidate ID.
                 eval_dp.append(decoded_params[idx])
                 eval_net.append(decoded_nets[idx])
         
