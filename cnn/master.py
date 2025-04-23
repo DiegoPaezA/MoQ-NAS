@@ -171,9 +171,8 @@ def run_training_phase(params: Dict[str, Any],
     if id_num is not None:
         params = setup_additional_params(params, id_num=id_num)
         
-    if isinstance(decoded_params, list) and len(decoded_params) > 0:
-        # Retrieve backbone_percentage safely using get() with a fallback of None.
-        bp = decoded_params[0].get('backbone_percentage', None)
+    if isinstance(decoded_params, dict) and len(decoded_params) > 0:
+        bp = decoded_params.get('backbone_percentage', None)
         if bp is not None:
             params['backbone_percentage'] = bp
         else:
