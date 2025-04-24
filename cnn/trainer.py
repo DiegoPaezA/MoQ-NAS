@@ -269,6 +269,7 @@ class BaseTrainer:
         validation_losses, validation_accuracies = [], []
         t0 = time.time()
         if self.params.get('phase') == 'retrain':
+            self.logger.info(f"Retraining evolved model {self.params['experiment_path']} ...")
             scheduler = self._initialize_scheduler(max_epochs)
                     
         for epoch in range(1, max_epochs + 1):
