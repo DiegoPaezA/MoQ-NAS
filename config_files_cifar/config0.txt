@@ -2,8 +2,8 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 50
-    max_num_nodes: 10
+    max_generations: 300
+    max_num_nodes: 20
     num_quantum_ind: 5
     penalize_number: 3
     repetition: 4
@@ -58,7 +58,7 @@ train:
     # Tensorflow
     save_checkpoints_epochs: 5
     save_summary_epochs: 0.25
-    threads: 2
+    threads: 20
 
     # penalization parameters - scalarized fitness
     max_params: 114090 # 1.9M
