@@ -22,7 +22,7 @@ import torch
 import torch.cuda as cuda
 from cnn import model, input
 import GPUtil
-
+from pickle import dump, load, HIGHEST_PROTOCOL
 
 def natural_key(string):
     """ Key to use with sort() in order to sort string lists in natural order.
@@ -548,6 +548,53 @@ def download_dataset(params: dict):
     else:
         return True
 
+dataset_cache = {}
+
+def setup_dataset_info(params):
+    """
+    Update the configuration parameters with dataset-specific information.
+    If the dataset is available in input.available_datasets, use that information;
+    otherwise, load the dataset info from a YAML file.
+
+    Args:
+        params (Dict[str, Any]): Configuration dictionary containing keys 'dataset', 
+            'data_path', and 'batch_size'.
+
+    Returns:
+        Dict[str, Any]: Updated configuration dictionary with 'num_classes', 'task',
+                        and 'input_shape' set.
+    """
+    dataset_name = params['dataset'].lower()
+    
+    if dataset_name in input.available_datasets:
+        dataset_info = input.available_datasets[dataset_name]
+    else:
+        # Check if the dataset info is already cached
+        if dataset_name in dataset_cache:
+            print(f"Loading dataset info for {dataset_name} from cache.")
+            dataset_info = dataset_cache[dataset_name]
+        else:
+            print(f"Loading dataset info for {dataset_name} from YAML...")
+            # Load the dataset info from the YAML file
+            dataset_info = load_yaml(os.path.join(params['data_path'], 'data_info.txt'))
+
+            # If the dataset info is valid, cache it
+            if dataset_info:
+                dataset_cache[dataset_name] = dataset_info
+            else:
+                # Handle the case where loading the dataset info failed
+                raise ValueError(f"Failed to load dataset info for {dataset_name}. Make sure the dataset exists or the YAML file is correct.")
+    
+
+    # Check if dataset_info is None
+    if dataset_info is None:
+        raise ValueError(f"Failed to load dataset info for {dataset_name}. Make sure the dataset exists or the YAML file is correct.")
+    
+    params['num_classes'] = dataset_info['num_classes']
+    params['task'] = dataset_info['task']
+    params['input_shape'] = [params['batch_size']] + dataset_info['shape']
+    return params
+
 def get_gpu_memory():
     """
     Retrieve GPU memory usage using GPUtil.
@@ -559,3 +606,52 @@ def get_gpu_memory():
     if gpus:
         return gpus[0].memoryUsed  # Assuming single-GPU use; modify if using multiple GPUs
     return None
+
+
+def backup_cache(data, file_path: str = None) -> None:
+    """
+    Backup (update) the cache of evaluated individuals to a file.
+    
+    If the backup file exists, load its contents, update them with `data`,
+    then write the merged dictionary back to the file. Otherwise, simply
+    write `data` to the file.
+    
+    Args:
+        data: dictionary containing evaluated individuals (e.g. self.evaluated).
+        file_path: The path to the directory where the backup file is stored.
+                If None, you can set a default path.
+    """
+    if file_path is None:
+        file_path = os.getcwd()  # or some default directory
+    file_name = os.path.join(file_path, "cache_backup.pkl")
+    
+    # Load existing cache if it exists
+    if os.path.exists(file_name):
+        with open(file_name, "rb") as f:
+            existing_data = load(f)
+        # If both existing_data and data are dictionaries, update the existing data
+        if isinstance(existing_data, dict) and isinstance(data, dict):
+            existing_data.update(data)
+            combined_data = existing_data
+        else:
+            combined_data = data
+    else:
+        combined_data = data
+    
+    with open(file_name, "wb") as f:
+        dump(combined_data, f, protocol=HIGHEST_PROTOCOL)
+
+def load_cache(file_path: str) -> None:
+    """
+    Load a cache backup from file into self.evaluated.
+
+    Args:
+        file_path: The path to the backup file.
+    """
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            data = load(f)
+    else:
+        print(f"Cache backup file {file_path} not found. Starting with empty cache.")
+        data = {}
+    return data

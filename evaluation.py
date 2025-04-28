@@ -7,7 +7,7 @@
 import torch.multiprocessing as mp
 from typing import Dict, Any, List
 import numpy as np
-from util import init_log
+from util import init_log, setup_dataset_info
 import torch
 from cnn import input, master
 import time
@@ -62,11 +62,12 @@ class EvalPopulation(object):
             The logging level for the internal logger (default is 'INFO').
         """
         
-        self.train_params = params
+        self.train_params = setup_dataset_info(params)
         self.fn_dict = fn_dict
         self.logger = init_log(log_level, name=__name__)
         self.gpus = [f'cuda:{i}' for i in range(torch.cuda.device_count())]
         self.loader = input.GenericDataLoader(params=self.train_params)
+        
         #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
         self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
         
@@ -118,12 +119,9 @@ class EvalPopulation(object):
         for idx in range(self.train_params['threads']):
             individuals_selected_thread = list(filter(lambda x: x[1]==idx, individual_per_thread))
             gpu_device = self.gpus[idx%len(self.gpus)]
-            train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
             process = mp.Process(target=self.run_individuals, args=(generation,
                                                 self.train_params,
                                                 self.fn_dict,
-                                                train_loader,
-                                                val_loader,
                                                 individuals_selected_thread,
                                                 gpu_device))
             process.start()
@@ -143,17 +141,20 @@ class EvalPopulation(object):
         return evaluations
             
             
-    def run_individuals(self, generation,  train_params, fn_dict,train_loader, val_loader, individuals_selected_thread, gpu_device):
-        for individual, selected_thread, decoded_net, decoded_params, return_val in individuals_selected_thread:
+    def run_individuals(self, generation, train_params, fn_dict, individuals_selected_thread, gpu_device):
+        train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
+        for candidate_data in individuals_selected_thread:
+            original_index, selected_thread, decoded_net, decoded_params, return_val = candidate_data
+            candidate_id = decoded_params.get('candidate_id', str(original_index))
             self.train_params['device'] = gpu_device
-            master.fitness(f"{generation}_{individual}",
-                                        {**train_params},
-                                        fn_dict,
-                                        decoded_net,
-                                        decoded_params,
-                                        train_loader,
-                                        val_loader, 
-                                        return_val)
-            self.logger.info(f"Calculated fitness of individual {individual} on thread {selected_thread} with "
+            master.fitness(f"{generation}_{candidate_id}",
+                        {**train_params},
+                        fn_dict,
+                        decoded_net,
+                        decoded_params,
+                        train_loader,
+                        val_loader, 
+                        return_val)
+            self.logger.info(f"Calculated fitness of candidate {candidate_id} on thread {selected_thread} with "
                             f"Best Metric: {round(return_val[0], 3)}, Params: {round(return_val[1], 2)}M, "
                             f"Inference Time: {round(return_val[2], 3)} uS")

@@ -11,7 +11,7 @@ import torch.nn as nn
 
 from typing import Dict, List, Union, Any
 from cnn import input, model, model_resnet, trainer
-from util import init_log, load_yaml
+from util import init_log, setup_dataset_info
 
 # Initialize a logger (assumed to be defined in init_log)
 current_directory = os.path.dirname(os.path.dirname(__file__))
@@ -84,30 +84,6 @@ def setup_additional_params(params, id_num=None):
         params['individual'] = id_num.split('_')[1]
     return params
 
-def setup_dataset_info(params):
-    """
-    Update the configuration parameters with dataset-specific information.
-    If the dataset is available in input.available_datasets, use that information;
-    otherwise, load the dataset info from a YAML file.
-
-    Args:
-        params (Dict[str, Any]): Configuration dictionary containing keys 'dataset', 
-            'data_path', and 'batch_size'.
-
-    Returns:
-        Dict[str, Any]: Updated configuration dictionary with 'num_classes', 'task',
-                        and 'input_shape' set.
-    """
-    if params['dataset'].lower() in input.available_datasets:
-        dataset_info = input.available_datasets[params['dataset'].lower()]
-    else:
-        dataset_info = load_yaml(os.path.join(params['data_path'], 'data_info.txt'))
-    
-    params['num_classes'] = dataset_info['num_classes']
-    params['task'] = dataset_info['task']
-    params['input_shape'] = [params['batch_size']] + dataset_info['shape']
-    return params
-
 def create_model_and_trainer(params, train_loader, val_loader, test_loader):
     """
     Create the model and corresponding trainer instance based on the training phase.
@@ -167,7 +143,7 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
 
 def run_training_phase(params: Dict[str, Any],
                         fn_dict: Dict[str, Any] = None,
-                        net_list: List[str] = None, decoded_params: Dict[str, Any] = None,
+                        net_list: List[str] = None, decoded_params: List = None,
                         id_num: str = None, debug: bool = False,
                         train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
     """
@@ -195,16 +171,20 @@ def run_training_phase(params: Dict[str, Any],
     if id_num is not None:
         params = setup_additional_params(params, id_num=id_num)
         
-    if decoded_params is not None:
-        if decoded_params['backbone_percentage'] is not None:
-            params['backbone_percentage'] = decoded_params['backbone_percentage']
-        
+    if isinstance(decoded_params, dict) and decoded_params:
+        # decoded_params is a non-empty dict → must contain the key, or we error
+        if 'backbone_percentage' not in decoded_params:
+            raise ValueError("backbone_percentage not found in decoded_params")
+        params['backbone_percentage'] = decoded_params['backbone_percentage']
+    else:
+        # either no decoded_params, or it was empty → use default
+        params['backbone_percentage'] = params.get('backbone_percentage', 1.0)
+                
     # For retrain and resnet, ensure model path is created
     if params['phase'] in ['retrain', 'resnet']:
+        params = setup_dataset_info(params)
         params = ensure_model_path(params)
-    params = setup_dataset_info(params)
 
-    
     trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
 
     results_dict = trainer.train(debug=debug)
@@ -288,6 +268,7 @@ def retrain(params: Dict[str, Any],
         Exception: Propagates any exception encountered during training.
     """
     try:
+        LOGGER.info(f"Retraining evolved model {params['experiment_path']} ...")
         results_dict = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
         LOGGER.info(f"Retraining finished, test acc: {round(results_dict['test_accuracy'], 2)}")
         return results_dict
