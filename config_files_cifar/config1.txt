@@ -64,4 +64,4 @@ train:
 
     # Network structure Configuration
     network_config: default
-    network_gap: False
+    backbone_name: mobilenet_v3_small
