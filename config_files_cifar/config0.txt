@@ -2,11 +2,11 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 50
+    max_generations: 20
     max_num_nodes: 10
-    num_quantum_ind: 5
+    num_quantum_ind: 1
     penalize_number: 3
-    repetition: 4
+    repetition: 2
     replace_method: best
     update_quantum_gen: 5
     update_quantum_rate: 0.1
@@ -38,7 +38,7 @@ QNAS:
 train:
     batch_size: 256
     eval_batch_size: 256
-    max_epochs: 50
+    max_epochs: 6
     epochs_to_eval: 5 
     optimizer: AdamW
     fitness_metric: best_loss
