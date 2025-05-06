@@ -6,7 +6,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Define parameters similar to those defined in your .sh script
 parameters = {
-    "experiment_path": "experiment_cifar10_backbone/exp1_repeat_1",
+    "experiment_path": "experiment_cifar10_qnas/exp1_repeat_1",
     "data_path": "cifar10_data",
     "dataset": "cifar10",
     "config_file": "config_files_cifar/config0.txt",
