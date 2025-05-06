@@ -4,6 +4,7 @@ import datetime
 import numpy as np
 import evaluation
 import qnas_config as cfg
+from collections import defaultdict
 from pickle import dump, load, HIGHEST_PROTOCOL
 from util import delete_old_dirs, init_log, check_files, download_dataset, backup_cache, load_cache
 
@@ -49,6 +50,8 @@ class GA(object):
         # Initialize the cache for evaluated individuals.
         cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
         self.evaluated = load_cache(cache_file)
+        # this collects the raw fitnesses until we have 3 of them
+        self.eval_history = defaultdict(list)
         # Create a logger using the provided utility function (or basicConfig)
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
     
@@ -112,15 +115,16 @@ class GA(object):
 
         num_individuals = pop_net.shape[0]
 
-        #decoded_params = [None] * num_individuals
+        decoded_params = [None] * num_individuals
         decoded_nets = [None] * num_individuals
-
+        backbone_percentage_array = np.random.uniform(0.0, 1.0, size=(len(decoded_nets), 1))
         for i in range(num_individuals):
             #decoded_params[i] = self.qpop_params.chromosome.decode(pop_params[i])
+            decoded_params[i] = {'backbone_percentage': backbone_percentage_array[i, 0],'candidate_id': i}
             decoded_nets[i] = self.decode_net(pop_net[i, :])
 
         #return decoded_params, decoded_nets
-        return decoded_nets
+        return decoded_nets, decoded_params
     
     def order_population(self):
         """
@@ -138,45 +142,60 @@ class GA(object):
         Returns:
             fitnesses: a NumPy array with the fitness values for the population.
         """
-        decoded_net = self.decode_pop(None, self.population)
-        
-        # only for test
-        backbone_percentage_array = np.random.uniform(0.0, 1.0, size=(len(decoded_net), 1))
+        decoded_net, decoded_params = self.decode_pop(None, self.population)
         
         indices_to_evaluate = []
-        eval_dp = []  
-        eval_net = [] 
-        
-        fitness_list = [None] * len(decoded_net)
-        
-        # Loop once over the population to determine which candidates are new.
+        eval_dp            = []
+        eval_net           = []
+        fitness_list       = [None] * len(decoded_net)
+
+        # 1) First pass: reuse cached means or schedule new runs
         for idx, individual in enumerate(self.population):
             key = tuple(individual.tolist())
+
+            # If we've already computed the 3-run mean, reuse it
             if key in self.evaluated:
                 fitness_list[idx] = self.evaluated[key]
-            else:
+                continue
+
+            # Otherwise see how many raw runs we already did
+            hist = self.eval_history[key]
+            if len(hist) < 3:
+                # still need more runs → schedule one
                 indices_to_evaluate.append(idx)
-                dp = {'backbone_percentage': backbone_percentage_array[idx, 0],
-                    'candidate_id': idx}
-                eval_dp.append(dp)
+                eval_dp.append(decoded_params[idx])
                 eval_net.append(decoded_net[idx])
-        
+            else:
+                # 3 runs done, but not yet moved into evaluated?
+                mean_f = sum(hist) / 3.0
+                self.evaluated[key] = mean_f
+                fitness_list[idx]   = mean_f
+
+        # 2) Train all scheduled individuals in one batch
         if indices_to_evaluate:
-            new_fitness_values = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            new_vals = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
             for i, idx in enumerate(indices_to_evaluate):
                 key = tuple(self.population[idx].tolist())
-                fitness_val = new_fitness_values[i]
-                self.evaluated[key] = fitness_val
-                fitness_list[idx] = fitness_val
-                self.total_eval += 1    
-        
-        # Convert the fitness list into a NumPy array.
+                raw = new_vals[i]
+
+                # record this raw run
+                self.eval_history[key].append(raw)
+                self.total_eval += 1
+
+                if len(self.eval_history[key]) == 3:
+                    # on the 3rd run, compute & cache the mean
+                    mean_f = sum(self.eval_history[key]) / 3.0
+                    self.evaluated[key] = mean_f
+                    fitness_list[idx]   = mean_f
+                else:
+                    # fewer than 3 runs so far: use raw fitness for selection
+                    fitness_list[idx] = raw
+
+        # 3) finalize
         self.fitnesses = np.array(fitness_list)
         self.update_best_id(self.fitnesses)
-        
         self.order_population()
         self.current_population = self.population.copy()
-        
         self.log_data()
         return self.fitnesses
 

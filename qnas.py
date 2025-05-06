@@ -10,7 +10,7 @@ from pickle import dump, HIGHEST_PROTOCOL
 
 import numpy as np
 import time
-
+from collections import defaultdict
 from population import QPopulationNetwork, QPopulationParams
 from util import delete_old_dirs, init_log, load_pkl, calculate_time, backup_cache, load_cache
 
@@ -57,6 +57,8 @@ class QNAS(object):
         
         cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
         self.evaluated = load_cache(cache_file)
+        # this collects the raw fitnesses until we have 3 of them
+        self.eval_history = defaultdict(list)
 
 
     def initialize_qnas(self, num_quantum_ind, params_ranges, repetition, max_generations,
@@ -304,55 +306,72 @@ class QNAS(object):
             no penalization is applied.
         """
 
-        # Decode the population (here pop_params is used by qpop_params.decode and similarly for pop_net)
         decoded_params, decoded_nets = self.decode_pop(pop_params, pop_net)
-
         self.logger.info("Evaluating new population ...")
-        
-        num_individuals = pop_net.shape[0]
-        fitness_list = [None] * num_individuals
-        indices_to_evaluate = []
-        eval_dp = []  # List for new decoded parameters to evaluate.
-        eval_net = [] # List for new decoded network architectures.
-        
-        # Loop once over the population to determine which candidates are new.
-        # We use the candidate’s genotype (row of pop_net) converted to a tuple as the key.
-        for idx in range(num_individuals):
+
+        num_ind = pop_net.shape[0]
+        fitness_list = [None] * num_ind
+
+        # Collect just the ones that still need a run
+        to_eval_idx = []
+        to_eval_dp  = []
+        to_eval_net = []
+        to_eval_keys= []
+
+        # 1) First pass: fill in any already-cached means, or schedule new runs
+        for idx in range(num_ind):
             key = tuple(pop_net[idx].tolist())
+
+            # If we've already computed the 3-run mean, reuse it
             if key in self.evaluated:
-                # Candidate already evaluated; use its cached fitness.
                 fitness_list[idx] = self.evaluated[key]
-                self.logger.debug(f"Candidate {idx} with key {key} already evaluated: fitness={self.evaluated[key]}")
+                continue
+
+            hist = self.eval_history[key]
+            if len(hist) < 3:
+                # still need more runs → schedule one more training
+                to_eval_idx .append(idx)
+                to_eval_dp  .append(decoded_params[idx])
+                to_eval_net .append(decoded_nets[idx])
+                to_eval_keys.append(key)
             else:
-                # Mark candidate for evaluation; also store its original index in candidate_id.
-                indices_to_evaluate.append(idx)
-                eval_dp.append(decoded_params[idx])
-                eval_net.append(decoded_nets[idx])
-        
-        # Evaluate new candidates in batch if there are any.
-        if indices_to_evaluate:
-            new_fitness_values = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
-            # Assume new_fitness_values is a list/array matching the order of eval_dp.
-            for i, idx in enumerate(indices_to_evaluate):
-                key = tuple(pop_net[idx].tolist())
-                fitness_val = new_fitness_values[i]
-                self.evaluated[key] = fitness_val  # Cache the result.
-                fitness_list[idx] = fitness_val
+                # already have 3 runs but forgot to move into evaluated?
+                # move into evaluated now
+                mean_f = sum(hist) / 3.0
+                self.evaluated[key] = mean_f
+                fitness_list[idx]   = mean_f
+
+        # 2) Actually train the scheduled ones
+        if to_eval_idx:
+            raw_vals = self.eval_func(to_eval_dp, to_eval_net,
+                                    generation=self.current_gen)
+            for i, idx in enumerate(to_eval_idx):
+                key       = to_eval_keys[i]
+                raw_fitness = raw_vals[i]
+
+                # record this raw result
+                self.eval_history[key].append(raw_fitness)
                 self.total_eval += 1
-                self.logger.debug(f"Evaluated candidate {idx} with key {key}: new fitness={fitness_val}")
-        
-        # Convert the accumulated fitness list to a NumPy array.
-        fitnesses = np.array(fitness_list)
-        penalized_fitnesses = np.copy(fitnesses)
 
+                # if that was the 3rd run, compute & cache the mean
+                if len(self.eval_history[key]) == 3:
+                    mean_f = sum(self.eval_history[key]) / 3.0
+                    self.evaluated[key] = mean_f
+                    fitness_list[idx]   = mean_f
+                    self.logger.debug(f"Key {key} now has 3 runs; caching mean {mean_f:.4f}")
+                else:
+                    # < 3 runs so far: just return the raw for selection
+                    fitness_list[idx] = raw_fitness
+                    self.logger.debug(f"Key {key}: run {len(self.eval_history[key])}/3, raw fitness={raw_fitness:.4f}")
+
+        # 3) penalize if needed
+        fitnesses         = np.array(fitness_list)
+        penalized_fits    = fitnesses.copy()
         if self.penalize_number:
-            penalties = self.get_penalties(pop_net)
-            penalized_fitnesses -= penalties
+            penalties      = self.get_penalties(pop_net)
+            penalized_fits -= penalties
 
-        # Update the total evaluation counter
-        self.total_eval = self.total_eval + np.size(pop_params, axis=0)
-
-        return penalized_fitnesses, fitnesses
+        return penalized_fits, fitnesses
 
     def get_penalties(self, pop_net, penalty_factor=0.01):
         """ Penalize individuals with more than *self.penalize_number* reducing layers. The

@@ -270,7 +270,7 @@ def retrain(params: Dict[str, Any],
     try:
         LOGGER.info(f"Retraining evolved model {params['experiment_path']} ...")
         results_dict = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
-        LOGGER.info(f"Retraining finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
+        LOGGER.info(f"Retraining finished, test acc: {round(results_dict['test_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
         if "out of memory" in str(e):
