@@ -171,15 +171,13 @@ def run_training_phase(params: Dict[str, Any],
     if id_num is not None:
         params = setup_additional_params(params, id_num=id_num)
         
-    if isinstance(decoded_params, dict) and decoded_params:
-        # decoded_params is a non-empty dict → must contain the key, or we error
-        if 'backbone_percentage' not in decoded_params:
-            raise ValueError("backbone_percentage not found in decoded_params")
+    if isinstance(decoded_params, dict) and 'backbone_percentage' in decoded_params:
         params['backbone_percentage'] = decoded_params['backbone_percentage']
     else:
-        # either no decoded_params, or it was empty → use default
+        # If decoded params is not been evolved, get the value from the config file
+        # or set it to 1.0 by default
         params['backbone_percentage'] = params.get('backbone_percentage', 1.0)
-                
+    
     # For retrain and resnet, ensure model path is created
     if params['phase'] in ['retrain', 'resnet']:
         params = setup_dataset_info(params)
