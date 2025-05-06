@@ -16,6 +16,7 @@ import torchvision.datasets
 from torchvision.transforms import ToTensor
 import medmnist
 from medmnist import INFO
+from typing import Dict
 
 import gc
 import torch
@@ -641,7 +642,7 @@ def backup_cache(data, file_path: str = None) -> None:
     with open(file_name, "wb") as f:
         dump(combined_data, f, protocol=HIGHEST_PROTOCOL)
 
-def load_cache(file_path: str) -> None:
+def load_cache(file_path: str) -> Dict:
     """
     Load a cache backup from file into self.evaluated.
 
