@@ -171,16 +171,15 @@ def run_training_phase(params: Dict[str, Any],
     if id_num is not None:
         params = setup_additional_params(params, id_num=id_num)
         
-    if isinstance(decoded_params, list) and len(decoded_params) > 0:
-        # Retrieve backbone_percentage safely using get() with a fallback of None.
-        bp = decoded_params[0].get('backbone_percentage', None)
-        if bp is not None:
-            params['backbone_percentage'] = bp
-        else:
-            params['backbone_percentage'] = 1.0
+    if isinstance(decoded_params, dict) and decoded_params:
+        # decoded_params is a non-empty dict → must contain the key, or we error
+        if 'backbone_percentage' not in decoded_params:
+            raise ValueError("backbone_percentage not found in decoded_params")
+        params['backbone_percentage'] = decoded_params['backbone_percentage']
     else:
-        params['backbone_percentage'] = 1.0
-        
+        # either no decoded_params, or it was empty → use default
+        params['backbone_percentage'] = params.get('backbone_percentage', 1.0)
+                
     # For retrain and resnet, ensure model path is created
     if params['phase'] in ['retrain', 'resnet']:
         params = setup_dataset_info(params)
@@ -269,6 +268,7 @@ def retrain(params: Dict[str, Any],
         Exception: Propagates any exception encountered during training.
     """
     try:
+        LOGGER.info(f"Retraining evolved model {params['experiment_path']} ...")
         results_dict = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
         LOGGER.info(f"Retraining finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
         return results_dict

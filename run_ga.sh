@@ -3,12 +3,12 @@
 # —— Experiment settings —— 
 dataset="cifar10"
 exp_path_base="experiment_${dataset}_ga"
-config_dir="config_files_med"
+config_dir="config_files_cifar"
 fitness_metric="best_accuracy"
 data_path="${dataset}_data"
 log_level="INFO"
 network_config="default"
-backbone_name="resnet18"
+backbone_name="resnet18" # only used if network_config is  backbone
 
 # —— GA hyperparameters —— 
 population_size=20
@@ -21,7 +21,7 @@ patience=60
 
 # —— sample size & repeats —— 
 dataset_sample_size=10000
-configs=("config1.txt")     # list your config files here
+configs=("config0.txt")     # list your config files here
 exps=("exp1")               # corresponding experiment names
 cuda_devices=("0")          # GPU IDs for each run
 
