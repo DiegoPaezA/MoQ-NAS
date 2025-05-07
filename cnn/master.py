@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from typing import Dict, List, Union, Any
-from cnn import input, model, model_resnet, trainer
+from cnn import model, model_resnet, trainer
 from util import init_log, setup_dataset_info
 
 # Initialize a logger (assumed to be defined in init_log)
@@ -143,7 +143,7 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
 
 def run_training_phase(params: Dict[str, Any],
                         fn_dict: Dict[str, Any] = None,
-                        net_list: List[str] = None, decoded_params: List = None,
+                        net_list: List[str] = None, decoded_params: Union[Dict[str, Any], List] = None,
                         id_num: str = None, debug: bool = False,
                         train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
     """
@@ -155,6 +155,8 @@ def run_training_phase(params: Dict[str, Any],
     Args:
         params (Dict[str, Any]): Configuration dictionary.
         fn_dict (Dict[str, Any], optional): Dictionary of layer definitions.
+        decoded_params (List, optional): List of decoded parameters for the model.
+        debug (bool, optional): If True, returns the raw results dictionary for debugging.
         net_list (List[str], optional): List of layer names to be used in the network.
         id_num (str, optional): Identifier for the model (used in the evolution phase).
         train_loader: Training DataLoader.
@@ -174,7 +176,7 @@ def run_training_phase(params: Dict[str, Any],
     if isinstance(decoded_params, dict) and 'backbone_percentage' in decoded_params:
         params['backbone_percentage'] = decoded_params['backbone_percentage']
     else:
-        # If decoded params is not been evolved, get the value from the config file
+        # If decoded params is not being evolved, get the value from the config file
         # or set it to 1.0 by default
         params['backbone_percentage'] = params.get('backbone_percentage', 1.0)
     
@@ -203,6 +205,7 @@ def fitness(id_num: str, params: Dict[str, Any],
         id_num (str): Identifier for the model in the format "generation_individual".
         params (Dict[str, Any]): Configuration dictionary with evolved networks.
         fn_dict (Dict[str, Any]): Dictionary of layer definitions.
+        decoded_params (Dict[str, Any]): Decoded parameters for the model.
         net_list (List[str]): List of layer names to be used in the network.
         train_loader (torch.utils.data.DataLoader): Training DataLoader.
         val_loader (torch.utils.data.DataLoader): Validation DataLoader.
@@ -245,10 +248,10 @@ def retrain(params: Dict[str, Any],
             net_list: List[str],
             train_loader: torch.utils.data.DataLoader, 
             val_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader) -> Dict[str, Any]:
+            test_loader: torch.utils.data.DataLoader) -> dict[str, Any] | None:
     """
     Retrain a model using the best architecture obtained during evolution.
-    This method assumes that the evolved parameters (or a best model checkpoint)
+    This method assumes that the evolved parameters (or the best model checkpoint)
     are available in the configuration.
 
     Args:
@@ -273,7 +276,7 @@ def retrain(params: Dict[str, Any],
     except RuntimeError as e:
         if "out of memory" in str(e):
             LOGGER.error(f"Out of memory error: {e}")
-            results_dict = None
+            return None
         else:
             LOGGER.error(f"Runtime error during training: {e}")
             raise
