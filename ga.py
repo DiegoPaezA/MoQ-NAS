@@ -11,6 +11,20 @@ from util import delete_old_dirs, init_log, check_files, download_dataset, backu
 
 class GA(object):
     """
+    Genetic Algorithm class for optimizing neural network architectures.
+    It uses tournament selection, uniform crossover, and Gaussian mutation.
+    The class supports early stopping based on fitness improvement.
+
+    Attributes:
+        population: Current population of individuals (chromosomes).
+        current_population: Population of individuals in the current generation.
+        fitnesses: Fitness values for the current population.
+        best_so_far: Best fitness value found so far.
+        best_so_far_id: ID of the best individual so far.
+        current_gen: Current generation number.
+        total_eval: Total evaluations performed.
+        evaluated: Cache for previously evaluated individuals.
+        eval_history: History of evaluations for each individual.
     """
     def __init__(self, eval_func, experiment_path, log_file, log_level, data_file):
         """
@@ -25,6 +39,15 @@ class GA(object):
             data_file: Path to file for saving evolution data (pickle).
         """
         # GA parameters (to be set later via initialize_ga)
+        self.fn_list = None
+        self.params_ranges = None
+        self.cont_mut_sigma = None
+        self.last_best_so_far = None
+        self.fixed_params = None
+        self.cont_keys = None
+        self.cont_max = None
+        self.cont_min = None
+        self.pop_params = None
         self.population_size = None
         self.num_generations = None
         self.crossover_rate = None
@@ -50,7 +73,7 @@ class GA(object):
         # Initialize the cache for evaluated individuals.
         cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
         self.evaluated = load_cache(cache_file)
-        # this collects the raw fitnesses until we have 3 of them
+        # this collects the raw fitness's until we have 3 of them
         self.eval_history = defaultdict(list)
         # Create a logger using the provided utility function (or basicConfig)
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
@@ -105,10 +128,10 @@ class GA(object):
             self.cont_min = np.zeros((0,), dtype=float)
             self.cont_max = np.zeros((0,), dtype=float)
             
-        # continuous pop: N×D
-        D = len(self.cont_keys)
-        if D > 0:
-            self.pop_params = np.random.uniform(low=self.cont_min,high=self.cont_max,size=(population_size, D))
+        # continuous pop: population_size x num_params
+        num_params = len(self.cont_keys)
+        if num_params > 0:
+            self.pop_params = np.random.uniform(low=self.cont_min,high=self.cont_max,size=(population_size, num_params))
         else:
             self.pop_params = np.zeros((population_size, 0), dtype=float)
 
@@ -138,10 +161,6 @@ class GA(object):
     def decode_pop(self):
         """ Decode a population of parameters and networks.
 
-        Args:
-            pop_params: float numpy array with a classic population of hyperparameters.
-            pop_net: int numpy array with a classic population of networks.
-
         Returns:
             list of decoded params and list of decoded networks.
         """
@@ -160,7 +179,6 @@ class GA(object):
             p['candidate_id'] = i
             decoded_params[i] = p
 
-
         #return decoded_params, decoded_nets
         return decoded_nets, decoded_params
     
@@ -171,6 +189,7 @@ class GA(object):
         """
         idx = np.argsort(self.fitnesses)[::-1]
         self.population = self.population[idx]
+        self.pop_params = self.pop_params[idx]
         self.fitnesses = self.fitnesses[idx]
         
     def evaluate_population(self):
@@ -237,16 +256,16 @@ class GA(object):
         self.log_data()
         return self.fitnesses
 
-    def update_best_id(self, fitnesses):
+    def update_best_id(self, fitnesses_):
         """
-        Update the best individual id based on current fitnesses.
+        Update the best individual id based on current fitnesses_.
         Args:
-            fitnesses: numpy array of current population fitnesses.
+            fitnesses_: numpy array of current population fitnesses_.
         """
-        best_idx = np.argmax(fitnesses)
-        best_fitness = fitnesses[best_idx]
-        if best_fitness > self.best_so_far:
-            self.best_so_far = best_fitness
+        best_idx = np.argmax(fitnesses_)
+        best_fitness_ = fitnesses_[best_idx]
+        if best_fitness_ > self.best_so_far:
+            self.best_so_far = best_fitness_
             self.best_so_far_id = (self.current_gen, best_idx)
 
     def selection(self):
@@ -261,8 +280,9 @@ class GA(object):
             if self.fitnesses[idx] > self.fitnesses[best]:
                 best = idx
         return best
-    
-    def one_point_crossover(self, parent1: np.ndarray, parent2: np.ndarray) :
+
+    @staticmethod
+    def one_point_crossover(parent1: np.ndarray, parent2: np.ndarray) :
         """
         One-point crossover: a random crossover point is chosen.
         The offspring inherits genes from parent1 up to that point and parent2 for the remainder (and vice versa).
@@ -273,7 +293,9 @@ class GA(object):
         offspring1 = np.concatenate((parent1[:point], parent2[point:]))
         offspring2 = np.concatenate((parent2[:point], parent1[point:]))
         return offspring1, offspring2
-    def two_point_crossover(self, parent1: np.ndarray, parent2: np.ndarray) :
+
+    @staticmethod
+    def two_point_crossover(parent1: np.ndarray, parent2: np.ndarray) :
         """
         Two-point crossover: Two random crossover points are selected.
         The offspring inherits the middle segment from one parent and the remaining segments from the other.
@@ -283,7 +305,7 @@ class GA(object):
         offspring1 = np.concatenate((parent1[:point1], parent2[point1:point2], parent1[point2:]))
         offspring2 = np.concatenate((parent2[:point1], parent1[point1:point2], parent2[point2:]))
         return offspring1, offspring2
-    
+
     def crossover(self, parent1: np.ndarray, parent2: np.ndarray) :
         """
         Select a crossover operator at random among available strategies.
@@ -404,9 +426,9 @@ class GA(object):
                 child1 = np.where(mask, p1, p2)
                 child2 = np.where(mask, p2, p1)
                 # continuous: arithmetic blend
-                α = np.random.rand()
-                child1_params = α * c1 + (1 - α) * c2
-                child2_params = (1 - α) * c1 + α * c2
+                alpha = np.random.rand()
+                child1_params = alpha * c1 + (1 - alpha) * c2
+                child2_params = (1 - alpha) * c1 + alpha * c2
             else:
                 child1, child2 = p1.copy(), p2.copy()
                 child1_params, child2_params = c1, c2
@@ -580,7 +602,8 @@ if __name__ == "__main__":
             data_file=config.files_spec['data_file'])
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
     ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
-                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20, fn_list=config.QNAS_spec['fn_list'])
+                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20,
+                     fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
     
     # Run the evolution
     population, fitnesses, best_fitness, best_id = ga.evolve()
