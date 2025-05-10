@@ -11,7 +11,7 @@ import os
 import time
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import autocast, GradScaler
 from util import create_info_file, init_log, load_yaml
 from cnn import metrics, model, fitness_utils, model_resnet
 from sklearn.metrics import confusion_matrix
@@ -36,7 +36,7 @@ class BaseTrainer:
         self.params = params
         self.device = torch.device(params['device'])
 
-        self.scaler = GradScaler(enabled=self.params.get('mixed_precision', False))
+        self.scaler = GradScaler(self.device.type, enabled=self.params.get('mixed_precision', False))
         self.best_accuracy = 0.0
         self.best_validation_loss = float('inf')
         self.best_epoch = 0
@@ -70,7 +70,7 @@ class BaseTrainer:
             labels = labels.squeeze().long()
         
         # Run forward pass with mixed precision if enabled
-        with autocast(dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
+        with autocast(self.device.type, dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
         
