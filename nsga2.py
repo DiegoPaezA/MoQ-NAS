@@ -17,19 +17,15 @@ class NSGA2(GA):
         Evaluate all individuals and store a (pop_size x 3) fitness array:
         [accuracy, num_params, inference_time]
         """
-        # Decode networks
-        decoded_nets = self.decode_pop(None, self.population)
-        # Evaluate them
-        raw_fits = self.eval_func(None, decoded_nets, generation=self.current_gen)
-        # Convert list of tuples to numpy array
+        decoded_nets, decoded_params = self.decode_pop()
+        raw_fits = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
         self.fitnesses = np.array(raw_fits, dtype=float)
         return self.fitnesses
 
     @staticmethod
     def dominates(a, b):
-        """Return True if a dominates b (minimize all objectives except accuracy)."""
-        # We want to maximize accuracy but minimize params and time.
-        # Transform accuracy into a minimizable objective: obj0 = -accuracy
+        """Return True if a dominates b (maximize accuracy, minimize params/time)."""
+        # Convert to minimization objectives: (-accuracy, params, time)
         obj_a = np.array([-a[0], a[1], a[2]])
         obj_b = np.array([-b[0], b[1], b[2]])
         return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
@@ -39,7 +35,6 @@ class NSGA2(GA):
         S = [set() for _ in range(N)]
         n = np.zeros(N, dtype=int)
         fronts = [[]]
-
         for p in range(N):
             for q in range(N):
                 if self.dominates(fits[p], fits[q]):
@@ -48,7 +43,6 @@ class NSGA2(GA):
                     n[p] += 1
             if n[p] == 0:
                 fronts[0].append(p)
-
         i = 0
         while fronts[i]:
             next_front = []
@@ -62,17 +56,28 @@ class NSGA2(GA):
         return fronts[:-1]
 
     def crowding_distance(self, fits, front):
-        m = fits.shape[1]
-        dist = np.zeros(len(front))
-        for obj in range(m):
+        """
+        Compute crowding distance for a given Pareto front.
+        """
+        size = len(front)
+        dist = np.zeros(size)
+        if size <= 2:
+            # Both boundary points get infinite distance
+            return np.array([np.inf]*size)
+        # For each objective
+        for obj in range(fits.shape[1]):
             vals = fits[front, obj]
-            idx = np.argsort(vals)
-            dist[idx[0]] = dist[idx[-1]] = np.inf
-            fmin, fmax = vals[idx[0]], vals[idx[-1]]
+            sorted_idx = np.argsort(vals)
+            dist[sorted_idx[0]] = np.inf
+            dist[sorted_idx[-1]] = np.inf
+            fmin, fmax = vals[sorted_idx[0]], vals[sorted_idx[-1]]
             if fmax == fmin:
                 continue
-            for i in idx[1:-1]:
-                dist[i] += (vals[i+1] - vals[i-1]) / (fmax - fmin)
+            for k in range(1, size-1):
+                i = sorted_idx[k]
+                prev_i = sorted_idx[k-1]
+                next_i = sorted_idx[k+1]
+                dist[i] += (vals[next_i] - vals[prev_i]) / (fmax - fmin)
         return dist
 
     def environmental_selection(self, pop, fits):
@@ -83,10 +88,10 @@ class NSGA2(GA):
                 new_pop.extend(pop[front])
                 new_fits.extend(fits[front])
             else:
-                dist = self.crowding_distance(fits, front)
-                idx = np.argsort(dist)[::-1]
+                distances = self.crowding_distance(fits, front)
+                idx_sorted = np.argsort(distances)[::-1]
                 slots = self.population_size - len(new_pop)
-                chosen = [front[i] for i in idx[:slots]]
+                chosen = [front[i] for i in idx_sorted[:slots]]
                 new_pop.extend(pop[chosen])
                 new_fits.extend(fits[chosen])
                 break
@@ -94,16 +99,17 @@ class NSGA2(GA):
 
     def tournament_select(self, pop, fits, rank, crowd):
         i, j = np.random.choice(len(pop), 2, replace=False)
-        # compare rank first
-        if rank[i] < rank[j]: return pop[i]
-        if rank[j] < rank[i]: return pop[j]
-        # same rank -> crowding distance
-        if crowd[i] > crowd[j]: return pop[i]
-        return pop[j]
+        # Compare Pareto rank
+        if rank[i] < rank[j]:
+            return pop[i]
+        if rank[j] < rank[i]:
+            return pop[j]
+        # Same rank -> crowding distance
+        return pop[i] if crowd[i] > crowd[j] else pop[j]
 
     def generate_offspring(self):
         new_pop = []
-        # First, calculate rank & crowd for current pop
+        # Compute rank and crowding for current population
         fronts = self.fast_nondominated_sort(self.fitnesses)
         rank = np.empty(len(self.population), dtype=int)
         for r, front in enumerate(fronts):
@@ -114,7 +120,7 @@ class NSGA2(GA):
             cd = self.crowding_distance(self.fitnesses, front)
             for i, idx in enumerate(front):
                 crowd[idx] = cd[i]
-
+        # Generate offspring
         while len(new_pop) < self.population_size:
             p1 = self.tournament_select(self.population, self.fitnesses, rank, crowd)
             p2 = self.tournament_select(self.population, self.fitnesses, rank, crowd)
@@ -129,26 +135,14 @@ class NSGA2(GA):
     def evolve(self):
         start_time = time.time()
         while self.current_gen < self.num_generations:
-            # Evaluate current pop -> self.fitnesses (pop_size x 3)
             fits_old = self.evaluate_population()
             pop_old = self.population.copy()
-
-            # Create offspring
             self.generate_offspring()
             fits_new = self.evaluate_population()
-
-            # Combine parents + offspring
             combined_pop = np.vstack([pop_old, self.population])
             combined_fits = np.vstack([fits_old, fits_new])
-            # Environmental selection
-            self.population, self.fitnesses = self.environmental_selection(
-                combined_pop, combined_fits
-            )
-
-            # Usual logging/backups
+            self.population, self.fitnesses = self.environmental_selection(combined_pop, combined_fits)
             self.go_next_gen()
-
             if self.check_early_stopping():
                 break
-
         return self.population, self.fitnesses
