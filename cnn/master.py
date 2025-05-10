@@ -248,7 +248,7 @@ def retrain(params: Dict[str, Any],
             net_list: List[str],
             train_loader: torch.utils.data.DataLoader, 
             val_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader) -> dict[str, Any] | None:
+            test_loader: torch.utils.data.DataLoader) -> dict[str, Any]:
     """
     Retrain a model using the best architecture obtained during evolution.
     This method assumes that the evolved parameters (or the best model checkpoint)
