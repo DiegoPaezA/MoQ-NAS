@@ -51,6 +51,12 @@ class QNAS(object):
         self.save_data_freq = np.inf
         self.total_eval = 0
         self.early_stopping_counter = 0
+        self.last_best_so_far = 0.0
+        self.en_pop_crossover = None
+        self.pop_crossover_rate = None
+        self.crossover_frequency = None
+        self.patience = None
+        self.early_stopping = None
 
         self.qpop_params = None
         self.qpop_net = None
@@ -484,7 +490,13 @@ class QNAS(object):
         by at least 0.005 (0.5%) for `patience` generations, the evolution stops.
         """
         if self.current_gen > 1:
-            improvement = (self.best_so_far - self.last_best_so_far) / self.last_best_so_far
+            if self.last_best_so_far != 0:
+                improvement = (self.best_so_far - self.last_best_so_far) / self.last_best_so_far
+            else:
+                # define what makes sense:
+                #   - if best_so_far > 0 maybe +inf?
+                #   - or simply 0 if you want “no improvement”
+                improvement = 0.0
             if improvement > 0.005:
                 self.early_stopping_counter = 0
             else:
