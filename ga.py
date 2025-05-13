@@ -1,5 +1,6 @@
 import os
 import time
+import shutil
 import datetime
 import numpy as np
 import evaluation
@@ -139,6 +140,78 @@ class GA(object):
         self.cont_mut_sigma = 0.05
         # self.logger.info("Initial population created with size: %d", population_size)
         # self.logger.info("Population: %s", str(self.population))
+    
+    def _prune_and_archive(self, generation, keep_ids):
+        """
+        Moves temp folders from results/gen_<generation>/<id>
+        into experiment_path/archive/, deletes any archived folder
+        not in keep_ids, updates best_so_far symlink, and finally
+        deletes the temp results/gen_<generation> dir.
+        
+        keep_ids: list of string IDs like ['3_5', '3_12'].
+        """
+        base = self.experiment_path
+        results_dir = os.path.join(base, 'results', f'gen_{generation}')
+        archive_dir = os.path.join(base, 'archive')
+        os.makedirs(archive_dir, exist_ok=True)
+
+        # 0) If the entire results_dir is already gone, nothing to prune
+        if not os.path.isdir(results_dir):
+            self.logger.warning(f"No temp folder to prune at {results_dir}")
+        else:
+            # 1) Move each keep_id folder out of results_dir → archive_dir
+            for kid in keep_ids:
+                src = os.path.join(results_dir, kid)
+                dst = os.path.join(archive_dir, kid)
+                if os.path.isdir(src):
+                    try:
+                        shutil.move(src, dst)
+                        self.logger.debug(f"Archived {src} → {dst}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to move {src} → {dst}: {e}")
+                else:
+                    self.logger.warning(f"Expected folder {src} not found — skipping")
+
+            # 2) Remove any archive subfolder *not* in keep_ids
+            for folder in os.listdir(archive_dir):
+                if folder not in keep_ids:
+                    path = os.path.join(archive_dir, folder)
+                    if os.path.isdir(path):
+                        try:
+                            shutil.rmtree(path)
+                            self.logger.debug(f"Pruned old archive folder {path}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to remove {path}: {e}")
+
+            # 3) Finally delete the temp results_dir
+            try:
+                shutil.rmtree(results_dir)
+                self.logger.debug(f"Removed temp results directory {results_dir}")
+            except Exception as e:
+                self.logger.warning(f"Could not remove {results_dir}: {e}")
+
+        # 4) Update best_so_far symlink to point at the *first* keep_id
+        if not keep_ids:
+            self.logger.error("No keep_ids given to _prune_and_archive(); best_so_far not updated.")
+            return
+
+        best = keep_ids[0]
+        target = os.path.join(archive_dir, best)
+        linkpath = os.path.join(base, 'best_so_far')
+
+        # Remove old symlink/file if present
+        try:
+            if os.path.islink(linkpath) or os.path.exists(linkpath):
+                os.unlink(linkpath)
+        except Exception as e:
+            self.logger.warning(f"Could not remove old best_so_far link at {linkpath}: {e}")
+
+        # Create new symlink
+        try:
+            os.symlink(target, linkpath)
+            self.logger.info(f"Updated best_so_far → {target}")
+        except Exception as e:
+            self.logger.error(f"Failed to create best_so_far symlink at {linkpath} → {target}: {e}")
         
     def decode_net(self, chromosome):
         """
@@ -230,7 +303,8 @@ class GA(object):
 
         # 2) Train all scheduled individuals in one batch
         if indices_to_evaluate:
-            new_vals = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            raw_vals = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            new_vals = raw_vals[:,0]
             for i, idx in enumerate(indices_to_evaluate):
                 key = tuple(self.population[idx].tolist())
                 raw = new_vals[i]
@@ -516,8 +590,12 @@ class GA(object):
         """
         self.save_data()
         backup_cache(self.evaluated, file_path=self.experiment_path)
-        delete_old_dirs(self.experiment_path, keep_best=True,
-                        best_id=f'{self.best_so_far_id[0]}_{self.best_so_far_id[1]}')
+        best_id_gen = self.best_so_far_id[0]
+        best_id_idx = self.best_so_far_id[1]
+        best_id = f"{best_id_gen}_{best_id_idx}"
+        self._prune_and_archive(self.current_gen, keep_ids=[best_id])
+        # delete_old_dirs(self.experiment_path, keep_best=True,
+        #                 best_id=f'{self.best_so_far_id[0]}_{self.best_so_far_id[1]}')
         self.current_gen += 1
 
     def evolve(self):
