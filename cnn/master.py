@@ -75,13 +75,17 @@ def setup_additional_params(params, id_num=None):
         Dict[str, Any]: Updated configuration dictionary with additional keys (e.g. 'model_path',
                         'generation', 'individual').
     """
-    if id_num is not None:
-        model_path = os.path.join(params['experiment_path'], id_num)
-        if not os.path.exists(model_path):
-            os.makedirs(model_path)
-        params['model_path'] = model_path
-        params['generation'] = id_num.split('_')[0]
-        params['individual'] = id_num.split('_')[1]
+    generation = id_num.split('_')[0]
+    individual = id_num.split('_')[1]
+    
+    temp_root = os.path.join(params['experiment_path'], 'results', f'gen_{generation}')
+    os.makedirs(temp_root, exist_ok=True)
+    
+    model_path = os.path.join(temp_root, id_num)
+    os.makedirs(model_path, exist_ok=True)
+    params['model_path'] = model_path
+    params['generation'] = generation
+    params['individual'] = individual
     return params
 
 def create_model_and_trainer(params, train_loader, val_loader, test_loader):
