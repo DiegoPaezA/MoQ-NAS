@@ -3,6 +3,7 @@ import time
 import datetime
 import numpy as np
 from ga import GA
+from util import backup_cache
 
 class NSGA2(GA):
     """
@@ -131,18 +132,51 @@ class NSGA2(GA):
             new_pop.append(self.mutate(c1))
             new_pop.append(self.mutate(c2))
         self.population = np.array(new_pop[:self.population_size])
+        
+    def go_next_gen(self):
+        """
+        Overrides GA.go_next_gen to archive *all* Pareto‐optimal individuals
+        instead of just a single best.
+        """
+        # 1) save metrics & cache
+        self.save_data()
+        backup_cache(self.evaluated, file_path=self.experiment_path)
+
+        # 2) compute current Pareto front
+        fronts = self.fast_nondominated_sort(self.fitnesses)
+        pareto = fronts[0]
+        # build the keep_ids in the same "gen_idx" format
+        keep_ids = [f"{self.current_gen}_{idx}" for idx in pareto]
+
+        # 3) prune/archive exactly those front members
+        self._prune_and_archive(self.current_gen, keep_ids=keep_ids)
+
+        # 4) advance generation counter
+        self.current_gen += 1
 
     def evolve(self):
         start_time = time.time()
         while self.current_gen < self.num_generations:
+            # Evaluate parents
             fits_old = self.evaluate_population()
-            pop_old = self.population.copy()
+            pop_old  = self.population.copy()
+            # Create offspring & evaluate them
             self.generate_offspring()
             fits_new = self.evaluate_population()
-            combined_pop = np.vstack([pop_old, self.population])
+            # Combine & select
+            combined_pop  = np.vstack([pop_old, self.population])
             combined_fits = np.vstack([fits_old, fits_new])
-            self.population, self.fitnesses = self.environmental_selection(combined_pop, combined_fits)
+            self.population, self.fitnesses = self.environmental_selection(
+                combined_pop, combined_fits
+            )
+            # Archive Pareto front, advance
             self.go_next_gen()
+
             if self.check_early_stopping():
                 break
+        total_time = time.time() - start_time
+        hours, rem = divmod(total_time, 3600)
+        minutes, _ = divmod(rem, 60)
+        self.logger.info(f"Total evolution time: {hours} hours and {minutes} minutes")
+
         return self.population, self.fitnesses
