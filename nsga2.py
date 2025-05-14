@@ -3,7 +3,7 @@ import time
 import datetime
 import numpy as np
 from ga import GA
-from util import backup_cache
+from util import backup_cache, delete_old_dirs_v2
 
 class NSGA2(GA):
     """
@@ -149,7 +149,7 @@ class NSGA2(GA):
         keep_ids = [f"{self.current_gen}_{idx}" for idx in pareto]
 
         # 3) prune/archive exactly those front members
-        self._prune_and_archive(self.current_gen, keep_ids=keep_ids)
+        delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=keep_ids)
 
         # 4) advance generation counter
         self.current_gen += 1
