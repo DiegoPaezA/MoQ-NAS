@@ -1,6 +1,4 @@
-import os
 import time
-import datetime
 import numpy as np
 from ga import GA
 from util import backup_cache, delete_old_dirs_v2
@@ -32,6 +30,16 @@ class NSGA2(GA):
         return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
 
     def fast_nondominated_sort(self, fits):
+        """
+        Perform fast nondominated sorting on the population.
+        Returns a list of fronts, where each front is a list of indices.
+        """
+        # Initialize variables
+        # fits: (N x 3) array of fitness values
+        # N: number of individuals
+        # S: list of sets, where S[i] contains the indices of individuals dominated by i
+        # n: number of individuals that dominate i
+        # fronts: list of fronts, where each front is a list of indices
         N = len(fits)
         S = [set() for _ in range(N)]
         n = np.zeros(N, dtype=int)
@@ -177,6 +185,6 @@ class NSGA2(GA):
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
         minutes, _ = divmod(rem, 60)
-        self.logger.info(f"Total evolution time: {hours} hours and {minutes} minutes")
+        self.logger.info("Total evolution time: %s hours and %s minutes", hours, minutes)
 
         return self.population, self.fitnesses
