@@ -124,6 +124,12 @@ if __name__ == '__main__':
                         help='Keep the best individual into the next generation.')
     parser.add_argument('--patience', type=int, default=60,
                         help='Generations with no improvement before early stopping.')
+    
+    # MO - NSGA2 parameters
+    parser.add_argument('--num_objectives', type=int, default=3,
+                        help='Number of objectives to optimize (e.g. accuracy, params, time).')
+    parser.add_argument('--multi_objective', action='store_true', default=False,
+                        help='Enable multi-objective optimization (NSGA2).')
 
     arguments = parser.parse_args()
 
