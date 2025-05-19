@@ -1,7 +1,6 @@
 import argparse
 import os
 
-import ga
 import nsga2
 import qnas_config as cfg
 import evaluation
