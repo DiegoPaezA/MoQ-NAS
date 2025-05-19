@@ -81,7 +81,7 @@ def main():
         "": {}
     }
     nsga.initialize_ga(
-        population_size=10,
+        population_size=20,
         num_generations=10,
         max_num_nodes=8,
         fn_list=fn_list,
