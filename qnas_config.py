@@ -19,51 +19,6 @@ from util import load_yaml, load_pkl, natural_key
 
 class ConfigParameters(object):
     """Handles loading and validation of Q-NAS and training configurations."""
-
-    VARS_DICT = {
-        'QNAS': [
-            ('crossover_rate', float),
-            ('max_generations', int),
-            ('max_num_nodes', int),
-            ('num_quantum_ind', int),
-            ('penalize_number', int),
-            ('repetition', int),
-            ('replace_method', str),
-            ('update_quantum_rate', float),
-            ('update_quantum_gen', int),
-            ('save_data_freq', int),
-            ('params_ranges', dict),
-            ('patience', int),
-            ('crossover_frequency', int),
-            ('pop_crossover_rate', float),
-            ('pop_crossover_method', str),
-            ('function_dict', dict),
-        ],
-        'train': [
-            ('batch_size', int),
-            ('eval_batch_size', int),
-            ('max_epochs', int),
-            ('epochs_to_eval', int),
-            ('optimizer', str),
-            ('device', str),
-            ('dataset', str),
-            ('mixed_precision', bool),
-            ('fitness_metric', str),
-            ('mo_metric_base', str),
-            ('data_augmentation', bool),
-            ('subtract_mean', bool),
-            ('limit_data', bool),
-            ('limit_data_value', int),
-            ('backbone_name', str),
-            ('network_config', str),
-            ('save_checkpoints_epochs', int),
-            ('save_summary_epochs', float),
-            ('multi_objective', bool),
-            ('num_objectives', int),
-            ('threads', int),
-        ]
-    }
-
     def __init__(self, args, phase):
         """
         Initialize ConfigParameters.
@@ -97,7 +52,50 @@ class ConfigParameters(object):
 
     def _check_vars(self, config_file):
         """ Validate presence and types of all parameters."""
-        for section, items in ConfigParameters.VARS_DICT.items():
+        vars_dict = {
+            'QNAS': [
+                ('crossover_rate', float),
+                ('max_generations', int),
+                ('max_num_nodes', int),
+                ('num_quantum_ind', int),
+                ('penalize_number', int),
+                ('repetition', int),
+                ('replace_method', str),
+                ('update_quantum_rate', float),
+                ('update_quantum_gen', int),
+                ('save_data_freq', int),
+                ('params_ranges', dict),
+                ('patience', int),
+                ('crossover_frequency', int),
+                ('pop_crossover_rate', float),
+                ('pop_crossover_method', str),
+                ('function_dict', dict),
+            ],
+            'train': [
+                ('batch_size', int),
+                ('eval_batch_size', int),
+                ('max_epochs', int),
+                ('epochs_to_eval', int),
+                ('optimizer', str),
+                ('device', str),
+                ('dataset', str),
+                ('mixed_precision', bool),
+                ('fitness_metric', str),
+                ('mo_metric_base', str),
+                ('data_augmentation', bool),
+                ('subtract_mean', bool),
+                ('limit_data', bool),
+                ('limit_data_value', int),
+                ('backbone_name', str),
+                ('network_config', str),
+                ('save_checkpoints_epochs', int),
+                ('save_summary_epochs', float),
+                ('multi_objective', bool),
+                ('num_objectives', int),
+                ('threads', int),
+            ]
+        }
+        for section, items in vars_dict.items():
             for key, expected_type in items:
                 val = config_file.get(section, {}).get(key)
                 if val is None:
