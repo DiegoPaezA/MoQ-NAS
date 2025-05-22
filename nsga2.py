@@ -176,21 +176,27 @@ class NSGA2(GA):
         pop_size = self.population_size
         M = fits.shape[1]
         fronts = self.fast_nondominated_sort(fits)
+        # Preallocate result arrays
         new_pop = np.empty((pop_size, pop.shape[1]), dtype=pop.dtype)
         new_fits = np.empty((pop_size, M), dtype=float)
         count = 0
         for front in fronts:
-            if count + len(front) <= pop_size:
-                new_pop[count:count+len(front)] = pop[front]
-                new_fits[count:count+len(front)] = fits[front]
-                count += len(front)
+            front_size = len(front)
+            # If entire front fits
+            if count + front_size <= pop_size:
+                new_pop[count:count+front_size] = pop[front]
+                new_fits[count:count+front_size] = fits[front]
+                count += front_size
             else:
                 rem = pop_size - count
-                cd = self.crowding_distance(fits, front)
-                sel = np.argsort(cd)[-rem:]
-                chosen = [front[i] for i in sel]
-                new_pop[count:] = pop[chosen]
-                new_fits[count:] = fits[chosen]
+                if rem > 0:
+                    # Compute crowding distance and select top rem individuals
+                    cd = self.crowding_distance(fits, front)
+                    sel_indices = np.argsort(cd)[-rem:]
+                    chosen = [front[i] for i in sel_indices]
+                    new_pop[count:count+rem] = pop[chosen]
+                    new_fits[count:count+rem] = fits[chosen]
+                # Either way, stop filling
                 break
         return new_pop, new_fits
     
