@@ -10,12 +10,12 @@ class NSGA2(GA):
     NSGA-II multi-objective genetic algorithm implementation.
 
     Extends a base GA to handle an arbitrary number of objectives (>=2). Implements:
-      - Evaluation caching to avoid redundant fitness computations.
-      - Fast non-dominated sorting with dynamic number of objectives.
-      - Vectorized crowding distance calculation for diversity preservation.
-      - Preallocated arrays for offspring generation and environmental selection.
-      - Global Pareto front archive with crowding-based filtering.
-      - History recording of all Pareto fronts per generation.
+        - Evaluation caching to avoid redundant fitness computations.
+        - Fast non-dominated sorting with dynamic number of objectives.
+        - Vectorized crowding distance calculation for diversity preservation.
+        - Preallocated arrays for offspring generation and environmental selection.
+        - Global Pareto front archive with crowding-based filtering.
+        - History recording of all Pareto fronts per generation.
     """
     def __init__(self, eval_func, experiment_path, log_file, log_level, data_file):
         """
@@ -213,12 +213,6 @@ class NSGA2(GA):
         Returns:
             np.ndarray: selected individual.
         """
-        i, j = np.random.choice(len(pop), 2, replace=False)
-        if rank[i] < rank[j]:
-            return pop[i]
-        if rank[j] < rank[i]:
-            return pop[j]
-        return pop[i] if crowd[i] > crowd[j] else pop[j]
         i, j = np.random.choice(len(pop), 2, replace=False)
         if rank[i] < rank[j]: return pop[i]
         if rank[j] < rank[i]: return pop[j]
