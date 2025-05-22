@@ -88,7 +88,7 @@ def main():
         crossover_rate=0.8,
         mutation_rate=0.2,
         elitism=True,
-        patience=3,
+        patience=20,
         params_ranges=params_range,
     )
 
