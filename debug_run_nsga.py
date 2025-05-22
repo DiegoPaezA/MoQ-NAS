@@ -9,7 +9,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # — experiment parameters
 params = {
     # Core run_evolution args:
-    "experiment_path":      "experiment_cifar10_nsga/exp1_repeat_1",
+    "experiment_path":      "experiment_cifar10_nsga/exp1_repeat_5",
     "data_path":            "cifar10_data",
     "dataset":              "cifar10",
     "config_file":          "config_files_cifar/config0.txt",
@@ -26,8 +26,8 @@ params = {
     "network_config":          "default",
 
     # GA-specific args:
-    "population_size":      10,                # e.g. 50 individuals
-    "num_generations":      50,               # e.g. 100 generations
+    "population_size":      20,                # e.g. 50 individuals
+    "num_generations":      25,               # e.g. 100 generations
     "max_num_nodes":        20,                # chromosome length
     "crossover_rate":       0.5,
     "mutation_rate":        0.2,
@@ -40,5 +40,4 @@ params = {
 }
 
 if __name__ == "__main__":
-    args = SimpleNamespace(**params)
-    main(**vars(args))
+    main(**params)
