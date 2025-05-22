@@ -330,7 +330,7 @@ class NSGA2(GA):
         Returns:
             tuple: (pareto_global_population, pareto_global_fitnesses)
         """
-        start = time.time()
+        start_time = time.time()
         fits_old = self.evaluate_population()
         pop_old = self.population.copy()
         self.best_so_far = np.max(fits_old[:, 0])
@@ -347,6 +347,8 @@ class NSGA2(GA):
             pop_old, fits_old = self.population.copy(), self.fitnesses.copy()
             if self.check_early_stopping():
                 break
-        elapsed = time.time() - start
-        self.logger.info("Total evolution time: %.2f seconds", elapsed)
+        total_time = time.time() - start_time
+        hours, rem = divmod(total_time, 3600)
+        minutes, _ = divmod(rem, 60)
+        self.logger.info(f"Total evolution time: {hours} hours and {minutes} minutes")
         return self.pareto_global_population, self.pareto_global_fitnesses
