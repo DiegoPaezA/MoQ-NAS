@@ -315,6 +315,10 @@ class NSGA2(GA):
         )
         if self.current_gen == 1:
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
+            
+        self.logger.info(f"Generation {self.current_gen} Pareto front size: {len(self.pareto_global_population)}")
+        self.logger.info(f"Generation {self.current_gen} Pareto front fitnesses: {self.pareto_global_fitnesses}")
+
         self.current_gen += 1
 
     def evolve(self):
@@ -330,6 +334,7 @@ class NSGA2(GA):
         Returns:
             tuple: (pareto_global_population, pareto_global_fitnesses)
         """
+        self.logger.info("Starting NSGA-II evolution")
         start_time = time.time()
         fits_old = self.evaluate_population()
         pop_old = self.population.copy()
