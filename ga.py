@@ -10,7 +10,6 @@ from pickle import dump, load, HIGHEST_PROTOCOL
 from util import delete_old_dirs_v2, init_log, check_files, download_dataset, backup_cache, load_cache
 
 #TODO: add docstrings to all functions
-#TODO: Create logger file
 #TODO: use the utils functions for handling the folder structure
 class GA(object):
     """
@@ -521,7 +520,8 @@ class GA(object):
         best_id_gen = self.best_so_far_id[0]
         best_id_idx = self.best_so_far_id[1]
         best_id = f"{best_id_gen}_{best_id_idx}"
-        delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=[best_id])
+        delete_old_dirs_v2(self.experiment_path, 
+                            self.current_gen, keep_ids=[best_id])
         self.current_gen += 1
 
     def evolve(self):
@@ -607,7 +607,7 @@ if __name__ == "__main__":
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
     ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
                     crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20,
-                     fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
+                    fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
     
     # Run the evolution
     population, fitnesses, best_fitness, best_id = ga.evolve()
