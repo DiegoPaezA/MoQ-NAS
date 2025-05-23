@@ -12,7 +12,7 @@ import numpy as np
 import time
 from collections import defaultdict
 from population import QPopulationNetwork, QPopulationParams
-from util import delete_old_dirs, init_log, load_pkl, calculate_time, backup_cache, load_cache
+from util import delete_old_dirs_v2, init_log, load_pkl, calculate_time, backup_cache, load_cache
 
 
 class QNAS(object):
@@ -350,7 +350,7 @@ class QNAS(object):
         # 2) Actually train the scheduled ones
         if to_eval_idx:
             raw_vals = self.eval_func(to_eval_dp, to_eval_net,
-                                    generation=self.current_gen)
+                                    generation=self.current_gen)[:,0]
             for i, idx in enumerate(to_eval_idx):
                 key       = to_eval_keys[i]
                 raw_fitness = raw_vals[i]
@@ -530,9 +530,11 @@ class QNAS(object):
         self.log_data()
         #self.save_train_data()
 
-        # Remove Tensorflow models files
-        delete_old_dirs(self.experiment_path, keep_best=True,
-                        best_id=f'{self.best_so_far_id[0]}_{self.best_so_far_id[1]}')
+        best_id_gen = self.best_so_far_id[0]
+        best_id_idx = self.best_so_far_id[1]
+        best_id = f"{best_id_gen}_{best_id_idx}"
+        delete_old_dirs_v2(self.experiment_path, 
+                            self.current_gen, keep_ids=[best_id])
         self.current_gen += 1
 
     def evolve(self):
