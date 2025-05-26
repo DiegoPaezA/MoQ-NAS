@@ -71,6 +71,17 @@ class EvalPopulation(object):
         if 'objectives' not in self.train_params:
             raise KeyError("train_params must contain 'objectives' for evaluation.")
         
+        # Asegurar que la métrica principal esté en objectives[0]
+        main_metric = self.train_params.get('fitness_metric')
+        objectives = self.train_params.get('objectives', [])
+        if isinstance(objectives, list) and objectives:
+            # Reemplaza la primera posición
+            objectives[0] = main_metric
+            self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
+        else:
+            # Inicia objectives si no existe o está vacío
+            self.train_params['objectives'] = [main_metric]
+        
         #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
         self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
         
