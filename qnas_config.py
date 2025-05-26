@@ -124,6 +124,8 @@ class ConfigParameters(object):
                                 ('network_config', str),
                                 ('save_checkpoints_epochs', int),
                                 ('save_summary_epochs', float),
+                                ('multi_objective', bool),
+                                ('objectives', list),
                                 ('threads', int)]}
 
         for config in vars_dict.keys():
@@ -164,7 +166,7 @@ class ConfigParameters(object):
             'fitness_metric', 'optimizer', 'data_augmentation',
             'network_config', 'backbone_name', 'save_checkpoints_epochs',
             'dataset', 'data_path', 'limit_data_value',
-            'num_objectives', 'multi_objective'
+            'multi_objective', 'objectives'
         ]
         for key in train_override_keys:
             val = self.args.get(key, None)
