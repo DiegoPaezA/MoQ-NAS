@@ -32,107 +32,115 @@ class ConfigParameters(object):
         self.QNAS_spec = {}
         self.train_spec = {}
         self.files_spec = {}
-
-        # Load and validate config file
-        config_file = load_yaml(self.args['config_file'])
-        self._check_vars(config_file)
-
-        # Initialize specs with defaults
-        self.train_spec = dict(config_file['train'])
-        self.QNAS_spec  = dict(config_file['QNAS'])
-        self.files_spec['config_file'] = self.args['config_file']
-
-        # Additional QNAS-specific validation
-        self._check_params_ranges(config_file['QNAS']['params_ranges'])
-        self._check_fn_dict(config_file['QNAS']['function_dict'])
-
-        # Ensure epochs_to_eval < max_epochs
-        if self.train_spec['epochs_to_eval'] >= self.train_spec['max_epochs']:
-            raise ValueError('Invalid epochs_to_eval! It should be < max_epochs.')
+        self.fn_dict = {}
+        self.previous_params_file = None
+        self.data_info = None
+        self.evolved_params = None
 
     def _check_vars(self, config_file):
-        """ Validate presence and types of all parameters."""
-        vars_dict = {
-            'QNAS': [
-                ('crossover_rate', float),
-                ('max_generations', int),
-                ('max_num_nodes', int),
-                ('num_quantum_ind', int),
-                ('penalize_number', int),
-                ('repetition', int),
-                ('replace_method', str),
-                ('update_quantum_rate', float),
-                ('update_quantum_gen', int),
-                ('save_data_freq', int),
-                ('params_ranges', dict),
-                ('patience', int),
-                ('crossover_frequency', int),
-                ('pop_crossover_rate', float),
-                ('pop_crossover_method', str),
-                ('function_dict', dict),
-            ],
-            'train': [
-                ('batch_size', int),
-                ('eval_batch_size', int),
-                ('max_epochs', int),
-                ('epochs_to_eval', int),
-                ('optimizer', str),
-                ('device', str),
-                ('dataset', str),
-                ('mixed_precision', bool),
-                ('fitness_metric', str),
-                ('mo_metric_base', str),
-                ('data_augmentation', bool),
-                ('subtract_mean', bool),
-                ('limit_data', bool),
-                ('limit_data_value', int),
-                ('backbone_name', str),
-                ('network_config', str),
-                ('save_checkpoints_epochs', int),
-                ('save_summary_epochs', float),
-                ('multi_objective', bool),
-                ('num_objectives', int),
-                ('threads', int),
-            ]
-        }
-        for section, items in vars_dict.items():
-            for key, expected_type in items:
-                val = config_file.get(section, {}).get(key)
-                if val is None:
-                    raise KeyError(f"Variable '{section}:{key}' not found in config {self.args['config_file']}")
-                if not isinstance(val, expected_type):
-                    raise TypeError(f"Variable '{section}:{key}' should be {expected_type}, got {type(val)}")
+        """  Check if all variables are in *config_file* and if their types are correct.
 
-    def _check_params_ranges(self, ranges):
-        """Validate numeric ranges for QNAS parameters."""
-        allowed = {
-            'decay': (1e-6, 1.0),
-            'learning_rate': (1e-6, 1.0),
-            'momentum': (0.0, 1.0),
-            'weight_decay': (1e-10, 1e-1),
-            'backbone_percentage': (0.1, 1.0),
-        }
-        for key, value in ranges.items():
-            low, high = allowed.get(key, (None, None))
-            if isinstance(value, list):
-                if value[0] < low or value[1] > high:
-                    raise ValueError(f'{key} value out of bound!')
-            elif isinstance(value, (float, int)):
-                if value < low or value > high:
-                    raise ValueError(f'{key} value out of bound!')
+        Args:
+            config_file: dict with parameters.
+        """
 
-    def _check_fn_dict(self, fn_dict):
-        """Validate function definitions against available CNN modules."""
-        available = [c[0] for c in inspect.getmembers(model, inspect.isclass)]
-        for name, definition in fn_dict.items():
-            func = definition.get('function')
-            if func not in available:
-                raise ValueError(f"{func} is not a valid function!")
-            for p in definition.get('params', {}).values():
-                if not isinstance(p, int) or p < 0:
-                    raise ValueError(f"{name} has invalid parameter: {definition['params']}")
-            prob = definition.get('prob')
-            _ = eval(prob) if isinstance(prob, str) else prob
+        def check_params_ranges():
+            """ Check if parameter ranges are inside the allowed limits. """
+
+            ranges = config_file['QNAS']['params_ranges']
+
+            allowed = {'decay': (1e-6, 1.0),
+                        'learning_rate': (1e-6, 1.0),
+                        'momentum': (0.0, 1.0),
+                        'weight_decay': (1e-10, 1e-1),
+                        'backbone_percentage': (0.1, 1.0),}
+
+            for key, value in ranges.items():
+                if type(value) is list:
+                    if value[0] < allowed[key][0] or value[1] > allowed[key][1]:
+                        raise ValueError(f'{key} value out of bound!')
+                elif type(value) is float:
+                    if value < allowed[key][0] or value > allowed[key][1]:
+                        raise ValueError(f'{key} value out of bound!')
+
+        def check_fn_dict():
+            """ Check if function list is compatible with existing functions. """
+
+            available_fn = [c[0] for c in inspect.getmembers(model, inspect.isclass)]
+
+            fn_dict = config_file['QNAS']['function_dict']
+            probs = []
+
+            for name, definition in fn_dict.items():
+                if definition['function'] not in available_fn:
+                    raise ValueError(f"{definition['function']} is not a valid function!")
+                for param in definition['params'].values():
+                    if type(param) is not int or param < 0:
+                        raise ValueError(f"{name} has an invalid parameter: "
+                                        f"{definition['params']}!")
+
+                if type(definition['prob']) == str:
+                    probs.append(eval(definition['prob']))
+                else:
+                    probs.append(definition['prob'])
+
+            if any(probs):
+                probs = np.sum(probs)
+                if probs > 1.0 or 1.0 - probs > 1e-8:
+                    raise ValueError("Function probabilities should sum 1.0! "
+                                    "Tolerance of numpy is 1e-8.")
+
+        vars_dict = {'QNAS': [('crossover_rate', float),
+                                ('max_generations', int),
+                                ('max_num_nodes', int),
+                                ('num_quantum_ind', int),
+                                ('penalize_number', int),
+                                ('repetition', int),
+                                ('replace_method', str),
+                                ('update_quantum_rate', float),
+                                ('update_quantum_gen', int),
+                                ('save_data_freq', int),
+                                ('params_ranges', dict),
+                                ('patience', int),
+                                ('crossover_frequency', int),
+                                ('pop_crossover_rate', float),
+                                ('pop_crossover_method', str),
+                                ('function_dict', dict)],
+                    'train': [('batch_size', int),
+                                ('eval_batch_size', int),
+                                ('max_epochs', int),
+                                ('epochs_to_eval', int),
+                                ('optimizer', str),
+                                ('device', str),
+                                ('dataset', str),
+                                ('mixed_precision', bool),
+                                ('fitness_metric', str),
+                                ('mo_metric_base', str),
+                                ('data_augmentation', bool),
+                                ('subtract_mean', bool),
+                                ('limit_data', bool),
+                                ('limit_data_value', int),
+                                ('backbone_name', str),
+                                ('network_config', str),
+                                ('save_checkpoints_epochs', int),
+                                ('save_summary_epochs', float),
+                                ('threads', int)]}
+
+        for config in vars_dict.keys():
+            for item in vars_dict[config]:
+                var = config_file[config].get(item[0])
+                if var is None:
+                    raise KeyError(f"Variable \"{config}:{item[0]}\" not found in "
+                                f"configuration file {self.args['config_file']}")
+                elif type(var) is not item[1]:
+                    raise TypeError(f"Variable {item[0]} should be of type {item[1]} but it "
+                                    f"is a {type(var)}")
+        check_params_ranges()
+        check_fn_dict()
+
+        if config_file['train']['epochs_to_eval'] >= config_file['train']['max_epochs']:
+            raise ValueError('Invalid epochs_to_eval! It should be < max_epochs.')
+
 
     def _get_evolution_params(self):
         """Get specific parameters for the evolution phase."""
@@ -348,10 +356,16 @@ class ConfigParameters(object):
 
         Note: This method assumes a specific folder and file structure for evolved data.
         """
-
-        experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
-        best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
-        best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+        
+        best_so_far_link = os.path.join(experiment_path, 'best_so_far')
+        
+        if os.path.islink(best_so_far_link):
+            best_result_folder = os.readlink(best_so_far_link)
+        else:
+            experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
+            best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
+            best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+            
         with open(os.path.join(best_result_folder, 'training_params.txt'), 'r') as file:
                 best_individual_info = yaml.safe_load(file)
         net_list = best_individual_info.get('net_list', [])
@@ -359,15 +373,15 @@ class ConfigParameters(object):
         individual = best_individual_info.get('individual', 0)
         backbone_name = best_individual_info.get('backbone_name', None)
         backbone_percentage = best_individual_info.get('backbone_percentage', 0)
-        
+            
         if generation == 0 and individual == 0: # only for old format
                 matches = re.search(r'(\d+)_(\d+)$', best_result_folder)
                 generation = int(matches.group(1))
                 individual = int(matches.group(2))
 
         self.evolved_params = {'params': None, 'net': net_list, 'generation': generation, 
-                               'individual': individual, 'backbone_name':backbone_name, 
-                               'backbone_percentage':backbone_percentage}
+                                'individual': individual, 'backbone_name':backbone_name, 
+                                'backbone_percentage':backbone_percentage}
 
     def override_train_params(self, new_params_dict):
         """ Override *self.train_spec* parameters with the ones in *new_params_dict*. Update
