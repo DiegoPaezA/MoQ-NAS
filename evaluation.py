@@ -4,13 +4,13 @@
     - Distribute and Evaluate the population using multiple processes.
 """
 
-import torch.multiprocessing as mp
-from typing import Dict, Any, List
-import numpy as np
-from util import init_log, setup_dataset_info
 import torch
-from cnn import input, master
 import time
+import numpy as np
+from cnn import input, master
+from typing import Dict, Any, List
+import torch.multiprocessing as mp
+from util import init_log, setup_dataset_info
 
 class EvalPopulation(object):
     """
@@ -68,6 +68,9 @@ class EvalPopulation(object):
         self.loader = input.GenericDataLoader(params=params)
         self.train_params = setup_dataset_info(params)
         
+        if 'objectives' not in self.train_params:
+            raise KeyError("train_params must contain 'objectives' for evaluation.")
+        
         #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
         self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
         
@@ -86,8 +89,9 @@ class EvalPopulation(object):
 
         Returns
         -------
-        np.ndarray
-            An array containing the evaluations for each model.
+        evaluations : dict
+            A dictionary containing the evaluations of the population, where each key is a candidate ID
+            and the value is a list of evaluation metrics { original_index: { 'metric1': val1, 'metric2': val2, … }, … }.
 
         Raises
         ------
@@ -96,75 +100,78 @@ class EvalPopulation(object):
         """
         pop_size = len(decoded_nets)
         multi_obj = self.train_params.get('multi_objective', False)
-        n_obj = 3 if multi_obj else 1
-        # allocate a pure float array, shape = (pop_size, n_obj)
-        evaluations = np.zeros((pop_size, n_obj), dtype=float)
-        
-        #variables = [mp.Value('f', 0.0000) for _ in range(pop_size)]
-        variables = [mp.Array('f', 3) for _ in range(pop_size)]
+        manager = mp.Manager()
+        result_queue: mp.Queue = manager.Queue()
         
         
         # Temporal solution to distribute the individuals in the threads
         selected_thread = 0
         individual_per_thread = []
-        for idx in range(len(variables)):
-            individual_per_thread.append((idx, selected_thread, decoded_nets[idx], decoded_params[idx], variables[idx]))
+        for idx in range(pop_size):
+            individual_per_thread.append((idx, selected_thread, decoded_nets[idx], decoded_params[idx]))
             selected_thread += 1
             if selected_thread >= self.train_params['threads']:
                 selected_thread = selected_thread % self.train_params['threads']
         
         processes = []
-        
         print("\n")
         self.logger.info(f"Starting the Generation {generation} with {pop_size} individuals")
         evol_time_start = time.perf_counter()
 
-        for idx in range(self.train_params['threads']):
-            individuals_selected_thread = list(filter(lambda x: x[1]==idx, individual_per_thread))
-            gpu_device = self.gpus[idx%len(self.gpus)]
-            process = mp.Process(target=self.run_individuals, args=(generation,
-                                                self.train_params,
-                                                self.fn_dict,
-                                                individuals_selected_thread,
-                                                gpu_device))
-            process.start()
-            processes.append(process)
+        # Create a process for each thread           
+        for thread_id in range(self.train_params['threads']):
+            batch_thread = [x for x in individual_per_thread if x[1] == thread_id]
+            gpu_device = self.gpus[thread_id % len(self.gpus)]
+            p = mp.Process(
+                target=self.run_individuals,
+                args=(generation, self.train_params, self.fn_dict, batch_thread, gpu_device, result_queue)
+            )
+            p.start()
+            processes.append(p)
 
         for p in processes:
             p.join()
                     
-        for idx, val in enumerate(variables):
-            acc, num_params, inference_time = val[:]
-            if n_obj == 1:
-                # single-objective → only accuracy
-                evaluations[idx, 0] = acc
-            else:
-                # multi-objective → fill all three slots
-                evaluations[idx, 0] = acc
-                evaluations[idx, 1] = num_params
-                evaluations[idx, 2] = inference_time
+        results: Dict[int, Dict[str, Any]] = {}
+        for _ in range(pop_size):
+            idx, res_dict = result_queue.get()
+            results[idx] = res_dict
             
-        evol_end = time.perf_counter()
-        time_elapsed_min = (evol_end-evol_time_start)/60
-        time_elapsed_sec = (evol_end-evol_time_start)%60
-        self.logger.info(f"Time elapsed for {pop_size} individuals: {time_elapsed_min:.0f}m {time_elapsed_sec:.0f}s")
-        return evaluations
+        evol_end_time = time.perf_counter()
+        mins, secs = divmod(evol_end_time - evol_time_start, 60)
+        self.logger.info(f"Time elapsed for {pop_size} individuals: {int(mins)}m {int(secs)}s")
+
+        return results
             
             
-    def run_individuals(self, generation, train_params, fn_dict, individuals_selected_thread, gpu_device):
+    def run_individuals(self, generation, train_params, fn_dict, individuals_thread, gpu_device, queue: mp.Queue):
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
-        for candidate_data in individuals_selected_thread:
-            original_index, selected_thread, decoded_net, decoded_params, return_val = candidate_data
-            candidate_id = decoded_params.get('candidate_id', str(original_index))
-            self.train_params['device'] = gpu_device
-            master.fitness(f"{generation}_{candidate_id}",
-                        {**train_params},
-                        fn_dict,
-                        decoded_net,
-                        decoded_params,
-                        train_loader,
-                        val_loader, 
-                        return_val)
-            self.logger.info(f"Calculated fitness of candidate {candidate_id} on thread {selected_thread} with "
-                            f"Best Metric: {round(return_val[0], 3)}, Params: {round(return_val[1], 2)}M, "
-                            f"Inference Time: {round(return_val[2], 3)} uS")
+        metric_names = train_params.get('objectives', [])
+        for original_idx, thread_id, decoded_net, decoded_params  in individuals_thread:
+            id_str = f"{generation}_{decoded_params.get('candidate_id', original_idx)}"
+            try:
+                results_dict = master.fitness(id_str,
+                            {**train_params, 'device': gpu_device},
+                            fn_dict,
+                            decoded_net,
+                            decoded_params,
+                            train_loader,
+                            val_loader)
+            except RuntimeError as e:
+                # Manejo específico de OOM u otros errores de runtime
+                self.logger.error(f"RuntimeError training model {id_str}: {e}")
+                results_dict = {k: 0.0 for k in metric_names}
+            except Exception as e:
+                # Cualquier otro error
+                self.logger.error(f"Error training model {id_str}: {e}")
+                results_dict = {k: 0.0 for k in metric_names}
+            
+            queue.put((original_idx, results_dict))
+
+            # Log the results for each candidate
+            if not results_dict:
+                self.logger.warning(f"Thread {thread_id} – candidate {original_idx}: No results returned.")
+                continue
+            else:
+                metrics_log = ", ".join(f"{k}={results_dict.get(k, None):.2f}" for k in metric_names)
+                self.logger.info(f"Thread {thread_id} – candidate {original_idx}: {metrics_log}")
