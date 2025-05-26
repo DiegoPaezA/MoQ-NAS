@@ -16,6 +16,7 @@ import torchvision.datasets
 from torchvision.transforms import ToTensor
 import medmnist
 from medmnist import INFO
+from typing import Dict
 
 import gc
 import torch
@@ -293,9 +294,20 @@ def check_files(exp_path):
         raise OSError('User must provide a valid \"--experiment_path\" to continue '
                     'evolution or to retrain a model.')
     experiment_folders = [f.name for f in os.scandir(exp_path) if f.is_dir()]
-    best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
-    best_result_folder = os.path.join(exp_path, best_result_folder[0])
-    # identify the index of the folder that begins with a number
+    # Keep only those starting with a digit
+    digit_folders = [name for name in experiment_folders if name and name[0].isdigit()]
+    if not digit_folders:
+        raise ValueError("No experiment folders starting with a digit found in: " + exp_path)
+    # Define key to sort by numeric parts
+    def numeric_key(s):
+        parts = s.split('_')
+        return tuple(int(p) for p in parts)
+
+    # Pick the smallest one numerically
+    best_name = min(digit_folders, key=numeric_key)
+    best_result_folder = os.path.join(exp_path, best_name)
+
+    # Now you can build the path to your params file
     file_path = os.path.join(best_result_folder, 'training_params.txt')
 
     if os.path.exists(file_path):
@@ -641,7 +653,7 @@ def backup_cache(data, file_path: str = None) -> None:
     with open(file_name, "wb") as f:
         dump(combined_data, f, protocol=HIGHEST_PROTOCOL)
 
-def load_cache(file_path: str) -> None:
+def load_cache(file_path: str) -> Dict:
     """
     Load a cache backup from file into self.evaluated.
 

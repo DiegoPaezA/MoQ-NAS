@@ -11,6 +11,20 @@ from util import delete_old_dirs, init_log, check_files, download_dataset, backu
 
 class GA(object):
     """
+    Genetic Algorithm class for optimizing neural network architectures.
+    It uses tournament selection, uniform crossover, and Gaussian mutation.
+    The class supports early stopping based on fitness improvement.
+
+    Attributes:
+        population: Current population of individuals (chromosomes).
+        current_population: Population of individuals in the current generation.
+        fitnesses: Fitness values for the current population.
+        best_so_far: Best fitness value found so far.
+        best_so_far_id: ID of the best individual so far.
+        current_gen: Current generation number.
+        total_eval: Total evaluations performed.
+        evaluated: Cache for previously evaluated individuals.
+        eval_history: History of evaluations for each individual.
     """
     def __init__(self, eval_func, experiment_path, log_file, log_level, data_file):
         """
@@ -25,6 +39,15 @@ class GA(object):
             data_file: Path to file for saving evolution data (pickle).
         """
         # GA parameters (to be set later via initialize_ga)
+        self.fn_list = None
+        self.params_ranges = None
+        self.cont_mut_sigma = None
+        self.last_best_so_far = None
+        self.fixed_params = None
+        self.cont_keys = None
+        self.cont_max = None
+        self.cont_min = None
+        self.pop_params = None
         self.population_size = None
         self.num_generations = None
         self.crossover_rate = None
@@ -50,13 +73,13 @@ class GA(object):
         # Initialize the cache for evaluated individuals.
         cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
         self.evaluated = load_cache(cache_file)
-        # this collects the raw fitnesses until we have 3 of them
+        # this collects the raw fitness's until we have 3 of them
         self.eval_history = defaultdict(list)
         # Create a logger using the provided utility function (or basicConfig)
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
     
 
-    def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list,
+    def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list, params_ranges,
                     crossover_rate, mutation_rate, elitism=False, patience=60):
         """
         Initialize GA parameters and create the initial random population.
@@ -70,6 +93,7 @@ class GA(object):
             fn_list: List of function names (e.g., layer types) to decode chromosomes.
             elitism: (bool) whether to keep the best individual in the next generation.
             patience: (int) number of generations with little/no improvement to trigger early stopping.
+            params_ranges: (dict) dictionary with min/max values for continuous parameters.
         """
         self.population_size = population_size
         self.num_generations = num_generations
@@ -78,9 +102,41 @@ class GA(object):
         self.elitism = elitism
         self.patience = patience
         self.fn_list = fn_list  # Store the list of function names
+        self.params_ranges  = params_ranges
 
         # # Initialize a population of individuals.
         self.population = np.random.randint(0, len(self.fn_list), size=(population_size, max_num_nodes))
+        
+
+        # 1) split out the continuous‐valued params vs fixed ones
+        self.cont_keys = [
+            k for k, v in params_ranges.items()
+            if isinstance(v, (list, tuple)) and len(v) == 2
+        ]
+        self.fixed_params = {
+            k: v for k, v in params_ranges.items()
+            if k not in self.cont_keys
+        }
+        # 2) build lower/upper arrays for the continuous dims
+        if self.cont_keys:
+            lowers = [params_ranges[k][0] for k in self.cont_keys]
+            uppers = [params_ranges[k][1] for k in self.cont_keys]
+            self.cont_min = np.array(lowers, dtype=float)
+            self.cont_max = np.array(uppers, dtype=float)
+        else:
+            # no continuous dims
+            self.cont_min = np.zeros((0,), dtype=float)
+            self.cont_max = np.zeros((0,), dtype=float)
+            
+        # continuous pop: population_size x num_params
+        num_params = len(self.cont_keys)
+        if num_params > 0:
+            self.pop_params = np.random.uniform(low=self.cont_min,high=self.cont_max,size=(population_size, num_params))
+        else:
+            self.pop_params = np.zeros((population_size, 0), dtype=float)
+
+        # scale for Gaussian mutation on cont. genes
+        self.cont_mut_sigma = 0.05
         # self.logger.info("Initial population created with size: %d", population_size)
         # self.logger.info("Population: %s", str(self.population))
         
@@ -102,26 +158,26 @@ class GA(object):
                 decoded[i] = self.fn_list[gene]
         return decoded
     
-    def decode_pop(self, pop_params, pop_net):
+    def decode_pop(self):
         """ Decode a population of parameters and networks.
-
-        Args:
-            pop_params: float numpy array with a classic population of hyperparameters.
-            pop_net: int numpy array with a classic population of networks.
 
         Returns:
             list of decoded params and list of decoded networks.
         """
 
-        num_individuals = pop_net.shape[0]
+        num_individuals = self.population.shape[0]
 
         decoded_params = [None] * num_individuals
         decoded_nets = [None] * num_individuals
-        backbone_percentage_array = np.random.uniform(0.0, 1.0, size=(len(decoded_nets), 1))
+        #backbone_percentage_array = np.random.uniform(0.0, 1.0, size=(len(decoded_nets), 1))
         for i in range(num_individuals):
-            #decoded_params[i] = self.qpop_params.chromosome.decode(pop_params[i])
-            decoded_params[i] = {'backbone_percentage': backbone_percentage_array[i, 0],'candidate_id': i}
-            decoded_nets[i] = self.decode_net(pop_net[i, :])
+            decoded_nets[i] = self.decode_net(self.population[i, :])
+            # build params dict:
+            p = dict(self.fixed_params)  # start from fixed
+            for j, key in enumerate(self.cont_keys):
+                p[key] = float(self.pop_params[i,j])
+            p['candidate_id'] = i
+            decoded_params[i] = p
 
         #return decoded_params, decoded_nets
         return decoded_nets, decoded_params
@@ -133,6 +189,7 @@ class GA(object):
         """
         idx = np.argsort(self.fitnesses)[::-1]
         self.population = self.population[idx]
+        self.pop_params = self.pop_params[idx]
         self.fitnesses = self.fitnesses[idx]
         
     def evaluate_population(self):
@@ -142,7 +199,7 @@ class GA(object):
         Returns:
             fitnesses: a NumPy array with the fitness values for the population.
         """
-        decoded_net, decoded_params = self.decode_pop(None, self.population)
+        decoded_net, decoded_params = self.decode_pop()
         
         indices_to_evaluate = []
         eval_dp            = []
@@ -199,16 +256,16 @@ class GA(object):
         self.log_data()
         return self.fitnesses
 
-    def update_best_id(self, fitnesses):
+    def update_best_id(self, fitnesses_):
         """
-        Update the best individual id based on current fitnesses.
+        Update the best individual id based on current fitnesses_.
         Args:
-            fitnesses: numpy array of current population fitnesses.
+            fitnesses_: numpy array of current population fitnesses_.
         """
-        best_idx = np.argmax(fitnesses)
-        best_fitness = fitnesses[best_idx]
-        if best_fitness > self.best_so_far:
-            self.best_so_far = best_fitness
+        best_idx = np.argmax(fitnesses_)
+        best_fitness_ = fitnesses_[best_idx]
+        if best_fitness_ > self.best_so_far:
+            self.best_so_far = best_fitness_
             self.best_so_far_id = (self.current_gen, best_idx)
 
     def selection(self):
@@ -222,8 +279,10 @@ class GA(object):
         for idx in participants:
             if self.fitnesses[idx] > self.fitnesses[best]:
                 best = idx
-        return self.population[best]
-    def one_point_crossover(self, parent1: np.ndarray, parent2: np.ndarray) :
+        return best
+
+    @staticmethod
+    def one_point_crossover(parent1: np.ndarray, parent2: np.ndarray) :
         """
         One-point crossover: a random crossover point is chosen.
         The offspring inherits genes from parent1 up to that point and parent2 for the remainder (and vice versa).
@@ -234,7 +293,9 @@ class GA(object):
         offspring1 = np.concatenate((parent1[:point], parent2[point:]))
         offspring2 = np.concatenate((parent2[:point], parent1[point:]))
         return offspring1, offspring2
-    def two_point_crossover(self, parent1: np.ndarray, parent2: np.ndarray) :
+
+    @staticmethod
+    def two_point_crossover(parent1: np.ndarray, parent2: np.ndarray) :
         """
         Two-point crossover: Two random crossover points are selected.
         The offspring inherits the middle segment from one parent and the remaining segments from the other.
@@ -244,7 +305,7 @@ class GA(object):
         offspring1 = np.concatenate((parent1[:point1], parent2[point1:point2], parent1[point2:]))
         offspring2 = np.concatenate((parent2[:point1], parent1[point1:point2], parent2[point2:]))
         return offspring1, offspring2
-    
+
     def crossover(self, parent1: np.ndarray, parent2: np.ndarray) :
         """
         Select a crossover operator at random among available strategies.
@@ -316,40 +377,80 @@ class GA(object):
         mutation_strategies = [self.mutate_swap, self.mutate_block, self.mutate_neighbor, self.mutate_gen]
         strategy = np.random.choice(mutation_strategies)
         return strategy(individual)
-
+    
+    def _mutate_cont(self, cont_vector):
+        """
+        Gaussian mutation on each continuous gene with probability self.mutation_rate.
+        """
+        if cont_vector.size == 0:
+            return cont_vector
+        # which dims to mutate?
+        mask = np.random.rand(*cont_vector.shape) < self.mutation_rate
+        if mask.any():
+            noise = np.random.normal(scale=self.cont_mut_sigma, size=cont_vector.shape)
+            cont_vector = cont_vector + mask*noise
+            # clip back to allowed bounds
+            cont_vector = np.minimum(np.maximum(cont_vector, self.cont_min), self.cont_max)
+        return cont_vector
+    
     def generate_offspring(self):
         """
-        Create a new population using selection, crossover and mutation.
-        Applies crossover with self.crossover_rate and mutation with self.mutation_rate.
-        If elitism is enabled, the best individual is preserved.
+        Create a new population of size `self.population_size`, evolving both:
+            - self.population      : categorical chromosomes (np.ndarray of ints)
+            - self.pop_params      : continuous chromosome (np.ndarray of floats)
+        using elitism, tournament selection, uniform crossover for the discrete part,
+        and blend (arithmetic) crossover + Gaussian mutation for the continuous gene.
         """
-        new_population = []
-        # Optionally preserve best individual (elitism)
+        new_pop = []
+        new_params = []
+
+        # 1) Elitism: copy the best individual (both discrete + continuous)
         if self.elitism:
-            best_individual = self.population[np.argmax(self.fitnesses)]
-            new_population.append(best_individual)
+            best_idx = np.argmax(self.fitnesses)
+            new_pop.append(self.population[best_idx].copy())
+            new_params.append(self.pop_params[best_idx])
 
-        while len(new_population) < self.population_size:
-            # Parent selection (tournament selection)
-            parent1 = self.selection()
-            parent2 = self.selection()
+        # 2) Fill the rest by pairs
+        while len(new_pop) < self.population_size:
+            # parent selection returns indices
+            i1 = self.selection()
+            i2 = self.selection()
 
-            # Crossover operator
+            p1, p2 = self.population[i1], self.population[i2]
+            c1, c2 = self.pop_params[i1], self.pop_params[i2]
+
+            # crossover
             if np.random.rand() < self.crossover_rate:
-                child1, child2 = self.crossover(parent1, parent2)
+                # discrete: uniform mask crossover
+                mask = np.random.rand(*p1.shape) < 0.5
+                child1 = np.where(mask, p1, p2)
+                child2 = np.where(mask, p2, p1)
+                # continuous: arithmetic blend
+                alpha = np.random.rand()
+                child1_params = alpha * c1 + (1 - alpha) * c2
+                child2_params = (1 - alpha) * c1 + alpha * c2
             else:
-                child1, child2 = parent1.copy(), parent2.copy()
+                child1, child2 = p1.copy(), p2.copy()
+                child1_params, child2_params = c1, c2
 
-            # Mutation operator
+            # mutation: discrete + continuous
             child1 = self.mutate(child1)
             child2 = self.mutate(child2)
 
-            new_population.extend([child1, child2])
-        
-        # Trim in case population exceeded population_size
-        self.population = np.array(new_population[:self.population_size])
-        self.logger.info("new population created =%s", self.population)
-    
+            child1_params = self._mutate_cont(np.array(child1_params))
+            child2_params = self._mutate_cont(np.array(child2_params))
+
+            new_pop.extend([child1, child2])
+            new_params.extend([child1_params, child2_params])
+
+        # 3) Trim to exact size and store back
+        self.population = np.array(new_pop[:self.population_size])
+        self.pop_params  = np.array(new_params[:self.population_size])
+
+        self.logger.info(
+            "New population created.\nDiscrete:\n%s\nContinuous:\n%s",
+            self.population, self.pop_params
+        )
     def log_data(self):
         """ Log GA evolution statistics such as generation number and fitnesses. """
         
@@ -501,7 +602,8 @@ if __name__ == "__main__":
             data_file=config.files_spec['data_file'])
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
     ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
-                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20, fn_list=config.QNAS_spec['fn_list'])
+                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20,
+                     fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
     
     # Run the evolution
     population, fitnesses, best_fitness, best_id = ga.evolve()
