@@ -293,40 +293,49 @@ def check_files(exp_path):
         exp_path: (str) path to the experiment folder.
     """
     if not os.path.exists(exp_path):
-        raise OSError('User must provide a valid \"--experiment_path\" to continue '
-                    'evolution or to retrain a model.')
-    experiment_folders = [f.name for f in os.scandir(exp_path) if f.is_dir()]
-    # Keep only those starting with a digit
-    digit_folders = [name for name in experiment_folders if name and name[0].isdigit()]
-    if not digit_folders:
-        raise ValueError("No experiment folders starting with a digit found in: " + exp_path)
-    # Define key to sort by numeric parts
-    def numeric_key(s):
-        parts = s.split('_')
-        return tuple(int(p) for p in parts)
+        raise OSError('User must provide a valid "--experiment_path" to continue '
+                        'evolution or to retrain a model.')
 
-    # Pick the smallest one numerically
-    best_name = min(digit_folders, key=numeric_key)
-    best_result_folder = os.path.join(exp_path, best_name)
-
-    # Now you can build the path to your params file
-    file_path = os.path.join(best_result_folder, 'training_params.txt')
-
-    if os.path.exists(file_path):
-        if os.stat(file_path).st_size == 0:
-            raise OSError('User must provide an \"--experiment_path\" with a valid data file to '
-                        'continue evolution or to retrain a model.')
+    # 1. If there’s a symlink named "best_so_far", use its target
+    best_link = os.path.join(exp_path, 'best_so_far')
+    if os.path.islink(best_link):
+        target = os.readlink(best_link)
+        if os.path.isdir(target):
+            best_result_folder = target
+        else:
+            raise ValueError(f'"best_so_far" symlink does not point to a directory: {target}')
     else:
+        # 2. Otherwise, find subdirectories whose names start with a digit
+        experiment_folders = [f.name for f in os.scandir(exp_path) if f.is_dir()]
+        digit_folders = [name for name in experiment_folders if name and name[0].isdigit()]
+        if not digit_folders:
+            raise ValueError(f'No experiment folders starting with a digit found in: {exp_path}')
+
+        # 3. Define numeric sort key (split on '_' and convert digit parts)
+        def numeric_key(s):
+            parts = s.split('_')
+            return tuple(int(p) for p in parts if p.isdigit())
+
+        best_name = min(digit_folders, key=numeric_key)
+        best_result_folder = os.path.join(exp_path, best_name)
+
+    # 4. Validate training_params.txt inside the chosen folder
+    params_file = os.path.join(best_result_folder, 'training_params.txt')
+    if not os.path.exists(params_file):
         raise OSError('training_params.txt not found!')
+    if os.stat(params_file).st_size == 0:
+        raise OSError('User must provide an "--experiment_path" with a valid data file to '
+                        'continue evolution or to retrain a model.')
 
-    file_path = os.path.join(exp_path, 'log_params_evolution.txt')
-
-    if os.path.exists(file_path):
-        if os.stat(file_path).st_size == 0:
-            raise OSError('User must provide an \"--experiment_path\" with a valid config_file '
-                        'to continue evolution or to retrain a model.')
-    else:
+    # 5. Validate log_params_evolution.txt at the root of exp_path
+    log_file = os.path.join(exp_path, 'log_params_evolution.txt')
+    if not os.path.exists(log_file):
         raise OSError('log_params_evolution.txt not found!')
+    if os.stat(log_file).st_size == 0:
+        raise OSError('User must provide an "--experiment_path" with a valid config_file '
+                        'to continue evolution or to retrain a model.')
+
+    return best_result_folder
     
 def init_log(log_level, name, file_path=None):
     """ Initialize a logging.Logger with level *log_level* and name *name*.
@@ -383,9 +392,15 @@ def load_evolved_data(experiment_path: str):
         Note: This method assumes a specific folder and file structure for evolved data.
         """
 
-        experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
-        best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
-        best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+        best_so_far_link = os.path.join(experiment_path, 'best_so_far')
+        
+        if os.path.islink(best_so_far_link):
+            best_result_folder = os.readlink(best_so_far_link)
+        else:
+            experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
+            best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
+            best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+            
         with open(os.path.join(best_result_folder, 'training_params.txt'), 'r') as file:
                 best_individual_info = yaml.safe_load(file)
         net_list = best_individual_info.get('net_list', [])
