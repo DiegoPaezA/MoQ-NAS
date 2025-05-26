@@ -18,7 +18,7 @@ from util import delete_old_dirs_v2, init_log, load_pkl, calculate_time, backup_
 class QNAS(object):
     """ Quantum Inspired Neural Architecture Search """
 
-    def __init__(self, eval_func, experiment_path, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
         """ Initialize QNAS.
 
         Args:
@@ -38,6 +38,7 @@ class QNAS(object):
         self.data_file = data_file
         self.eval_func = eval_func
         self.experiment_path = experiment_path
+        self.objectives = objectives
         self.fitnesses = None                   # TF calculates accuracy with float32 precision
         self.generations = None
         self.update_quantum_gen = None
@@ -349,8 +350,15 @@ class QNAS(object):
 
         # 2) Actually train the scheduled ones
         if to_eval_idx:
-            raw_vals = self.eval_func(to_eval_dp, to_eval_net,
-                                    generation=self.current_gen)[:,0]
+            results = self.eval_func(to_eval_dp, to_eval_net,
+                                    generation=self.current_gen)
+            
+            metric_key = self.objectives[0] # for now, just use the first objective
+            raw_vals = np.array([
+                results[idx][metric_key]
+                for idx in range(len(to_eval_net))
+            ])
+            
             for i, idx in enumerate(to_eval_idx):
                 key       = to_eval_keys[i]
                 raw_fitness = raw_vals[i]
