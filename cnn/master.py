@@ -200,7 +200,7 @@ def fitness(id_num: str, params: Dict[str, Any],
             decoded_params: Dict[str, Any],
             train_loader: torch.utils.data.DataLoader, 
             val_loader: torch.utils.data.DataLoader,
-            return_val, debug: bool = False) -> Dict[str, Any]:
+            debug: bool = False) -> Dict[str, Any]:
     """
     Train and evaluate a model using evolved networks in the evolution phase.
     Updates the mutable container return_val with key performance metrics based on the fitness_metric in params.
@@ -212,8 +212,6 @@ def fitness(id_num: str, params: Dict[str, Any],
         decoded_params (Dict[str, Any]): Decoded parameters for the model.
         net_list (List[str]): List of layer names to be used in the network.
         train_loader (torch.utils.data.DataLoader): Training DataLoader.
-        val_loader (torch.utils.data.DataLoader): Validation DataLoader.
-        return_val: A mutable container (e.g., list) to store key metrics.
         debug (bool, optional): If True, returns the raw results dictionary for debugging.
 
     Returns:
@@ -224,27 +222,11 @@ def fitness(id_num: str, params: Dict[str, Any],
     """
     try:
         results_dict = run_training_phase(params, fn_dict, net_list, decoded_params, id_num, debug, train_loader, val_loader, None)
-        if debug:
-            return results_dict
-        else:
-            if params['fitness_metric'] == 'best_accuracy':
-                return_val[:] = [results_dict['best_accuracy'],
-                                results_dict['total_params'],
-                                results_dict['cuda_inference_time']]
-            elif params['fitness_metric'] == 'best_loss':
-                return_val[:] = [results_dict['fitness_val_loss'],
-                                results_dict['total_params'],
-                                results_dict['cuda_inference_time']]
-            elif params['fitness_metric'] == 'scalar_multi_objective':
-                return_val[:] = [results_dict['scalar_multi_objective'],
-                                results_dict['total_params'],
-                                results_dict['cuda_inference_time']]
-            else:
-                raise ValueError(f"Invalid fitness metric: {params['fitness_metric']}")
-            LOGGER.info(f"Training of model {id_num} finished, best {params['fitness_metric']}: {round(return_val[0], 2)}")
-            return results_dict
+        LOGGER.info(f"Training of model {id_num} finished, best {params['fitness_metric']}: {round(results_dict[params['fitness_metric']], 2)}")
+        return results_dict
     except Exception as e:
-        return_val[:] = [0.0, 0.0, 0.0]
+        LOGGER.error(f"An error occurred during training of model {id_num}: {e}")
+        # Set return_val to zeros if an error occurs
         raise e
 
 def retrain(params: Dict[str, Any],
