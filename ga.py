@@ -1,14 +1,16 @@
 import os
 import time
+import shutil
 import datetime
 import numpy as np
 import evaluation
 import qnas_config as cfg
 from collections import defaultdict
 from pickle import dump, load, HIGHEST_PROTOCOL
-from util import delete_old_dirs, init_log, check_files, download_dataset, backup_cache, load_cache
+from util import delete_old_dirs_v2, init_log, check_files, download_dataset, backup_cache, load_cache
 
-
+#TODO: add docstrings to all functions
+#TODO: use the utils functions for handling the folder structure
 class GA(object):
     """
     Genetic Algorithm class for optimizing neural network architectures.
@@ -78,7 +80,6 @@ class GA(object):
         # Create a logger using the provided utility function (or basicConfig)
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
     
-
     def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list, params_ranges,
                     crossover_rate, mutation_rate, elitism=False, patience=60):
         """
@@ -107,7 +108,6 @@ class GA(object):
         # # Initialize a population of individuals.
         self.population = np.random.randint(0, len(self.fn_list), size=(population_size, max_num_nodes))
         
-
         # 1) split out the continuous‐valued params vs fixed ones
         self.cont_keys = [
             k for k, v in params_ranges.items()
@@ -230,7 +230,8 @@ class GA(object):
 
         # 2) Train all scheduled individuals in one batch
         if indices_to_evaluate:
-            new_vals = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            raw_vals = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            new_vals = raw_vals[:,0]
             for i, idx in enumerate(indices_to_evaluate):
                 key = tuple(self.population[idx].tolist())
                 raw = new_vals[i]
@@ -516,8 +517,11 @@ class GA(object):
         """
         self.save_data()
         backup_cache(self.evaluated, file_path=self.experiment_path)
-        delete_old_dirs(self.experiment_path, keep_best=True,
-                        best_id=f'{self.best_so_far_id[0]}_{self.best_so_far_id[1]}')
+        best_id_gen = self.best_so_far_id[0]
+        best_id_idx = self.best_so_far_id[1]
+        best_id = f"{best_id_gen}_{best_id_idx}"
+        delete_old_dirs_v2(self.experiment_path, 
+                            self.current_gen, keep_ids=[best_id])
         self.current_gen += 1
 
     def evolve(self):
@@ -603,7 +607,7 @@ if __name__ == "__main__":
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
     ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
                     crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20,
-                     fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
+                    fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
     
     # Run the evolution
     population, fitnesses, best_fitness, best_id = ga.evolve()
