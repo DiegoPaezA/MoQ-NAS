@@ -41,6 +41,7 @@ def main(**args):
                                                 log_level=config.train_spec['log_level'])
     
     qnas_cnn = qnas.QNAS(eval_pop, config.train_spec['experiment_path'],
+                        objectives=config.train_spec['objectives'],
                         log_file=config.files_spec['log_file'],
                         log_level=config.train_spec['log_level'],
                         data_file=config.files_spec['data_file'])
