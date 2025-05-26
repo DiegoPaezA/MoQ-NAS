@@ -46,7 +46,7 @@ def main(**args):
                         data_file=config.files_spec['data_file'])
 
     # if fn_list not passed on CLI, fall back to config
-    if args['fn_list'] is None:
+    if args.get('fn_list') is None:
         args['fn_list'] = config.QNAS_spec['fn_list']
 
     # Initialize GA with all parameters
@@ -57,7 +57,8 @@ def main(**args):
                         crossover_rate=args['crossover_rate'],
                         mutation_rate=args['mutation_rate'],
                         elitism=args['elitism'],
-                        patience=args['patience'])
+                        patience=args['patience'],
+                        params_ranges=config.QNAS_spec['params_ranges'])
     
     # Start evolution
     logger.info(f"Starting evolution ...")
