@@ -16,7 +16,9 @@ import torchvision.datasets
 from torchvision.transforms import ToTensor
 import medmnist
 from medmnist import INFO
-from typing import Dict
+from typing import Dict, List, Optional
+
+import shutil
 
 import gc
 import torch
@@ -667,3 +669,99 @@ def load_cache(file_path: str) -> Dict:
         print(f"Cache backup file {file_path} not found. Starting with empty cache.")
         data = {}
     return data
+
+
+def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
+                        results_subdir: str = "results",archive_subdir: str = "archive",
+                        link_name: str = "best_so_far",logger: Optional[logging.Logger] = None) -> None:
+    """
+    Moves temp folders from
+        <experiment_path>/<results_subdir>/gen_<generation>/<id>
+    into
+        <experiment_path>/<archive_subdir>/
+    Deletes any archived folder not in keep_ids,
+    updates a symlink
+        <experiment_path>/<link_name>
+    to point at the first kept folder,
+    and finally deletes the temp gen_<generation> directory.
+
+    Only the first time a given keep_id is seen in the results folder
+    will the archive be updated and the best_so_far link be re-pointed.
+    Subsequent calls with the same keep_ids will simply delete the temp
+    results folder without pruning or relinking.
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    base = experiment_path
+    results_dir = os.path.join(base, results_subdir, f"gen_{generation}")
+    archive_dir = os.path.join(base, archive_subdir)
+    os.makedirs(archive_dir, exist_ok=True)
+
+    # If no temp results folder, skip everything
+    if not os.path.isdir(results_dir):
+        logger.warning(f"prune_and_archive: no temp folder at {results_dir}")
+        return
+
+    # 1) Move any new keep_ids out of results_dir → archive_dir
+    moved_any = False
+    for kid in keep_ids:
+        src = os.path.join(results_dir, kid)
+        dst = os.path.join(archive_dir, kid)
+        if os.path.isdir(src) and not os.path.isdir(dst):
+            try:
+                shutil.move(src, dst)
+                moved_any = True
+                logger.debug(f"Archived {src} → {dst}")
+            except Exception as e:
+                logger.warning(f"Failed to move {src} → {dst}: {e}")
+        else:
+            # either wasn't in results (already archived) or already exists
+            logger.debug(f"Skipping move for {kid}: "
+                        f"{'not in results' if not os.path.isdir(src) else 'already in archive'}")
+
+    # always delete the temp results_dir
+    try:
+        shutil.rmtree(results_dir)
+        logger.debug(f"Removed temp dir {results_dir}")
+    except Exception as e:
+        logger.warning(f"Could not remove temp dir {results_dir}: {e}")
+
+    # if nothing new was moved, we stop here
+    if not moved_any:
+        logger.info("No new winners found in this generation; archive and symlink unchanged.")
+        return
+
+    # 2) Remove any folder in archive_dir not in keep_ids
+    for folder in os.listdir(archive_dir):
+        if folder not in keep_ids:
+            path = os.path.join(archive_dir, folder)
+            if os.path.isdir(path):
+                try:
+                    shutil.rmtree(path)
+                    logger.debug(f"Pruned {path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove {path}: {e}")
+
+    # 3) Update best_so_far symlink to the *first* keep_id
+    if not keep_ids:
+        logger.error("prune_and_archive: keep_ids empty, no best to link")
+        return
+
+    best = keep_ids[0]
+    target = os.path.join(archive_dir, best)
+    linkpath = os.path.join(base, link_name)
+
+    # Remove any old link or file
+    try:
+        if os.path.islink(linkpath) or os.path.exists(linkpath):
+            os.unlink(linkpath)
+    except Exception as e:
+        logger.warning(f"Could not remove old link {linkpath}: {e}")
+
+    # Create new symlink
+    try:
+        os.symlink(target, linkpath)
+        logger.info(f"Updated {link_name} → {target}")
+    except Exception as e:
+        logger.error(f"Failed to create symlink {linkpath} → {target}: {e}")

@@ -95,7 +95,10 @@ class EvalPopulation(object):
             If the Dask operations exceed the specified timeout.
         """
         pop_size = len(decoded_nets)
-        evaluations = np.empty(shape=(pop_size, ))
+        multi_obj = self.train_params.get('multi_objective', False)
+        n_obj = 3 if multi_obj else 1
+        # allocate a pure float array, shape = (pop_size, n_obj)
+        evaluations = np.zeros((pop_size, n_obj), dtype=float)
         
         #variables = [mp.Value('f', 0.0000) for _ in range(pop_size)]
         variables = [mp.Array('f', 3) for _ in range(pop_size)]
@@ -131,8 +134,15 @@ class EvalPopulation(object):
             p.join()
                     
         for idx, val in enumerate(variables):
-            evaluations[idx] = val[0] # Accuracy - Best Metric
-            #evaluations[idx] = val.value
+            acc, num_params, inference_time = val[:]
+            if n_obj == 1:
+                # single-objective → only accuracy
+                evaluations[idx, 0] = acc
+            else:
+                # multi-objective → fill all three slots
+                evaluations[idx, 0] = acc
+                evaluations[idx, 1] = num_params
+                evaluations[idx, 2] = inference_time
             
         evol_end = time.perf_counter()
         time_elapsed_min = (evol_end-evol_time_start)/60
