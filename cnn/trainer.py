@@ -324,7 +324,7 @@ class BaseTrainer:
         input_random = torch.randn(self.params['input_shape'])
         with torch.no_grad():
             _ = best_model(input_random)
-        best_model.load_state_dict(torch.load(best_model_path))
+        best_model.load_state_dict(torch.load(best_model_path, weights_only=True))
         best_model.to(self.params['device'])
         return best_model
 
@@ -610,6 +610,6 @@ class ResNetTrainer(BaseTrainer):
             num_classes=self.params['num_classes']
         )
         # Load the saved state.
-        best_model.load_state_dict(torch.load(best_model_path))
+        best_model.load_state_dict(torch.load(best_model_path, weights_only=True))
         best_model.to(self.params['device'])
         return best_model
