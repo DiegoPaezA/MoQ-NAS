@@ -18,6 +18,7 @@ crossover_rate=0.5
 mutation_rate=0.2
 elitism=true
 multi_objective=true
+early_stopping=true
 patience=60
 
 # —— sample size & repeats —— 
@@ -54,6 +55,8 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --network_config       "$network_config" \
             --backbone_name        "$backbone_name" \
             --log_level            "$log_level" \
-            $($multi_objective && echo "--multi_objective")
+            $($multi_objective && echo "--multi_objective")\
+            $($early_stopping && echo "--early_stopping")
+
     done
 done
