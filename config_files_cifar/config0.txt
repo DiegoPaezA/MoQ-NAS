@@ -68,6 +68,6 @@ train:
     backbone_name: mobilenet_v3_small
 
     # Multi-objective parameters
-    multi_objective: True
+    multi_objective: False
     num_objectives: 3
     objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
