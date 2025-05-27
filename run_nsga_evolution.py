@@ -1,7 +1,7 @@
 import argparse
 import os
 
-import qnas
+import nsga2
 import qnas_config as cfg
 import evaluation
 from util import check_files, init_log, download_dataset
@@ -40,18 +40,36 @@ def main(**args):
                                                 fn_dict=config.fn_dict,
                                                 log_level=config.train_spec['log_level'])
     
-    qnas_cnn = qnas.QNAS(eval_pop, config.train_spec['experiment_path'],
+    nsga_cnn = nsga2.NSGA2(eval_pop, config.train_spec['experiment_path'],
                         objectives=config.train_spec['objectives'],
                         log_file=config.files_spec['log_file'],
                         log_level=config.train_spec['log_level'],
                         data_file=config.files_spec['data_file'])
 
-    qnas_cnn.initialize_qnas(**config.QNAS_spec)
+    # if fn_list not passed on CLI, fall back to config
+    if args.get('fn_list') is None:
+        args['fn_list'] = config.QNAS_spec['fn_list']
+
+    # Initialize GA with all parameters
+    nsga_cnn.initialize_ga(population_size=args['population_size'],
+                        num_generations=args['num_generations'],
+                        max_num_nodes=args['max_num_nodes'],
+                        fn_list=args['fn_list'],
+                        crossover_rate=args['crossover_rate'],
+                        mutation_rate=args['mutation_rate'],
+                        elitism=args['elitism'],
+                        patience=args['patience'],
+                        params_ranges=config.QNAS_spec['params_ranges'])
     
     # Start evolution
     logger.info(f"Starting evolution ...")
-    qnas_cnn.evolve()
+    population, fitnesses = nsga_cnn.evolve()
     logger.info(f"Evolution finished.")
+    for i, (ind, fit) in enumerate(zip(population, fitnesses)):
+        print(f"  Ind {i}: chrom={ind.tolist()}  →  "
+            f"(acc={fit[0]:.3f}, params={fit[1]:.0f}, time={fit[2]:.4f})")
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -83,11 +101,35 @@ if __name__ == '__main__':
                         help='Number of epochs to save the model. Default = 5.')
     parser.add_argument('--limit_data_value', type=int, default=10000,
                         help='Number of samples to be used during evolution and training. Default = 10000.')
-    parser.add_argument('--backbone_name', type=str, default='mobilenet_v3_small', 
-                        choices=['mobilenet_v3_small', 'mobilenet_v3_large', 'mobilenet_v2', 'resnet18', 'resnet50',],
+    parser.add_argument('--backbone_name', type=str, default='mobilenet_v3_small', choices=['mobilenet_v3_small', 'mobilenet_v3_large', 'mobilenet_v2', 'resnet18', 'resnet50'],
                         help='Backbone name to be used during training. Default = mobilenet_v3_small.')
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
                         choices=['default', 'dense', 'backbone'])
+    
+    # GA parameters
+    parser.add_argument('--population_size', type=int, required=True,
+                        help='Number of individuals in the GA population.')
+    parser.add_argument('--num_generations', type=int, required=True,
+                        help='Maximum number of generations to evolve.')
+    parser.add_argument('--max_num_nodes', type=int, required=True,
+                        help='Length of each individual chromosome (max nodes).')
+    parser.add_argument('--fn_list', nargs='+', type=str, default=None,
+                        help='List of function names (e.g. layer types) to decode chromosomes. '
+                            'If omitted, loaded from config.QNAS_spec["fn_list"].')
+    parser.add_argument('--crossover_rate', type=float, required=True,
+                        help='Probability of crossover (between 0 and 1).')
+    parser.add_argument('--mutation_rate', type=float, required=True,
+                        help='Probability of mutation per gene (between 0 and 1).')
+    parser.add_argument('--elitism', action='store_true',
+                        help='Keep the best individual into the next generation.')
+    parser.add_argument('--patience', type=int, default=60,
+                        help='Generations with no improvement before early stopping.')
+    
+    # MO - NSGA2 parameters
+    parser.add_argument('--num_objectives', type=int, default=3,
+                        help='Number of objectives to optimize (e.g. accuracy, params, time).')
+    parser.add_argument('--multi_objective', action='store_true', default=False,
+                        help='Enable multi-objective optimization (NSGA2).')
 
     arguments = parser.parse_args()
 

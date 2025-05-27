@@ -7,3 +7,5 @@ matplotlib
 medmnist
 pynvml
 gputil
+plotly
+nbformat

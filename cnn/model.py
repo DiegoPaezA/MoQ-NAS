@@ -1017,7 +1017,7 @@ functions_dict = {
 
 class NetworkGraph(nn.Module):
     def __init__(self, num_classes, in_channels=3, input_shape = (1, 3, 32, 32),
-                network_config='default', backbone_name='mobilenet_v3_small', backbone_percentage=0.7):
+                network_config='default', backbone_name='mobilenet_v3_small', backbone_percentage=0.7, backbone_trainable=False):
         """
         Initialize NetworkGraph.
         
@@ -1028,6 +1028,7 @@ class NetworkGraph(nn.Module):
             network_config: str, configuration type ('default', 'dense', 'backbone').
             backbone_name: str, name of the pretrained backbone to use.
             backbone_percentage: float, fraction of the backbone layers to use.
+            Backbone_trainable: bool, whether to train the backbone layers.
         """
         super().__init__()
         self.num_classes = num_classes
@@ -1036,6 +1037,7 @@ class NetworkGraph(nn.Module):
         self.backbone_name = backbone_name
         self.network_config = network_config
         self.backbone_percentage = backbone_percentage
+        self.backbone_trainable = backbone_trainable
         self.layers = None
         self.fc = None
         self.model = None  # Used in sequential configurations
@@ -1124,7 +1126,7 @@ class NetworkGraph(nn.Module):
                 selected_layers = backbone_layers[:num_to_use]
                 self.backbone = nn.Sequential(*selected_layers)
                 for param in self.backbone.parameters():
-                    param.requires_grad = False
+                    param.requires_grad = self.backbone_trainable
                     
                 # Forward a dummy input to determine output channels.
                 dummy_input = torch.zeros(self.input_shape)

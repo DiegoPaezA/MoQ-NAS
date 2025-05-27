@@ -18,7 +18,7 @@ from util import delete_old_dirs_v2, init_log, load_pkl, calculate_time, backup_
 class QNAS(object):
     """ Quantum Inspired Neural Architecture Search """
 
-    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, log_file, log_level, data_file, n_obj=1):
         """ Initialize QNAS.
 
         Args:
@@ -26,10 +26,12 @@ class QNAS(object):
             experiment_path: (str) path to the folder where logs and models will be saved.
             log_file: (str) path to the file to keep logs.
             log_level: (str) one of "INFO", "DEBUG" or "NONE".
+            n_obj: (int) number of objectives for multi-objective optimization.
         """
 
         self.dtype = np.float64                 # Type of all arrays excluding fitnesses
         self.tolerance = 1.e-15                 # Tolerance to compare floating point
+        self.n_obj = n_obj
 
         self.best_so_far = 0.0                  # Best fitness so far
         self.best_so_far_id = [0, 0]            # id = [generation, position in the population]
@@ -38,7 +40,6 @@ class QNAS(object):
         self.data_file = data_file
         self.eval_func = eval_func
         self.experiment_path = experiment_path
-        self.objectives = objectives
         self.fitnesses = None                   # TF calculates accuracy with float32 precision
         self.generations = None
         self.update_quantum_gen = None
@@ -64,7 +65,6 @@ class QNAS(object):
         
         cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
         self.evaluated = load_cache(cache_file)
-        # this collects the raw fitnesses until we have 3 of them
         self.eval_history = defaultdict(list)
 
 
@@ -193,9 +193,7 @@ class QNAS(object):
                     (self.qpop_params.current_pop[selected], new_pop_params))
             self.qpop_net.current_pop = np.concatenate(
                     (self.qpop_net.current_pop[selected], new_pop_net))
-        
-        ## TODO: Here we have the the last and new population Multi objective operation
-        
+                
             
         # Order the population based on fitness
         num_classic = self.qpop_params.num_ind * self.qpop_params.repetition
@@ -350,15 +348,8 @@ class QNAS(object):
 
         # 2) Actually train the scheduled ones
         if to_eval_idx:
-            results = self.eval_func(to_eval_dp, to_eval_net,
-                                    generation=self.current_gen)
-            
-            metric_key = self.objectives[0] # for now, just use the first objective
-            raw_vals = np.array([
-                results[idx][metric_key]
-                for idx in range(len(to_eval_net))
-            ])
-            
+            raw_vals = self.eval_func(to_eval_dp, to_eval_net,
+                                    generation=self.current_gen)[:,0]
             for i, idx in enumerate(to_eval_idx):
                 key       = to_eval_keys[i]
                 raw_fitness = raw_vals[i]

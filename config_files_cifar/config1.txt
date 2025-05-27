@@ -56,7 +56,7 @@ train:
     # Tensorflow
     save_checkpoints_epochs: 5
     save_summary_epochs: 0.25
-    threads: 20
+    threads: 14
 
     # penalization parameters - scalarized fitness
     max_params: 6500000 # 6.5M
@@ -65,3 +65,8 @@ train:
     # Network structure Configuration
     network_config: default
     backbone_name: mobilenet_v3_small
+
+    # Multi-objective parameters
+    multi_objective: False
+    num_objectives: 3
+    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss

@@ -2,7 +2,7 @@
 
 # —— Experiment settings —— 
 dataset="cifar10"
-exp_path_base="experiment_${dataset}_ga"
+exp_path_base="experiment_${dataset}_nsga"
 config_dir="config_files_cifar"
 fitness_metric="best_accuracy"
 data_path="${dataset}_data"
@@ -17,12 +17,14 @@ max_num_nodes=20
 crossover_rate=0.5
 mutation_rate=0.2
 elitism=true
+multi_objective=true
+early_stopping=true
 patience=60
 
 # —— sample size & repeats —— 
 dataset_sample_size=10000
-configs=("config2.txt")     # list your config files here
-exps=("exp2")               # corresponding experiment names
+configs=("config0.txt")     # list your config files here
+exps=("exp1")               # corresponding experiment names
 cuda_devices=("0,1")          # GPU IDs for each run
 
 # —— Loop over configs & repeats —— 
@@ -36,7 +38,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
     for ((i=1; i<=3; i++)); do  # change 1 to your number of repeats
         exp_path="${exp_path_base}/${exp_name}_repeat_${i}"
 
-        CUDA_VISIBLE_DEVICES="$cuda_device" python run_ga_evolution.py \
+        CUDA_VISIBLE_DEVICES="$cuda_device" python run_nsga_evolution.py \
             --experiment_path      "$exp_path" \
             --config_file          "$config_file" \
             --data_path            "$data_path" \
@@ -52,6 +54,9 @@ for ((j=0; j<${#configs[@]}; j++)); do
             $( $elitism && echo "--elitism" ) \
             --network_config       "$network_config" \
             --backbone_name        "$backbone_name" \
-            --log_level            "$log_level"
+            --log_level            "$log_level" \
+            $($multi_objective && echo "--multi_objective")\
+            $($early_stopping && echo "--early_stopping")
+
     done
 done
