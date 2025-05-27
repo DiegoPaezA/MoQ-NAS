@@ -17,7 +17,7 @@ class NSGA2(GA):
         - Global Pareto front archive with crowding-based filtering.
         - History recording of all Pareto fronts per generation.
     """
-    def __init__(self, eval_func, experiment_path, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
         """
         Initialize NSGA2 instance.
 
@@ -30,13 +30,14 @@ class NSGA2(GA):
             log_level (int): Logging level.
             data_file (str): Path to initial data or checkpoint.
         """
-        super().__init__(eval_func, experiment_path, log_file, log_level, data_file)
+        super().__init__(eval_func, experiment_path,objectives, log_file, log_level, data_file)
         self.eval_cache = {}
         self.pareto_global_population = None
         self.pareto_global_fitnesses = None
         self.pareto_global_ids = []
         self.fronts_history = {}
-        self.num_objectives = None
+        self.objectives = objectives
+        self.num_objectives = len(objectives) if objectives else None
 
     def evaluate_population(self):
         """
@@ -51,25 +52,36 @@ class NSGA2(GA):
         decoded_nets, decoded_params = self.decode_pop()
         pop = self.population
         N = len(pop)
-        fits = [None] * N
+
+        # Ensure objectives are set
+        metrics_keys = self.objectives  # e.g. ['best_accuracy','total_params','cuda_inference_time']
+        M = len(metrics_keys)
+
+        # Initialize fitness array and keys for caching
+        fits = [[0.0] * M for _ in range(N)]
         keys = [pop[i].tobytes() for i in range(N)]
         to_eval = []
+
+        # Check cache for existing evaluations
         for i, k in enumerate(keys):
             if k in self.eval_cache:
-                fits[i] = self.eval_cache[k]
+                cached = self.eval_cache[k]           # es un dict
+                fits[i] = [cached[key] for key in metrics_keys]
             else:
                 to_eval.append(i)
+
+        # evaluate only the individuals that are not cached
         if to_eval:
-            sub_nets = [decoded_nets[i] for i in to_eval]
+            sub_nets   = [decoded_nets[i]   for i in to_eval]
             sub_params = [decoded_params[i] for i in to_eval]
-            sub_fits = self.eval_func(sub_params, sub_nets, generation=self.current_gen)
-            for idx, fit in zip(to_eval, sub_fits):
-                fits[idx] = fit
-                self.eval_cache[keys[idx]] = fit
-        fit_array = np.array(fits, dtype=float)
-        self.fitnesses = fit_array
-        if self.num_objectives is None:
-            self.num_objectives = fit_array.shape[1]
+            sub_results= self.eval_func(sub_params, sub_nets,generation=self.current_gen)
+            for i in sub_results.keys():
+                res_dict    = sub_results[i]
+                metric_vals = [res_dict[key] for key in metrics_keys]
+                fits[i]     = metric_vals
+                self.eval_cache[keys[i]] = res_dict
+
+        self.fitnesses = np.array(fits, dtype=float)
         return self.fitnesses
 
     @staticmethod
