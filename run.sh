@@ -5,14 +5,14 @@ config_file="config_files_cifar"
 fitness_metric="best_accuracy"
 data_path="${dataset}_data"
 log_level="INFO"
-network_config="default"
+network_config="backbone"
 backbone_name="resnet18"
 
 dataset_sample_size=10000
 
-configs=("config1.txt")
-exps=("exp3")
-cuda_devices=("0,1")
+configs=("config4.txt")
+exps=("exp4")
+cuda_devices=("0")
 
 # Loop over the length of the configs array
 for ((j=0; j<${#configs[@]}; j++)); do
