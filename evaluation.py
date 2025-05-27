@@ -71,16 +71,18 @@ class EvalPopulation(object):
         if 'objectives' not in self.train_params:
             raise KeyError("train_params must contain 'objectives' for evaluation.")
         
-        # Asegurar que la métrica principal esté en objectives[0]
-        main_metric = self.train_params.get('fitness_metric')
-        objectives = self.train_params.get('objectives', [])
-        if isinstance(objectives, list) and objectives:
-            # Reemplaza la primera posición
-            objectives[0] = main_metric
-            self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
-        else:
-            # Inicia objectives si no existe o está vacío
-            self.train_params['objectives'] = [main_metric]
+        multi_obj = self.train_params.get('multi_objective', False)
+        if not multi_obj:
+            # Asegurar que la métrica principal esté en objectives[0]
+            main_metric = self.train_params.get('fitness_metric')
+            objectives = self.train_params.get('objectives', [])
+            if isinstance(objectives, list) and objectives:
+                self.train_params['objectives'][0] = main_metric
+                self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
+            else:
+                self.train_params['objectives'] = [main_metric]
+                
+        self.metric_names = self.train_params['objectives']
         
         #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
         self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
@@ -110,7 +112,6 @@ class EvalPopulation(object):
             If the Dask operations exceed the specified timeout.
         """
         pop_size = len(decoded_nets)
-        multi_obj = self.train_params.get('multi_objective', False)
         manager = mp.Manager()
         result_queue: mp.Queue = manager.Queue()
         
@@ -146,6 +147,8 @@ class EvalPopulation(object):
         results: Dict[int, Dict[str, Any]] = {}
         for _ in range(pop_size):
             idx, res_dict = result_queue.get()
+            # return only the self.metric_names
+            res_dict = {k: res_dict[k] for k in self.metric_names if k in res_dict}
             results[idx] = res_dict
             
         evol_end_time = time.perf_counter()
@@ -171,11 +174,11 @@ class EvalPopulation(object):
             except RuntimeError as e:
                 # Manejo específico de OOM u otros errores de runtime
                 self.logger.error(f"RuntimeError training model {id_str}: {e}")
-                results_dict = {k: 0.0 for k in metric_names}
+                results_dict = {k: 0.0 for k in self.metric_names}
             except Exception as e:
                 # Cualquier otro error
                 self.logger.error(f"Error training model {id_str}: {e}")
-                results_dict = {k: 0.0 for k in metric_names}
+                results_dict = {k: 0.0 for k in self.metric_names}
             
             queue.put((original_idx, results_dict))
 
@@ -184,5 +187,5 @@ class EvalPopulation(object):
                 self.logger.warning(f"Thread {thread_id} – candidate {original_idx}: No results returned.")
                 continue
             else:
-                metrics_log = ", ".join(f"{k}={results_dict.get(k, None):.2f}" for k in metric_names)
+                metrics_log = ", ".join(f"{k}={results_dict.get(k, None):.2f}" for k in self.metric_names)
                 self.logger.info(f"Thread {thread_id} – candidate {original_idx}: {metrics_log}")
