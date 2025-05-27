@@ -71,17 +71,19 @@ class EvalPopulation(object):
         if 'objectives' not in self.train_params:
             raise KeyError("train_params must contain 'objectives' for evaluation.")
         
-        multi_obj = self.train_params.get('multi_objective', False)
+        multi_obj    = self.train_params.get('multi_objective', False)
+        main_metric  = self.train_params.get('fitness_metric')
+        objectives   = self.train_params.get('objectives', [])
+
         if not multi_obj:
-            # Asegurar que la métrica principal esté en objectives[0]
-            main_metric = self.train_params.get('fitness_metric')
-            objectives = self.train_params.get('objectives', [])
+            # Reemplaza únicamente el primer objetivo por la métrica principal
             if isinstance(objectives, list) and objectives:
-                self.train_params['objectives'][0] = main_metric
-                self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
+                objectives[0] = main_metric
             else:
-                self.train_params['objectives'] = [main_metric]
-                
+                # Si no había lista o estaba vacía, inicializa con la principal
+                objectives = [main_metric]
+            self.train_params['objectives'] = objectives
+            self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
         self.metric_names = self.train_params['objectives']
         
         #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
@@ -160,7 +162,6 @@ class EvalPopulation(object):
             
     def run_individuals(self, generation, train_params, fn_dict, individuals_thread, gpu_device, queue: mp.Queue):
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
-        metric_names = train_params.get('objectives', [])
         for original_idx, thread_id, decoded_net, decoded_params  in individuals_thread:
             id_str = f"{generation}_{decoded_params.get('candidate_id', original_idx)}"
             try:
