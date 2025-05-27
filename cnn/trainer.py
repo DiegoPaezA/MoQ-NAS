@@ -99,6 +99,7 @@ class BaseTrainer:
         self.device = torch.device(params['device'])
 
         self.scaler = GradScaler(self.device.type, enabled=self.params.get('mixed_precision', False))
+        self.no_improve_count = 0
         self.best_accuracy = 0.0
         self.best_validation_loss = float('inf')
         self.best_epoch = 0
@@ -384,7 +385,7 @@ class BaseTrainer:
         Computes the multi-objective fitness values for a neural architecture search process.
         This method calculates two fitness metrics:
         1. A scalarized multi-objective fitness value using the specified base metric (accuracy or loss),
-           total number of parameters, and CUDA inference time.
+            total number of parameters, and CUDA inference time.
         2. A validation loss-based fitness value, scaled to a percentage.
         Args:
             total_params (int): The total number of parameters in the model.
@@ -452,6 +453,9 @@ class BaseTrainer:
     def train(self, debug=False):
         max_epochs = self.params['max_epochs']
         epochs_to_eval = self.params['epochs_to_eval']
+        patience = self.params.get('patience', max_epochs)
+        min_delta = self.params.get('min_delta', 0.0)  # smallest change to count as “improvement”
+
         start_eval_epoch = max_epochs - epochs_to_eval
         training_losses, training_accuracies = [], []
         validation_losses, validation_accuracies = [], []
@@ -472,7 +476,8 @@ class BaseTrainer:
             if self.should_evaluate(epoch, start_eval_epoch):
                 val_loss, val_acc = self.evaluate(self.val_loader)
                 validation_losses.append(val_loss)
-                validation_accuracies.append(val_acc)                
+                validation_accuracies.append(val_acc)
+                                
                 if val_acc > self.best_accuracy:
                     self.best_accuracy = val_acc
                     self.best_epoch = epoch
