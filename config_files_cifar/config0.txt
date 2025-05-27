@@ -2,7 +2,7 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 300
+    max_generations: 3
     max_num_nodes: 20
     num_quantum_ind: 5
     penalize_number: 3
@@ -44,7 +44,6 @@ train:
     fitness_metric: best_loss
     mo_metric_base: loss
     mixed_precision: True
-    available_gpus: [0, 1] # gpu0, gpu1, gpu2 [0, 1, 2]
     device: cuda:0
 
     # Dataset
@@ -67,3 +66,8 @@ train:
     # Network structure Configuration
     network_config: default
     backbone_name: mobilenet_v3_small
+
+    # Multi-objective parameters
+    multi_objective: True
+    num_objectives: 3
+    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
