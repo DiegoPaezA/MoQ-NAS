@@ -41,9 +41,10 @@ def main(**args):
                                                 log_level=config.train_spec['log_level'])
     
     ga_cnn = ga.GA(eval_pop, config.train_spec['experiment_path'],
-                        log_file=config.files_spec['log_file'],
-                        log_level=config.train_spec['log_level'],
-                        data_file=config.files_spec['data_file'])
+                    objectives=config.train_spec['objectives'],
+                    log_file=config.files_spec['log_file'],
+                    log_level=config.train_spec['log_level'],
+                    data_file=config.files_spec['data_file'])
 
     # if fn_list not passed on CLI, fall back to config
     if args.get('fn_list') is None:
