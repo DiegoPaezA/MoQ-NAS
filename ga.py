@@ -28,7 +28,7 @@ class GA(object):
         evaluated: Cache for previously evaluated individuals.
         eval_history: History of evaluations for each individual.
     """
-    def __init__(self, eval_func, experiment_path, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
         """
         Initialize the GA evolution.
 
@@ -72,6 +72,7 @@ class GA(object):
         self.eval_func = eval_func
         self.experiment_path = experiment_path
         self.data_file = data_file
+        self.objectives = objectives
         # Initialize the cache for evaluated individuals.
         cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
         self.evaluated = load_cache(cache_file)
@@ -230,8 +231,12 @@ class GA(object):
 
         # 2) Train all scheduled individuals in one batch
         if indices_to_evaluate:
-            raw_vals = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
-            new_vals = raw_vals[:,0]
+            results = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
+            metric_key = self.objectives[0] # for now, just use the first objective
+            new_vals = np.array([
+                results[idx][metric_key]
+                for idx in range(len(eval_net))
+            ])
             for i, idx in enumerate(indices_to_evaluate):
                 key = tuple(self.population[idx].tolist())
                 raw = new_vals[i]
