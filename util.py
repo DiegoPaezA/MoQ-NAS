@@ -16,7 +16,9 @@ import torchvision.datasets
 from torchvision.transforms import ToTensor
 import medmnist
 from medmnist import INFO
-from typing import Dict
+from typing import Dict, List, Optional
+
+import shutil
 
 import gc
 import torch
@@ -291,40 +293,49 @@ def check_files(exp_path):
         exp_path: (str) path to the experiment folder.
     """
     if not os.path.exists(exp_path):
-        raise OSError('User must provide a valid \"--experiment_path\" to continue '
-                    'evolution or to retrain a model.')
-    experiment_folders = [f.name for f in os.scandir(exp_path) if f.is_dir()]
-    # Keep only those starting with a digit
-    digit_folders = [name for name in experiment_folders if name and name[0].isdigit()]
-    if not digit_folders:
-        raise ValueError("No experiment folders starting with a digit found in: " + exp_path)
-    # Define key to sort by numeric parts
-    def numeric_key(s):
-        parts = s.split('_')
-        return tuple(int(p) for p in parts)
+        raise OSError('User must provide a valid "--experiment_path" to continue '
+                        'evolution or to retrain a model.')
 
-    # Pick the smallest one numerically
-    best_name = min(digit_folders, key=numeric_key)
-    best_result_folder = os.path.join(exp_path, best_name)
-
-    # Now you can build the path to your params file
-    file_path = os.path.join(best_result_folder, 'training_params.txt')
-
-    if os.path.exists(file_path):
-        if os.stat(file_path).st_size == 0:
-            raise OSError('User must provide an \"--experiment_path\" with a valid data file to '
-                        'continue evolution or to retrain a model.')
+    # 1. If there’s a symlink named "best_so_far", use its target
+    best_link = os.path.join(exp_path, 'best_so_far')
+    if os.path.islink(best_link):
+        target = os.readlink(best_link)
+        if os.path.isdir(target):
+            best_result_folder = target
+        else:
+            raise ValueError(f'"best_so_far" symlink does not point to a directory: {target}')
     else:
+        # 2. Otherwise, find subdirectories whose names start with a digit
+        experiment_folders = [f.name for f in os.scandir(exp_path) if f.is_dir()]
+        digit_folders = [name for name in experiment_folders if name and name[0].isdigit()]
+        if not digit_folders:
+            raise ValueError(f'No experiment folders starting with a digit found in: {exp_path}')
+
+        # 3. Define numeric sort key (split on '_' and convert digit parts)
+        def numeric_key(s):
+            parts = s.split('_')
+            return tuple(int(p) for p in parts if p.isdigit())
+
+        best_name = min(digit_folders, key=numeric_key)
+        best_result_folder = os.path.join(exp_path, best_name)
+
+    # 4. Validate training_params.txt inside the chosen folder
+    params_file = os.path.join(best_result_folder, 'training_params.txt')
+    if not os.path.exists(params_file):
         raise OSError('training_params.txt not found!')
+    if os.stat(params_file).st_size == 0:
+        raise OSError('User must provide an "--experiment_path" with a valid data file to '
+                        'continue evolution or to retrain a model.')
 
-    file_path = os.path.join(exp_path, 'log_params_evolution.txt')
-
-    if os.path.exists(file_path):
-        if os.stat(file_path).st_size == 0:
-            raise OSError('User must provide an \"--experiment_path\" with a valid config_file '
-                        'to continue evolution or to retrain a model.')
-    else:
+    # 5. Validate log_params_evolution.txt at the root of exp_path
+    log_file = os.path.join(exp_path, 'log_params_evolution.txt')
+    if not os.path.exists(log_file):
         raise OSError('log_params_evolution.txt not found!')
+    if os.stat(log_file).st_size == 0:
+        raise OSError('User must provide an "--experiment_path" with a valid config_file '
+                        'to continue evolution or to retrain a model.')
+
+    return best_result_folder
     
 def init_log(log_level, name, file_path=None):
     """ Initialize a logging.Logger with level *log_level* and name *name*.
@@ -381,9 +392,15 @@ def load_evolved_data(experiment_path: str):
         Note: This method assumes a specific folder and file structure for evolved data.
         """
 
-        experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
-        best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
-        best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+        best_so_far_link = os.path.join(experiment_path, 'best_so_far')
+        
+        if os.path.islink(best_so_far_link):
+            best_result_folder = os.readlink(best_so_far_link)
+        else:
+            experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
+            best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
+            best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+            
         with open(os.path.join(best_result_folder, 'training_params.txt'), 'r') as file:
                 best_individual_info = yaml.safe_load(file)
         net_list = best_individual_info.get('net_list', [])
@@ -667,3 +684,99 @@ def load_cache(file_path: str) -> Dict:
         print(f"Cache backup file {file_path} not found. Starting with empty cache.")
         data = {}
     return data
+
+
+def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
+                        results_subdir: str = "results",archive_subdir: str = "archive",
+                        link_name: str = "best_so_far",logger: Optional[logging.Logger] = None) -> None:
+    """
+    Moves temp folders from
+        <experiment_path>/<results_subdir>/gen_<generation>/<id>
+    into
+        <experiment_path>/<archive_subdir>/
+    Deletes any archived folder not in keep_ids,
+    updates a symlink
+        <experiment_path>/<link_name>
+    to point at the first kept folder,
+    and finally deletes the temp gen_<generation> directory.
+
+    Only the first time a given keep_id is seen in the results folder
+    will the archive be updated and the best_so_far link be re-pointed.
+    Subsequent calls with the same keep_ids will simply delete the temp
+    results folder without pruning or relinking.
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    base = experiment_path
+    results_dir = os.path.join(base, results_subdir, f"gen_{generation}")
+    archive_dir = os.path.join(base, archive_subdir)
+    os.makedirs(archive_dir, exist_ok=True)
+
+    # If no temp results folder, skip everything
+    if not os.path.isdir(results_dir):
+        logger.warning(f"prune_and_archive: no temp folder at {results_dir}")
+        return
+
+    # 1) Move any new keep_ids out of results_dir → archive_dir
+    moved_any = False
+    for kid in keep_ids:
+        src = os.path.join(results_dir, kid)
+        dst = os.path.join(archive_dir, kid)
+        if os.path.isdir(src) and not os.path.isdir(dst):
+            try:
+                shutil.move(src, dst)
+                moved_any = True
+                logger.debug(f"Archived {src} → {dst}")
+            except Exception as e:
+                logger.warning(f"Failed to move {src} → {dst}: {e}")
+        else:
+            # either wasn't in results (already archived) or already exists
+            logger.debug(f"Skipping move for {kid}: "
+                        f"{'not in results' if not os.path.isdir(src) else 'already in archive'}")
+
+    # always delete the temp results_dir
+    try:
+        shutil.rmtree(results_dir)
+        logger.debug(f"Removed temp dir {results_dir}")
+    except Exception as e:
+        logger.warning(f"Could not remove temp dir {results_dir}: {e}")
+
+    # if nothing new was moved, we stop here
+    if not moved_any:
+        logger.info("No new winners found in this generation; archive and symlink unchanged.")
+        return
+
+    # 2) Remove any folder in archive_dir not in keep_ids
+    for folder in os.listdir(archive_dir):
+        if folder not in keep_ids:
+            path = os.path.join(archive_dir, folder)
+            if os.path.isdir(path):
+                try:
+                    shutil.rmtree(path)
+                    logger.debug(f"Pruned {path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove {path}: {e}")
+
+    # 3) Update best_so_far symlink to the *first* keep_id
+    if not keep_ids:
+        logger.error("prune_and_archive: keep_ids empty, no best to link")
+        return
+
+    best = keep_ids[0]
+    target = os.path.join(archive_dir, best)
+    linkpath = os.path.join(base, link_name)
+
+    # Remove any old link or file
+    try:
+        if os.path.islink(linkpath) or os.path.exists(linkpath):
+            os.unlink(linkpath)
+    except Exception as e:
+        logger.warning(f"Could not remove old link {linkpath}: {e}")
+
+    # Create new symlink
+    try:
+        os.symlink(target, linkpath)
+        logger.info(f"Updated {link_name} → {target}")
+    except Exception as e:
+        logger.error(f"Failed to create symlink {linkpath} → {target}: {e}")

@@ -256,7 +256,15 @@ class GenericDataLoader:
       
       num_train = len(full_dataset)
       
-      # split the dataset into train and validation
+      # check if limit_data is boolean, if is str convert to boolean
+      if isinstance(self.params['limit_data'], str):
+        if self.params['limit_data'].lower() == 'true':
+          self.params['limit_data'] = True
+        elif self.params['limit_data'].lower() == 'false':
+          self.params['limit_data'] = False
+        else:
+          raise ValueError(f"Invalid value for limit_data: {self.params['limit_data']}. It should be either 'true' or 'false'.")
+
       if self.params['limit_data'] and self.params['limit_data_value'] < num_train:
         train_samples = (int(self.train_split * self.params['limit_data_value'])) 
         val_samples = (int(self.params['limit_data_value'] - train_samples))

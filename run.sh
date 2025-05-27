@@ -1,18 +1,18 @@
 #!/bin/bash
-dataset="tissuemnist" # Change this to the dataset you want to run: "pathmnist", "octmnist", "tissuemnist", "organamnist"
-exp_path_base="experiment_${dataset}_backbone"
-config_file="config_files_med"
+dataset="cifar10" # Change this to the dataset you want to run: "pathmnist", "octmnist", "tissuemnist", "organamnist"
+exp_path_base="experiment_v3_${dataset}"
+config_file="config_files_cifar"
 fitness_metric="best_accuracy"
 data_path="${dataset}_data"
 log_level="INFO"
-network_config="backbone"
-backbone_name="mobilenet_v3_large"
+network_config="default"
+backbone_name="resnet18"
 
 dataset_sample_size=10000
 
 configs=("config1.txt")
-exps=("exp1")
-cuda_devices=("1")
+exps=("exp3")
+cuda_devices=("0,1")
 
 # Loop over the length of the configs array
 for ((j=0; j<${#configs[@]}; j++)); do
@@ -22,7 +22,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
     echo "Running evolution experiment with $config"
 
-    for ((i=1; i<=3; i++)); do # Change the range to the number of repeats
+    for ((i=2; i<=3; i++)); do # Change the range to the number of repeats
         exp_path="${exp_path_base}/${exp}_repeat_$i"
 
         CUDA_VISIBLE_DEVICES="$cuda_device" python run_evolution.py \

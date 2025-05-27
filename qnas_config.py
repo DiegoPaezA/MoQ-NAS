@@ -4,6 +4,7 @@
     - Q-NAS configuration.
 """
 
+
 import inspect
 import os
 from collections import OrderedDict
@@ -16,16 +17,16 @@ from chromosome import QChromosomeNetwork, QChromosomeParams
 from cnn import model, input
 from util import load_yaml, load_pkl, natural_key
 
-
 class ConfigParameters(object):
+    """Handles loading and validation of Q-NAS and training configurations."""
     def __init__(self, args, phase):
-        """ Initialize ConfigParameters.
+        """
+        Initialize ConfigParameters.
 
         Args:
-            args: dictionary containing the command-line arguments.
-            phase: (str) one of 'evolution', 'continue_evolution' or 'retrain'.
+            args: dict of command-line arguments.
+            phase: one of 'evolution', 'continue_evolution', or 'retrain'.
         """
-
         self.phase = phase
         self.args = args
         self.QNAS_spec = {}
@@ -123,6 +124,8 @@ class ConfigParameters(object):
                                 ('network_config', str),
                                 ('save_checkpoints_epochs', int),
                                 ('save_summary_epochs', float),
+                                ('multi_objective', bool),
+                                ('objectives', list),
                                 ('threads', int)]}
 
         for config in vars_dict.keys():
@@ -142,47 +145,43 @@ class ConfigParameters(object):
 
 
     def _get_evolution_params(self):
-        """ Get specific parameters for the evolution phase. """
-
+        """Get specific parameters for the evolution phase."""
         config_file = load_yaml(self.args['config_file'])
+        self._check_vars(config_file)
 
-        self._check_vars(config_file)  # Checking if config file contains valid information.
-
+        # Base specs from YAML
         self.train_spec = dict(config_file['train'])
-        self.QNAS_spec = dict(config_file['QNAS'])
+        self.QNAS_spec  = dict(config_file['QNAS'])
         self.files_spec['config_file'] = self.args['config_file']
 
-        # Get the parameters lower and upper limits
+        # QNAS-specific overrides
         ranges = self._get_ranges(config_file)
-        self.QNAS_spec['params_ranges'] = OrderedDict(sorted(ranges.items()))
-        self.QNAS_spec['early_stopping'] = self.args['early_stopping']
-        self.QNAS_spec['en_pop_crossover'] = self.args['en_pop_crossover']
-
+        self.QNAS_spec['params_ranges']    = OrderedDict(sorted(ranges.items()))
+        self.QNAS_spec['early_stopping']   = self.args.get('early_stopping')
+        self.QNAS_spec['en_pop_crossover'] = self.args.get('en_pop_crossover')
         self._get_fn_spec()
 
+        # Only override these specific training parameters if provided via args
+        train_override_keys = [
+            'fitness_metric', 'optimizer', 'data_augmentation',
+            'network_config', 'backbone_name', 'save_checkpoints_epochs',
+            'dataset', 'data_path', 'limit_data_value',
+            'multi_objective', 'objectives'
+        ]
+        for key in train_override_keys:
+            val = self.args.get(key, None)
+            if val is not None:
+                self.train_spec[key] = val
+
+        # Always set the experiment path
         self.train_spec['experiment_path'] = self.args['experiment_path']
-        self.train_spec['fitness_metric'] = self.args['fitness_metric']
-        self.train_spec['optimizer'] = self.args['optimizer']
-        self.train_spec['data_augmentation'] = self.args['data_augmentation']
-        self.train_spec['network_config'] = self.args['network_config']
-        self.train_spec['backbone_name'] = self.args['backbone_name']
-        self.train_spec['save_checkpoints_epochs'] = self.args['save_checkpoints_epochs']
-        self.train_spec['dataset'] = self.args['dataset']
-        self.train_spec['data_path'] = self.args['data_path']
-        self.train_spec['limit_data_value'] = self.args['limit_data_value']
-        
-        
 
     def _get_fn_spec(self):
-        """ Organize the function specifications in *self.fn_list*, *self.fn_dict* and
-            *self.QNAS_spec*.
-        """
-
-        self.QNAS_spec['fn_list'] = list(self.QNAS_spec['function_dict'].keys())
-        self.QNAS_spec['fn_list'].sort(key=natural_key)
-        self.fn_dict = self.QNAS_spec['function_dict']
-        del self.QNAS_spec['function_dict']
-
+        """Organize function specifications for QNAS."""
+        self.QNAS_spec['fn_list'] = sorted(
+            self.QNAS_spec['function_dict'].keys(), key=natural_key
+        )
+        self.fn_dict = self.QNAS_spec.pop('function_dict')
         self.QNAS_spec['initial_probs'] = []
         self.QNAS_spec['reducing_fns_list'] = []
 
@@ -359,10 +358,16 @@ class ConfigParameters(object):
 
         Note: This method assumes a specific folder and file structure for evolved data.
         """
-
-        experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
-        best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
-        best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+        
+        best_so_far_link = os.path.join(experiment_path, 'best_so_far')
+        
+        if os.path.islink(best_so_far_link):
+            best_result_folder = os.readlink(best_so_far_link)
+        else:
+            experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
+            best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
+            best_result_folder = os.path.join(experiment_path, best_result_folder[0])
+            
         with open(os.path.join(best_result_folder, 'training_params.txt'), 'r') as file:
                 best_individual_info = yaml.safe_load(file)
         net_list = best_individual_info.get('net_list', [])
@@ -370,15 +375,15 @@ class ConfigParameters(object):
         individual = best_individual_info.get('individual', 0)
         backbone_name = best_individual_info.get('backbone_name', None)
         backbone_percentage = best_individual_info.get('backbone_percentage', 0)
-        
+            
         if generation == 0 and individual == 0: # only for old format
                 matches = re.search(r'(\d+)_(\d+)$', best_result_folder)
                 generation = int(matches.group(1))
                 individual = int(matches.group(2))
 
         self.evolved_params = {'params': None, 'net': net_list, 'generation': generation, 
-                               'individual': individual, 'backbone_name':backbone_name, 
-                               'backbone_percentage':backbone_percentage}
+                                'individual': individual, 'backbone_name':backbone_name, 
+                                'backbone_percentage':backbone_percentage}
 
     def override_train_params(self, new_params_dict):
         """ Override *self.train_spec* parameters with the ones in *new_params_dict*. Update

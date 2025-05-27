@@ -14,16 +14,16 @@ backbone_name="resnet18" # only used if network_config is  backbone
 population_size=20
 num_generations=300
 max_num_nodes=20
-crossover_rate=0.4
-mutation_rate=0.1
+crossover_rate=0.5
+mutation_rate=0.2
 elitism=true
 patience=60
 
 # —— sample size & repeats —— 
 dataset_sample_size=10000
-configs=("config0.txt")     # list your config files here
-exps=("exp1")               # corresponding experiment names
-cuda_devices=("0")          # GPU IDs for each run
+configs=("config2.txt")     # list your config files here
+exps=("exp2")               # corresponding experiment names
+cuda_devices=("0,1")          # GPU IDs for each run
 
 # —— Loop over configs & repeats —— 
 for ((j=0; j<${#configs[@]}; j++)); do
