@@ -22,7 +22,7 @@ patience=60
 
 # —— sample size & repeats —— 
 dataset_sample_size=10000
-configs=("config1.txt")     # list your config files here
+configs=("config0.txt")     # list your config files here
 exps=("exp1")               # corresponding experiment names
 cuda_devices=("0,1")          # GPU IDs for each run
 
