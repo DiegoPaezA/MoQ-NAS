@@ -282,7 +282,7 @@ class NSGA2(GA):
         pop0, fit0 = all_pop[idx0], all_fit[idx0]
         ids0 = [all_ids[i] for i in idx0]
         cd = self.crowding_distance(fit0, list(range(len(pop0))))
-        mask = np.isinf(cd) | (cd > 0)
+        mask = np.isinf(cd) | (cd > 0) #
         self.pareto_global_population = pop0[mask]
         self.pareto_global_fitnesses = fit0[mask]
         self.pareto_global_ids = [ids0[i] for i, keep in enumerate(mask) if keep]
@@ -329,7 +329,6 @@ class NSGA2(GA):
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
             
         self.logger.info(f"Generation {self.current_gen} Pareto front size: {len(self.pareto_global_population)}")
-        self.logger.info(f"Generation {self.current_gen} Pareto front fitnesses: {self.pareto_global_fitnesses}")
 
         self.current_gen += 1
 
@@ -362,8 +361,8 @@ class NSGA2(GA):
                 combined_pop, combined_fits)
             self.go_next_gen()
             pop_old, fits_old = self.population.copy(), self.fitnesses.copy()
-            if self.check_early_stopping():
-                break
+            if self.early_stopping and self.check_early_stopping():break
+            
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
         minutes, _ = divmod(rem, 60)
