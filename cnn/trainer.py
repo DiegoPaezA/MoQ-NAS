@@ -480,13 +480,13 @@ class BaseTrainer:
                                 
                 if val_acc > self.best_accuracy:
                     self.best_accuracy = val_acc
-                    self.best_epoch = epoch
-                    if self.params.get('phase') == 'retrain':
-                        torch.save(self.model.state_dict(), self.best_model_path)
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
                     
                 if val_loss < self.best_validation_loss:
                     self.best_validation_loss = val_loss
+                    self.best_epoch = epoch
+                    if self.params.get('phase') == 'retrain':
+                        torch.save(self.model.state_dict(), self.best_model_path)
                 
                 if self.params.get('phase') == 'retrain':
                     self.update_scheduler(scheduler, metric=val_loss)
