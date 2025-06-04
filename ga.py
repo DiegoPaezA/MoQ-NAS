@@ -68,6 +68,7 @@ class GA(object):
         # Early stopping parameters
         self.patience = None
         self.early_stopping_counter = 0
+        self.early_stopping = None
 
         self.eval_func = eval_func
         self.experiment_path = experiment_path
@@ -82,7 +83,7 @@ class GA(object):
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
     
     def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list, params_ranges,
-                    crossover_rate, mutation_rate, elitism=False, patience=60):
+                    crossover_rate, mutation_rate, early_stopping, elitism=False, patience=60):
         """
         Initialize GA parameters and create the initial random population.
 
@@ -103,6 +104,7 @@ class GA(object):
         self.mutation_rate = mutation_rate
         self.elitism = elitism
         self.patience = patience
+        self.early_stopping = early_stopping
         self.fn_list = fn_list  # Store the list of function names
         self.params_ranges  = params_ranges
 
@@ -541,8 +543,7 @@ class GA(object):
             self.evaluate_population()
             self.generate_offspring()
             self.go_next_gen()
-            if self.check_early_stopping():
-                break
+            if self.early_stopping and self.check_early_stopping():break
         
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
