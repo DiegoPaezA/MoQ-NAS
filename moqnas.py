@@ -166,8 +166,8 @@ class MOQNAS(QNAS):
             fits[:, 0] -= penalties
 
         # 5) Store raw_fits for logging / saving
-        self.raw_fits = raw_fits.copy()
-        self.fits = fits.copy()
+        self.raw_fits = raw_fits
+        self.fits = fits
 
         return fits
 
@@ -234,37 +234,68 @@ class MOQNAS(QNAS):
 
     def crowding_distance(self, fitnesses: np.ndarray, front: list) -> np.ndarray:
         """
-        Compute the crowding distance for each individual in a given Pareto front.
+        Compute crowding distances for individuals in `front` (a Pareto front),
+        using a fully vectorized approach (no inner Python loops over objectives).
 
         Args:
-            fitnesses (np.ndarray): shape=(N_all, n_obj)
-            front (list): list of indices into fitnesses for the current front.
+            fitnesses (np.ndarray): shape=(N_all, M) combined fitness array.
+            front (list[int]): indices of `fitnesses` belonging to the current front.
 
         Returns:
-            distances (np.ndarray): shape=(len(front),) of crowding distances.
+            distances (np.ndarray): shape=(len(front),), crowding distances. 
                                     Boundary points get +inf.
         """
-        f = fitnesses[front]
+        # Extract only the rows in this front
+        f = fitnesses[front]        # shape = (F, M)
         F, M = f.shape
-        distances = np.zeros(F, dtype=float)
-        if F <= 2:
-            return np.array([np.inf] * F)
 
-        # For each objective dimension j
-        sorted_idx = np.argsort(f, axis=0)
+        # If 0, 1 or 2 individuals, all get infinite distance
+        if F <= 2:
+            return np.full(F, np.inf, dtype=float)
+
+        # 1) Sort each column j in ascending order, capture sorted indices
+        sorted_idx = np.argsort(f, axis=0)   # shape = (F, M)
+
+        # 2) Initialize distances to zero, then set boundaries to inf
+        distances = np.zeros(F, dtype=float)
         distances[sorted_idx[0, :]] = np.inf
         distances[sorted_idx[-1, :]] = np.inf
-        f_min = f[sorted_idx[0, :], np.arange(M)]
-        f_max = f[sorted_idx[-1, :], np.arange(M)]
-        denom = f_max - f_min
 
-        for j in range(M):
-            if denom[j] == 0:
-                continue
-            prev_vals = f[sorted_idx[:-2, j], j]
-            next_vals = f[sorted_idx[2:, j], j]
-            # accumulate distance; note sorted_idx[1:-1, j] are the interior points
-            distances[sorted_idx[1:-1, j]] += (next_vals - prev_vals) / denom[j]
+        # 3) For each objective j, compute denom[j] = f_max - f_min
+        f_min = f[sorted_idx[0, :], np.arange(M)]    # shape = (M,)
+        f_max = f[sorted_idx[-1, :], np.arange(M)]   # shape = (M,)
+        denom = f_max - f_min                         # shape = (M,)
+
+        # 4) Build a shifted version of f_sorted to get (next − prev) for interior points
+        #    We first reorder f according to sorted_idx along axis=0
+        f_sorted = np.take_along_axis(f, sorted_idx, axis=0)  # shape = (F, M)
+
+        # 5) Compute difference between values two steps apart for interior points:
+        #    prev_vals = f_sorted[0:F-2, j], next_vals = f_sorted[2:F, j]
+        #    So diff_all = (f_sorted[2:] - f_sorted[:-2])  → shape = (F-2, M)
+        diff_all = f_sorted[2:, :] - f_sorted[:-2, :]  # shape = (F-2, M)
+
+        # 6) Normalize by denom (broadcasting) → shape = (F-2, M)
+        #    If denom[j] == 0, we avoid dividing that column by zero by masking it out:
+        zero_denom = (denom == 0)
+        denom_safe = denom.copy()
+        denom_safe[zero_denom] = 1.0  # avoid division by zero; those columns will be zeroed out next
+
+        normalized_diff = diff_all / denom_safe[np.newaxis, :]  # shape = (F-2, M)
+        normalized_diff[:, zero_denom] = 0.0  # zero out any columns where denom was zero
+
+        # 7) Sum normalized_diff across objectives → shape = (F-2,)
+        sums = np.sum(normalized_diff, axis=1)  # shape = (F-2,)
+
+        # 8) Now add `sums[j]` to distances at index `sorted_idx[j+1, :]` for each objective j:
+        #    Because sorted_idx[1:-1, k] gives the positions (in `f`) of interior points
+        interior_idx = sorted_idx[1:-1, :]  # shape = (F-2, M)
+        # We want to add `sums[i]` to distances at all `interior_idx[i, :]` (for each objective).
+        # We can vectorize by flattening:
+        flat_positions = interior_idx.reshape(-1)          # length = (F-2)*M
+        flat_sums = np.repeat(sums, M)                    # length = (F-2)*M
+        # But only add each `sums[i]` to each of the M positions for objective i
+        np.add.at(distances, flat_positions, flat_sums)
 
         return distances
 
@@ -274,12 +305,16 @@ class MOQNAS(QNAS):
         """
         Perform NSGA-II selection on a combined population of size (2*pop_size).
         Ranks by Pareto fronts, then uses crowding distance to fill up to pop_size.
+        Returns (selected_pop, selected_fits, selected_indices), where
+        selected_indices is a 1D int array of length pop_size giving the row-indices
+        in `pop` that were chosen.
         """
         pop_size = self.pop_size
         fronts = self.fast_nondominated_sort(fits)
 
         new_pop = np.zeros((pop_size, pop.shape[1]), dtype=pop.dtype)
         new_fits = np.zeros((pop_size, fits.shape[1]), dtype=float)
+        selected_idx = []  # <-- collect indices here
         count = 0
 
         for front in fronts:
@@ -292,6 +327,7 @@ class MOQNAS(QNAS):
                 # Tomamos todo el frente completo
                 new_pop[count : count + front_size] = pop[front]
                 new_fits[count : count + front_size] = fits[front]
+                selected_idx.extend(front)
                 count += front_size
             else:
                 # Quedan pocos huecos (rem) y el frente es más grande
@@ -304,10 +340,11 @@ class MOQNAS(QNAS):
                     chosen = [front[i] for i in top_indices]
                     new_pop[count : count + rem] = pop[chosen]
                     new_fits[count : count + rem] = fits[chosen]
+                    selected_idx.extend(chosen)
                     count = pop_size
                 break  # Después de llenar con 'rem' individuos, rompemos el bucle
-
-        return new_pop, new_fits
+        selected_idx = np.array(selected_idx, dtype=int)
+        return new_pop, new_fits, selected_idx
 
     def reproduce(self) -> np.ndarray:
         """
@@ -365,72 +402,118 @@ class MOQNAS(QNAS):
 
         return np.array(new_pop, dtype=parents.dtype)
     
-    def update_global_pareto_front(self, combined_pop: np.ndarray, combined_fits: np.ndarray, combined_ids: list):
+    def update_global_pareto_front(self,pop_curr: np.ndarray,fits_curr: np.ndarray,ids_curr: list[str],):
         """
-        Update the global Pareto buffer by merging existing archive with current combined population.
+        Incrementally update self.pareto_global_population and self.pareto_global_fitnesses
+        by merging each (pop_curr[i], fits_curr[i], ids_curr[i]) into the existing archive.
 
-        Steps:
-            1. If archive is empty, set archive = combined_pop, combined_fits, combined_ids.
-            2. Else, vertically stack archive + combined.
-            3. Perform fast_nondominated_sort on merged fitnesses.
-            4. Extract front0 indices; apply crowding to that front to filter extremes.
-            5. Store the filtered front0 as new global archive, update pareto_global_ids.
-        
         Args:
-            combined_pop (np.ndarray): shape=(N_all, net_dim) merged parent+offspring networks.
-            combined_fits (np.ndarray): shape=(N_all, n_obj) merged fitness array.
-            combined_ids (list of str): length N_all, IDs like "gen_candidateidx".
-        
-        Returns:
-            None (updates self.pareto_global_* attributes in place).
+            pop_curr (np.ndarray): shape=(N_front, net_dim) current‐front networks.
+            fits_curr (np.ndarray): shape=(N_front, n_obj) their fitness vectors.
+            ids_curr (list of str): length N_front, each like "gen_idx" for logging/cleanup.
         """
-        # 1) Merge with existing archive if any
+        # If archive is empty, just set it to the current front
         if self.pareto_global_population is None:
-            all_pop = combined_pop.copy()
-            all_fits = combined_fits.copy()
-            all_ids = combined_ids.copy()
+            self.pareto_global_population = pop_curr.copy()
+            self.pareto_global_fitnesses = fits_curr.copy()
+            self.pareto_global_ids = ids_curr.copy()
+            return
+
+        # Otherwise, iterate over each new candidate and update archive
+        new_archive_pop = []
+        new_archive_fits = []
+        new_archive_ids  = []
+
+        # Start from the old archive
+        old_pop = self.pareto_global_population
+        old_fits = self.pareto_global_fitnesses
+        old_ids  = self.pareto_global_ids
+
+        # We'll mark which old‐archive members survive after seeing new candidates
+        keep_old = [True] * len(old_pop)
+
+        # 1) For each new candidate, see if it's dominated by ANY old archive member.
+        #    If so, skip it. Otherwise, it belongs in the updated archive, and remove
+        #    any old member dominated by this new candidate.
+        for i in range(pop_curr.shape[0]):
+            x_new = pop_curr[i]
+            f_new = fits_curr[i]
+            id_new = ids_curr[i]
+
+            dominated_by_old = False
+            to_remove = []
+            for j, f_old in enumerate(old_fits):
+                # If old_f dominates new candidate, discard new
+                if self.dominates(f_old, f_new):
+                    dominated_by_old = True
+                    break
+                # If new candidate dominates old, mark old for removal
+                if self.dominates(f_new, f_old):
+                    to_remove.append(j)
+
+            if dominated_by_old:
+                # Skip adding this new candidate
+                continue
+
+            # Otherwise, we include x_new in the archive
+            new_archive_pop.append(x_new)
+            new_archive_fits.append(f_new)
+            new_archive_ids.append(id_new)
+
+            # Remove dominated old members
+            for idx in sorted(to_remove, reverse=True):
+                keep_old[idx] = False
+
+        # 2) Now collect surviving old members
+        for j, keep in enumerate(keep_old):
+            if keep:
+                new_archive_pop.append(old_pop[j])
+                new_archive_fits.append(old_fits[j])
+                new_archive_ids.append(old_ids[j])
+
+        # 3) Convert lists back to arrays
+        if new_archive_pop:
+            self.pareto_global_population = np.vstack(new_archive_pop)
+            self.pareto_global_fitnesses = np.vstack(new_archive_fits)
+            self.pareto_global_ids = new_archive_ids.copy()
         else:
-            all_pop = np.vstack([self.pareto_global_population, combined_pop])
-            all_fits = np.vstack([self.pareto_global_fitnesses, combined_fits])
-            all_ids = self.pareto_global_ids + combined_ids
+            # If everything got removed somehow, reset to empty
+            self.pareto_global_population = None
+            self.pareto_global_fitnesses = None
+            self.pareto_global_ids = []
 
-        # 2) Fast non‐dominated sort on all_fits
-        fronts = self.fast_nondominated_sort(all_fits)
-        front0 = fronts[0]
-        pop0 = all_pop[front0]
-        fit0 = all_fits[front0]
-        ids0 = [all_ids[i] for i in front0]
-
-        # 3) Compute crowding distance on front0, keep boundary + high‐distance solutions
-        cd = self.crowding_distance(fit0, list(range(len(pop0))))
-        keep_mask = np.isinf(cd) | (cd > 0)
-        self.pareto_global_population = pop0[keep_mask]
-        self.pareto_global_fitnesses = fit0[keep_mask]
-        self.pareto_global_ids = [ids0[i] for i, k in enumerate(keep_mask) if k]
-
-    def record_global_fronts_history(self, fronts_info):
+    def record_global_fronts_history(self):
         """
-        Record all global Pareto fronts into a nested dictionary and persist to disk.
+        Record all Pareto fronts of the current global archive into self.fronts_history,
+        then persist to disk. No arguments needed because we read from
+        self.pareto_global_population, self.pareto_global_fitnesses, and self.pareto_global_ids.
 
-        Args:
-            fronts_info (tuple): (all_pop, all_fits, all_ids, fronts) from update_global_pareto_front
+        If you only care about front‐0 data, you can skip the full sort and just store
+        self.pareto_global_population / self.pareto_global_fitnesses directly.
         """
-        all_pop, all_fits, all_ids, fronts = fronts_info
-        gen_global = {}
-        for level, front in enumerate(fronts, start=1):
-            gen_global[level] = [
-                {
-                    "id": all_ids[i],
-                    **{
-                        self.objectives[j]: float(all_fits[i][j])
-                        for j in range(self.num_objectives)
-                    }
-                }
-                for i in front
-            ]
-        self.fronts_history[self.current_gen] = gen_global
+        # If archive is empty, record an empty history entry
+        if self.pareto_global_population is None or len(self.pareto_global_population) == 0:
+            self.fronts_history[self.current_gen] = {}
+        else:
+            all_pop = self.pareto_global_population
+            all_fits = self.pareto_global_fitnesses
+            all_ids = self.pareto_global_ids
 
-        # Persist to disk
+            # Perform fast nondominated sort on the entire global buffer
+            fronts = self.fast_nondominated_sort(all_fits)
+
+            gen_global = {}
+            for level, front in enumerate(fronts, start=1):
+                gen_global[level] = []
+                for idx in front:
+                    entry = {"id": all_ids[idx]}
+                    for j, obj_name in enumerate(self.objectives[: self.num_objectives]):
+                        entry[obj_name] = float(all_fits[idx][j])
+                    gen_global[level].append(entry)
+
+            self.fronts_history[self.current_gen] = gen_global
+
+        # Save the entire fronts_history dict to disk
         hist_file = os.path.join(self.experiment_path, "pareto_history.pkl")
         with open(hist_file, "wb") as f:
             pickle.dump(self.fronts_history, f)
@@ -446,48 +529,18 @@ class MOQNAS(QNAS):
             4. Delete old model directories, keeping only current global Pareto IDs.
             5. Log a summary line, then increment self.current_gen.
         """
-        # Build combined_pop, combined_fits, combined_ids:
-        # We need to combine existing archive with the current generation’s population.
-        # However, QNAS’s go_next_gen is called only after we assign Pareto survivors into
-        # self.qpop_* .current_pop. Therefore “current population” here refers to self.classical_nets
-        # and self.fits (the first front of the last environmental_selection).
         pop_curr = self.classical_nets
         fits_curr = self.fits
         ids_curr = [f"{self.current_gen}_{i}" for i in range(len(pop_curr))]
 
-        # If no existing archive, combined = current; else merge
-        if self.pareto_global_population is None:
-            all_pop = pop_curr.copy()
-            all_fits = fits_curr.copy()
-            all_ids = ids_curr.copy()
-        else:
-            all_pop = np.vstack([self.pareto_global_population, pop_curr])
-            all_fits = np.vstack([self.pareto_global_fitnesses, fits_curr])
-            all_ids = self.pareto_global_ids + ids_curr
-
-        # Perform fast non‐dominated sort on all_fits
-        fronts = self.fast_nondominated_sort(all_fits)
+        self.update_global_pareto_front(pop_curr, fits_curr, ids_curr)
 
         # Before filtering via crowding, record entire fronts history
-        self.record_global_fronts_history((all_pop, all_fits, all_ids, fronts))
-
-        # Filter front0 by crowding distance
-        front0 = fronts[0]
-        pop0 = all_pop[front0]
-        fit0 = all_fits[front0]
-        ids0 = [all_ids[i] for i in front0]
-        cd = self.crowding_distance(fit0, list(range(len(pop0))))
-        keep_mask = np.isinf(cd) | (cd > 0)
-        self.pareto_global_population = pop0[keep_mask]
-        self.pareto_global_fitnesses = fit0[keep_mask]
-        self.pareto_global_ids = [ids0[i] for i, k in enumerate(keep_mask) if k]
+        self.record_global_fronts_history()
 
         # Delete old model directories, keep only global Pareto IDs
-        delete_old_dirs_v2(
-            self.experiment_path,
-            self.current_gen,
-            keep_ids=self.pareto_global_ids.copy(),
-        )
+        delete_old_dirs_v2(self.experiment_path,self.current_gen,keep_ids=self.pareto_global_ids.copy())
+        
         if self.current_gen == 1:
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
 
@@ -528,6 +581,9 @@ class MOQNAS(QNAS):
         p0_params, p0_nets = self.generate_classical()
         self.classical_params = p0_params
         self.classical_nets = p0_nets
+        
+        self.qpop_params.current_pop = p0_params
+        self.qpop_net.current_pop    = p0_nets
 
         # Evaluate generation 0
         f0 = self.multiobjective_fitness()
@@ -548,6 +604,9 @@ class MOQNAS(QNAS):
             # 2a) Sample children classical population (both params and nets) at once
             children_params, children_nets = self.generate_classical()
 
+            children_params = self.crossover_hyperparams(children_params)
+            children_nets = self.crossover_network(children_nets)
+            
             # 2b) Evaluate children on all objectives
             self.classical_params = children_params
             self.classical_nets = children_nets
@@ -560,18 +619,12 @@ class MOQNAS(QNAS):
             combined_raws = np.vstack([p0_raws, child_raw])       # shape = (2*pop_size, n_obj)
 
             # 2d) NSGA‐II environmental selection
-            next_nets, next_fits = self.environmental_selection(combined_nets, combined_fits)
+            next_nets, next_fits, survivor_idx = self.environmental_selection(combined_nets, combined_fits)
 
             # 2e) Assign survivors
             self.classical_nets = next_nets
             self.fits = next_fits
-
-            # Extract corresponding raw_fits for survivors
-            next_raw = []
-            for net in next_nets:
-                idx = np.where((combined_nets == net).all(axis=1))[0][0]
-                next_raw.append(combined_raws[idx])
-            self.raw_fits = np.array(next_raw)
+            self.raw_fits = combined_raws[survivor_idx]
 
             # 2f) Resample hyperparams for next generation via generate_classical()
             #     (we will overwrite these again at the top of the next loop iteration anyway)
@@ -595,10 +648,10 @@ class MOQNAS(QNAS):
                 break
 
             # 2j) Prepare for next iteration
-            p0_params = self.classical_params.copy()
-            p0_nets = self.classical_nets.copy()
-            f0 = self.fits.copy()
-            p0_raws = self.raw_fits.copy()
+            p0_params = self.classical_params
+            p0_nets = self.classical_nets
+            f0 = self.fits
+            p0_raws = self.raw_fits
 
         # 3) Return final global Pareto archive
         return self.pareto_global_population, self.pareto_global_fitnesses
