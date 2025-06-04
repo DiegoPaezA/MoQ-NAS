@@ -193,9 +193,6 @@ class QNAS(object):
                     (self.qpop_params.current_pop[selected], new_pop_params))
             self.qpop_net.current_pop = np.concatenate(
                     (self.qpop_net.current_pop[selected], new_pop_net))
-        
-        ## TODO: Here we have the the last and new population Multi objective operation
-        
             
         # Order the population based on fitness
         num_classic = self.qpop_params.num_ind * self.qpop_params.repetition
