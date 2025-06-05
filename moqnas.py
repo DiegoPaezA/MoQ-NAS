@@ -369,120 +369,83 @@ class MOQNAS(QNAS):
                 mixed[i] = np.where(mask, parent, child)
         return mixed
 
-    def update_global_pareto_front(self,pop_curr: np.ndarray,fits_curr: np.ndarray,ids_curr: list[str],):
+    def update_global_pareto_front(self):
         """
-        Incrementally update self.pareto_global_population and self.pareto_global_fitnesses
-        by merging each (pop_curr[i], fits_curr[i], ids_curr[i]) into the existing archive.
+        Update the global Pareto buffer by merging the existing archive with the
+        current generation’s population, performing a full non‐dominated sort,
+        and then filtering front 0 by crowding distance.
+
+        Returns:
+            tuple:
+                all_pop (ndarray): stacked [old_archive; current_pop]
+                all_fits (ndarray): stacked [old_archive_fits; current_fits]
+                all_ids (list):    concatenated [old_archive_ids + current_ids]
+                fronts (list of lists): full list of Pareto fronts on all_fits
+        """
+        # Build IDs for each individual in the current classical population
+        curr_ids = [f"{self.current_gen}_{i}" for i in range(len(self.classical_nets))]
+
+        if self.pareto_global_population is None:
+            # If archive is empty, start with current population
+            all_pop = self.classical_nets.copy()
+            all_fits = self.fits.copy()
+            all_ids = curr_ids.copy()
+        else:
+            # Otherwise, stack old archive + current pop
+            all_pop = np.vstack([self.pareto_global_population, self.classical_nets])
+            all_fits = np.vstack([self.pareto_global_fitnesses, self.fits])
+            all_ids = self.pareto_global_ids + curr_ids
+
+        # 1) Full Pareto sort on combined fitnesses
+        fronts = self.fast_nondominated_sort(all_fits)
+        idx0 = fronts[0]
+
+        # 2) Take only front 0 entries
+        pop0 = all_pop[idx0]
+        fit0 = all_fits[idx0]
+        ids0 = [all_ids[i] for i in idx0]
+
+        # 3) Compute crowding distances on front 0
+        cd = self.crowding_distance(fit0, list(range(len(pop0))))
+        # Keep boundary (inf) or any with cd > 0
+        mask = np.isinf(cd) | (cd > 0)
+
+        # 4) Update the archive to only those survivors
+        self.pareto_global_population = pop0[mask]
+        self.pareto_global_fitnesses = fit0[mask]
+        self.pareto_global_ids = [ids0[i] for i, keep in enumerate(mask) if keep]
+
+        return all_pop, all_fits, all_ids, fronts
+
+
+    def record_global_fronts_history(self, fronts_info=None):
+        """
+        Record Pareto fronts into self.fronts_history and persist to disk.
+
+        If fronts_info is provided, it should be a tuple
+        (all_pop, all_fits, all_ids, fronts) representing the combined
+        archive + current population and the full Pareto fronts on them.
+        Otherwise, recompute fronts from self.pareto_global_*.
 
         Args:
-            pop_curr (np.ndarray): shape=(N_front, net_dim) current‐front networks.
-            fits_curr (np.ndarray): shape=(N_front, n_obj) their fitness vectors.
-            ids_curr (list of str): length N_front, each like "gen_idx" for logging/cleanup.
+            fronts_info (tuple, optional):
+                all_pop (ndarray): stacked [old_archive; current_pop]
+                all_fits (ndarray): stacked [old_archive_fits; current_fits]
+                all_ids (list):    [old_archive_ids + current_ids]
+                fronts (list of lists): Pareto fronts on all_fits
         """
-        # If archive is empty, just set it to the current front
-        if self.pareto_global_population is None:
-            self.pareto_global_population = pop_curr.copy()
-            self.pareto_global_fitnesses = fits_curr.copy()
-            self.pareto_global_ids = ids_curr.copy()
-            return
-
-        # Otherwise, iterate over each new candidate and update archive
-        new_archive_pop = []
-        new_archive_fits = []
-        new_archive_ids  = []
-
-        # Start from the old archive
-        old_pop = self.pareto_global_population
-        old_fits = self.pareto_global_fitnesses
-        old_ids  = self.pareto_global_ids
-
-        # We'll mark which old‐archive members survive after seeing new candidates
-        keep_old = [True] * len(old_pop)
-
-        # 1) For each new candidate, see if it's dominated by ANY old archive member.
-        #    If so, skip it. Otherwise, it belongs in the updated archive, and remove
-        #    any old member dominated by this new candidate.
-        for i in range(pop_curr.shape[0]):
-            x_new = pop_curr[i]
-            f_new = fits_curr[i]
-            id_new = ids_curr[i]
-
-            dominated_by_old = False
-            to_remove = []
-            for j, f_old in enumerate(old_fits):
-                # If old_f dominates new candidate, discard new
-                if self.dominates(f_old, f_new):
-                    dominated_by_old = True
-                    break
-                # If new candidate dominates old, mark old for removal
-                if self.dominates(f_new, f_old):
-                    to_remove.append(j)
-
-            if dominated_by_old:
-                # Skip adding this new candidate
-                continue
-
-            # Otherwise, we include x_new in the archive
-            new_archive_pop.append(x_new)
-            new_archive_fits.append(f_new)
-            new_archive_ids.append(id_new)
-
-            # Remove dominated old members
-            for idx in sorted(to_remove, reverse=True):
-                keep_old[idx] = False
-
-        # 2) Now collect surviving old members
-        for j, keep in enumerate(keep_old):
-            if keep:
-                new_archive_pop.append(old_pop[j])
-                new_archive_fits.append(old_fits[j])
-                new_archive_ids.append(old_ids[j])
-
-        # 3) Convert lists back to arrays
-        if new_archive_pop:
-            self.pareto_global_population = np.vstack(new_archive_pop)
-            self.pareto_global_fitnesses = np.vstack(new_archive_fits)
-            self.pareto_global_ids = new_archive_ids.copy()
-        else:
-            # If everything got removed somehow, reset to empty
-            self.pareto_global_population = None
-            self.pareto_global_fitnesses = None
-            self.pareto_global_ids = []
-
-    def record_global_fronts_history(self):
-        """
-        Record all Pareto fronts of the current global archive into self.fronts_history,
-        then persist to disk. No arguments needed because we read from
-        self.pareto_global_population, self.pareto_global_fitnesses, and self.pareto_global_ids.
-
-        If you only care about front‐0 data, you can skip the full sort and just store
-        self.pareto_global_population / self.pareto_global_fitnesses directly.
-        """
-        # If archive is empty, record an empty history entry
-        if self.pareto_global_population is None or len(self.pareto_global_population) == 0:
-            self.fronts_history[self.current_gen] = {}
-        else:
-            all_pop = self.pareto_global_population
-            all_fits = self.pareto_global_fitnesses
-            all_ids = self.pareto_global_ids
-
-            # Perform fast nondominated sort on the entire global buffer
-            fronts = self.fast_nondominated_sort(all_fits)
-
-            gen_global = {}
-            for level, front in enumerate(fronts, start=1):
-                gen_global[level] = []
-                for idx in front:
-                    entry = {"id": all_ids[idx]}
-                    for j, obj_name in enumerate(self.objectives[: self.num_objectives]):
-                        entry[obj_name] = float(all_fits[idx][j])
-                    gen_global[level].append(entry)
-
-            self.fronts_history[self.current_gen] = gen_global
-
-        # Save the entire fronts_history dict to disk
-        hist_file = os.path.join(self.experiment_path, "pareto_history.pkl")
-        with open(hist_file, "wb") as f:
+        all_pop, all_fit, all_ids, fronts = fronts_info
+        gen_global = {}
+        for level, front in enumerate(fronts, start=1):
+            gen_global[level] = [
+                {"id": all_ids[i],
+                    "accuracy": float(all_fit[i][0]),
+                    "params": float(all_fit[i][1]),
+                    "inference_time": float(all_fit[i][2])}
+                for i in front
+            ]
+        self.fronts_history[self.current_gen] = gen_global
+        with open(os.path.join(self.experiment_path, "pareto_history.pkl"), "wb") as f:
             pickle.dump(self.fronts_history, f)
 
     def go_next_gen(self):
@@ -500,10 +463,8 @@ class MOQNAS(QNAS):
         fits_curr = self.fits
         ids_curr = [f"{self.current_gen}_{i}" for i in range(len(pop_curr))]
 
-        self.update_global_pareto_front(pop_curr, fits_curr, ids_curr)
-
-        # Before filtering via crowding, record entire fronts history
-        self.record_global_fronts_history()
+        all_pop, all_fits, all_ids, fronts = self.update_global_pareto_front()
+        self.record_global_fronts_history((all_pop, all_fits, all_ids, fronts))
 
         # Delete old model directories, keep only global Pareto IDs
         delete_old_dirs_v2(self.experiment_path,self.current_gen,keep_ids=self.pareto_global_ids.copy())
