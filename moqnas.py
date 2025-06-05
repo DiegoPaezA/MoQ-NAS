@@ -49,7 +49,7 @@ class MOQNAS(QNAS):
         self.pop_size = None          # number of classical nets per generation
         self.max_generations = None   # total generations to run
 
-    def initialize_moqnas(self,num_quantum_ind,params_ranges,repetition,pop_size,max_generations,
+    def initialize_moqnas(self,num_quantum_ind,params_ranges,repetition,crossover_rate,max_generations,
                         update_quantum_gen,replace_method,fn_list,initial_probs,update_quantum_rate,
                         max_num_nodes,reducing_fns_list,patience,early_stopping,save_data_freq=0,
                         penalize_number=0,crossover_frequency=5,en_pop_crossover=False,
@@ -61,7 +61,7 @@ class MOQNAS(QNAS):
             num_quantum_ind (int): Number of quantum individuals.
             params_ranges (dict): Hyperparameter ranges for QPopulationParams.
             repetition (int): # classical per quantum = population size multiplier.
-            pop_size (int): Number of classical networks to keep each generation.
+            crossover_rate (float): Probability of applying classical crossover.
             max_generations (int): Total number of generations (G).
             update_quantum_gen (int): Frequency (in generations) to update quantum PMFs.
             replace_method (str): Either "elitism" or "best" (not used in MoQNAS, but inherited).
@@ -80,8 +80,9 @@ class MOQNAS(QNAS):
             pop_crossover_method (str, optional): “hux” or “uniform” method for network crossover.
         """
         # 1) Store multiobjective sizes
-        self.pop_size = pop_size
+        self.pop_size = num_quantum_ind*repetition  # Classical population size
         self.max_generations = max_generations
+        self.hyperparam_crossover_rate = crossover_rate  
 
         # 2) Initialize QNAS (hyperparams & network quantum populations)
         super().initialize_qnas(
@@ -346,62 +347,28 @@ class MOQNAS(QNAS):
         selected_idx = np.array(selected_idx, dtype=int)
         return new_pop, new_fits, selected_idx
 
-    def reproduce(self) -> np.ndarray:
+    def random_crossover_hyperparams(self, new_pop: np.ndarray) -> np.ndarray:
         """
-        Generate a new classical offspring population (size = pop_size) from the
-        current classical network population (self.classical_nets) using:
-            - Binary tournament selection (based on objective 0, the primary objective).
-            - Uniform crossover (mask = 0.5).
-            - QNAS’s mutate() (which randomly applies one of swap, block, neighbor, or gene mutation).
+        Perform a random‐parent “tournament” crossover on hyperparameters.
 
-        Note: We ignore hyperparameter reproduction here; instead, hyperparams are always
-        re‐sampled from quantum (self.qpop_params) each generation in evolve().
-
-        Returns:
-            new_offspring (np.ndarray): shape=(pop_size, net_dim) of children network chromosomes.
+        Each child in new_pop has a chance (hyperparam_crossover_rate) to
+        be crossed with a random parent from self.qpop_params.current_pop.
         """
-        parents = self.classical_nets.copy()
-        N = parents.shape[0]
-        new_pop = []
+        old_pop = self.qpop_params.current_pop
+        N_old = 0 if old_pop is None else old_pop.shape[0]
+        if N_old == 0:
+            return new_pop
 
-        # (Optional) Elitism: carry forward the single best network by objective 0
-        if getattr(self, "elitism", False):
-            best_idx = np.argmax(self.fits[:, 0])
-            new_pop.append(parents[best_idx].copy())
+        mixed = new_pop.copy()
+        for i in range(new_pop.shape[0]):
+            if np.random.rand() < self.hyperparam_crossover_rate:
+                p_idx = np.random.randint(N_old)
+                parent = old_pop[p_idx]
+                child = new_pop[i]
+                mask = np.random.rand(*child.shape) < 0.5
+                mixed[i] = np.where(mask, parent, child)
+        return mixed
 
-        while len(new_pop) < self.pop_size:
-            # Tournament for parent1
-            i1, i2 = np.random.choice(N, 2, replace=False)
-            if self.fits[i1, 0] > self.fits[i2, 0]:
-                p1 = parents[i1]
-            else:
-                p1 = parents[i2]
-            # Tournament for parent2
-            j1, j2 = np.random.choice(N, 2, replace=False)
-            if self.fits[j1, 0] > self.fits[j2, 0]:
-                p2 = parents[j1]
-            else:
-                p2 = parents[j2]
-
-            # Uniform crossover
-            if np.random.rand() < self.crossover_rate:
-                mask = np.random.rand(*p1.shape) < 0.5
-                c1 = np.where(mask, p1, p2)
-                c2 = np.where(mask, p2, p1)
-            else:
-                c1 = p1.copy()
-                c2 = p2.copy()
-
-            # Mutation
-            c1 = self.mutate(c1)
-            c2 = self.mutate(c2)
-
-            new_pop.append(c1)
-            if len(new_pop) < self.pop_size:
-                new_pop.append(c2)
-
-        return np.array(new_pop, dtype=parents.dtype)
-    
     def update_global_pareto_front(self,pop_curr: np.ndarray,fits_curr: np.ndarray,ids_curr: list[str],):
         """
         Incrementally update self.pareto_global_population and self.pareto_global_fitnesses
@@ -604,7 +571,7 @@ class MOQNAS(QNAS):
             # 2a) Sample children classical population (both params and nets) at once
             children_params, children_nets = self.generate_classical()
 
-            children_params = self.crossover_hyperparams(children_params)
+            children_params = self.random_crossover_hyperparams(children_params)
             children_nets = self.crossover_network(children_nets)
             
             # 2b) Evaluate children on all objectives
