@@ -96,6 +96,9 @@ if __name__ == '__main__':
     parser.add_argument('--network_config', type=str, required=True, default='default',
                         choices=['default', 'dense', 'backbone'],
                         help='Network structure configuration.')
+    
+    parser.add_argument('--multi_objective', action='store_true', default=False,
+                        help='Enable multi-objective optimization (NSGA2).')
 
     arguments = parser.parse_args()
     main(**vars(arguments))
