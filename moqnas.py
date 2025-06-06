@@ -11,7 +11,8 @@ import time
 import pickle
 import numpy as np
 from qnas2 import QNAS
-from util import backup_cache, delete_old_dirs_v2
+from pymoo.indicators.hv import Hypervolume
+from util import calculate_time, delete_old_dirs_v2
 
 
 class MOQNAS(QNAS):
@@ -41,6 +42,7 @@ class MOQNAS(QNAS):
         """
         super().__init__(eval_func, experiment_path, objectives, log_file, log_level, data_file)
         self.num_objectives = len(objectives)
+        self.data_file = data_file
         # The QNAS base class manages hyperparameter quantum populations (qpop_params)
         # and network quantum populations (qpop_net). We will perform multiobjective selection
         # on the *classical* network‐chromosome population; hyperparameters will continue
@@ -171,6 +173,40 @@ class MOQNAS(QNAS):
         self.fits = fits
 
         return fits
+    @staticmethod
+    def compute_hypervolume_mixed(front_raw: np.ndarray, ε: float = 1e-6) -> float:
+        """
+        Compute hypervolume for a 3-objective Pareto front where:
+            - front_raw[:, 0] = accuracy (to be maximized)
+            - front_raw[:, 1] = num_parameters (to be minimized)
+            - front_raw[:, 2] = inference_time (to be minimized)
+
+        We first convert everything into minimization form by flipping accuracy → -accuracy,
+        then build a reference point slightly above the “worst” in each dimension,
+        and finally call pymoo’s Hypervolume on that minimization front.
+
+        Args:
+            front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
+            ε (float): tiny margin to add to the reference point.
+
+        Returns:
+            float: the hypervolume (in the original mixed‐obj space).
+        """
+        if front_raw.size == 0:
+            return 0.0
+
+        # 1) Build minimization front: acc → -acc, params & time unchanged
+        front_min = front_raw.copy()
+        front_min[:, 0] *= -1.0   # flip accuracy
+
+        # 2) Construct the reference point (for each column, take max(front_min[:,j]) + ε)
+        ref = np.max(front_min, axis=0) + ε
+
+        # 3) Call pymoo’s Hypervolume (which expects a minimization front and ref_point)
+        hv_indicator = Hypervolume(ref_point=ref)
+        hv_value     = hv_indicator(front_min)
+
+        return float(hv_value)
 
     @staticmethod
     def dominates(a: np.ndarray, b: np.ndarray) -> bool:
@@ -459,10 +495,6 @@ class MOQNAS(QNAS):
             4. Delete old model directories, keeping only current global Pareto IDs.
             5. Log a summary line, then increment self.current_gen.
         """
-        pop_curr = self.classical_nets
-        fits_curr = self.fits
-        ids_curr = [f"{self.current_gen}_{i}" for i in range(len(pop_curr))]
-
         all_pop, all_fits, all_ids, fronts = self.update_global_pareto_front()
         self.record_global_fronts_history((all_pop, all_fits, all_ids, fronts))
 
@@ -471,6 +503,9 @@ class MOQNAS(QNAS):
         
         if self.current_gen == 1:
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
+            
+        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.6f}")
 
         # Log global front size
         self.logger.info(
@@ -478,7 +513,7 @@ class MOQNAS(QNAS):
             self.current_gen,
             len(self.pareto_global_population),
         )
-
+        self.save_data()
         # Finally, increment generation counter
         self.current_gen += 1
 
@@ -506,6 +541,7 @@ class MOQNAS(QNAS):
         3. Return final global Pareto archive
         """
         # 1) Generation 0: sample both hyperparams and nets via generate_classical()
+        start_time = time.time()
         p0_params, p0_nets = self.generate_classical()
         self.classical_params = p0_params
         self.classical_nets = p0_nets
@@ -580,6 +616,17 @@ class MOQNAS(QNAS):
             p0_nets = self.classical_nets
             f0 = self.fits
             p0_raws = self.raw_fits
+            if self.current_gen > 0 and (self.current_gen % 5 == 0):
+                curr_time = time.time()
+                h, m, est_h, est_m = calculate_time(
+                    start_time, curr_time, self.current_gen, self.max_generations, end_evol=False
+                )
+                self.logger.info(
+                    "Gen %d: elapsed %dh %dm; ETA %dh %dm",
+                    self.current_gen, h, m, est_h, est_m,
+                )
+        total_h, total_m = calculate_time(start_time, time.time())
+        self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
 
         # 3) Return final global Pareto archive
         return self.pareto_global_population, self.pareto_global_fitnesses
