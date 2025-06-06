@@ -538,7 +538,10 @@ class QNAS(object):
         if self.current_gen == 0:
             data = {}
         else:
-            data = load_pkl(self.data_file)
+            if os.path.exists(self.data_file):
+                data = load_pkl(self.data_file)
+            else:
+                data = {}
 
         data[self.current_gen] = {
             "time": str(datetime.datetime.now()),
