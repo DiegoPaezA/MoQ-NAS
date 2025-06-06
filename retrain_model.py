@@ -108,6 +108,11 @@ if __name__ == '__main__':
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5,
                         help='Number of epochs to save the model. Default = 10.')
     
+    parser.add_argument('--patience_retrain', type=int, default=25,
+                        help='Number of epochs to wait for validation loss to improve before stopping training. Default = 25.')
+    parser.add_argument('--delta_fraction', type=float, default=0.005,
+                        help='Minimum change in the monitored quantity to qualify as an improvement. Default = 0.005.')
+    
     parser.add_argument('--backbone_name', type=str, default='mobilenet_v3_small', choices=['mobilenet_v3_small', 'mobilenet_v3_large', 'mobilenet_v2', 'resnet18', 'resnet50',],
                         help='Backbone name to be used during training. Default = mobilenet_v3_small.')
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
