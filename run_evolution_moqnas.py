@@ -65,7 +65,7 @@ if __name__ == '__main__':
                         help='Path to the input data.')
     parser.add_argument('--dataset', type=str, required=True,
                         choices=['cifar10', 'cifar100', 'pathmnist', 'octmnist', 'tissuemnist',
-                                 'organamnist', 'organcmnist', 'atleta_axial', 'atleta_coronal'],
+                                'organamnist', 'organcmnist', 'atleta_axial', 'atleta_coronal'],
                         help='Name of the dataset.')
     parser.add_argument('--config_file', type=str, required=True,
                         help='Configuration file name.')
