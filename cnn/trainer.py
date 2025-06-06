@@ -453,9 +453,8 @@ class BaseTrainer:
     def train(self, debug=False):
         max_epochs = self.params['max_epochs']
         epochs_to_eval = self.params['epochs_to_eval']
-        patience = self.params.get('patience', max_epochs)
-        min_delta = self.params.get('min_delta', 0.0)  # smallest change to count as “improvement”
-
+        patience_max = self.params.get('patience_retrain', max_epochs)
+        base_fraction = self.params.get('delta_fraction', 0.005)
         start_eval_epoch = max_epochs - epochs_to_eval
         training_losses, training_accuracies = [], []
         validation_losses, validation_accuracies = [], []
@@ -481,12 +480,32 @@ class BaseTrainer:
                 if val_acc > self.best_accuracy:
                     self.best_accuracy = val_acc
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
-                    
-                if val_loss < self.best_validation_loss:
+                        
+                # Dynamically compute min_delta as a fraction of best_validation_loss
+                if self.best_validation_loss == float('inf'):
+                    self.best_validation_loss = val_loss
+                    no_improve_count = 0
+                    continue
+                
+                min_delta = self.best_validation_loss * base_fraction
+                if (self.best_validation_loss - val_loss) > min_delta:
                     self.best_validation_loss = val_loss
                     self.best_epoch = epoch
+                    no_improve_count = 0
                     if self.params.get('phase') == 'retrain':
                         torch.save(self.model.state_dict(), self.best_model_path)
+                        
+                else:
+                    # no sufficient improvement
+                    no_improve_count += 1
+                    if epoch % 5 == 0:
+                        self.logger.info(
+                            "Epoch [%d/%d] - No val_loss drop > %.4f for %d/%d evals",
+                            epoch, max_epochs, min_delta, no_improve_count, patience_max
+                        )
+                    if no_improve_count >= patience_max and self.params.get('phase') == 'retrain':
+                        self.logger.info("Early stopping at epoch %d", epoch)
+                        break
                 
                 if self.params.get('phase') == 'retrain':
                     self.update_scheduler(scheduler, metric=val_loss)
