@@ -3,6 +3,7 @@ import time
 import pickle
 import numpy as np
 from ga import GA
+from pymoo.indicators.hv import Hypervolume
 from util import backup_cache, delete_old_dirs_v2
 
 class NSGA2(GA):
@@ -83,6 +84,41 @@ class NSGA2(GA):
 
         self.fitnesses = np.array(fits, dtype=float)
         return self.fitnesses
+    
+    @staticmethod
+    def compute_hypervolume_mixed(front_raw: np.ndarray, ε: float = 1e-6) -> float:
+        """
+        Compute hypervolume for a 3-objective Pareto front where:
+            - front_raw[:, 0] = accuracy (to be maximized)
+            - front_raw[:, 1] = num_parameters (to be minimized)
+            - front_raw[:, 2] = inference_time (to be minimized)
+
+        We first convert everything into minimization form by flipping accuracy → -accuracy,
+        then build a reference point slightly above the “worst” in each dimension,
+        and finally call pymoo’s Hypervolume on that minimization front.
+
+        Args:
+            front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
+            ε (float): tiny margin to add to the reference point.
+
+        Returns:
+            float: the hypervolume (in the original mixed‐obj space).
+        """
+        if front_raw.size == 0:
+            return 0.0
+
+        # 1) Build minimization front: acc → -acc, params & time unchanged
+        front_min = front_raw.copy()
+        front_min[:, 0] *= -1.0   # flip accuracy
+
+        # 2) Construct the reference point (for each column, take max(front_min[:,j]) + ε)
+        ref = np.max(front_min, axis=0) + ε
+
+        # 3) Call pymoo’s Hypervolume (which expects a minimization front and ref_point)
+        hv_indicator = Hypervolume(ref_point=ref)
+        hv_value     = hv_indicator(front_min)
+
+        return float(hv_value)
 
     @staticmethod
     def dominates(a, b):
@@ -327,6 +363,9 @@ class NSGA2(GA):
         )
         if self.current_gen == 1:
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
+            
+        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.6f}")
             
         self.logger.info(f"Generation {self.current_gen} Pareto front size: {len(self.pareto_global_population)}")
 
