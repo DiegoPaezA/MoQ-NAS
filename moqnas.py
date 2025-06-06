@@ -269,72 +269,81 @@ class MOQNAS(QNAS):
         # The last appended front will be empty; discard it
         return fronts[:-1]
 
-    def crowding_distance(self, fitnesses: np.ndarray, front: list) -> np.ndarray:
+    # def crowding_distance(self, fitnesses: np.ndarray, front: list) -> np.ndarray:
+    #     """
+    #     Compute the crowding distance for a given Pareto front.
+
+    #     Args:
+    #         fitnesses (np.ndarray): shape=(N_all, M) array of fitness values.
+    #         front (list of int): indices of individuals in the same Pareto front.
+
+    #     Returns:
+    #         distances (np.ndarray): shape=(len(front),) crowding distances (boundary points = +inf).
+    #     """
+    #     f = fitnesses[front]
+    #     F, M = f.shape
+    #     if F <= 2:
+    #         return np.full(F, np.inf, dtype=float)
+
+    #     sorted_idx = np.argsort(f, axis=0)   # (F, M)
+    #     distances = np.zeros(F, dtype=float)
+    #     distances[sorted_idx[0,  :]] = np.inf
+    #     distances[sorted_idx[-1, :]] = np.inf
+
+    #     f_min = f[sorted_idx[0,  :], np.arange(M)]
+    #     f_max = f[sorted_idx[-1, :], np.arange(M)]
+    #     denom = f_max - f_min
+
+    #     f_sorted = np.take_along_axis(f, sorted_idx, axis=0)  # (F, M)
+    #     diff_all  = f_sorted[2:, :] - f_sorted[:-2, :]        # (F-2, M)
+
+    #     zero_denom = (denom == 0)
+    #     denom_safe = denom.copy()
+    #     denom_safe[zero_denom] = 1.0
+    #     normalized_diff = diff_all / denom_safe[np.newaxis, :]
+    #     normalized_diff[:, zero_denom] = 0.0
+
+    #     interior_idx = sorted_idx[1:-1, :]     # (F-2, M)
+    #     flat_positions = interior_idx.reshape(-1)      # (F-2)*M
+    #     flat_values    = normalized_diff.reshape(-1)   # (F-2)*M
+
+    #     np.add.at(distances, flat_positions, flat_values)
+
+    #     return distances
+    
+    def crowding_distance(self, fits, front):
         """
-        Compute crowding distances for individuals in `front` (a Pareto front),
-        using a fully vectorized approach (no inner Python loops over objectives).
+        Compute the crowding distance for individuals in a given front.
+
+        Uses a vectorized approach over all objectives to measure solution density,
+        assigning infinite distance to boundary points.
 
         Args:
-            fitnesses (np.ndarray): shape=(N_all, M) combined fitness array.
-            front (list[int]): indices of `fitnesses` belonging to the current front.
+            fits (np.ndarray): Fitness array of shape (N, M).
+            front (list[int]): Indices of individuals in the front.
 
         Returns:
-            distances (np.ndarray): shape=(len(front),), crowding distances. 
-                                    Boundary points get +inf.
+            np.ndarray: Crowding distances for each index in `front`.
         """
-        # Extract only the rows in this front
-        f = fitnesses[front]        # shape = (F, M)
+        f = fits[front]
         F, M = f.shape
-
-        # If 0, 1 or 2 individuals, all get infinite distance
+        dist = np.zeros(F)
         if F <= 2:
-            return np.full(F, np.inf, dtype=float)
+            return np.array([np.inf] * F)
+        sorted_idx = np.argsort(f, axis=0)
+        dist[sorted_idx[0, :]] = np.inf
+        dist[sorted_idx[-1, :]] = np.inf
+        min_vals = f[sorted_idx[0, :], np.arange(M)]
+        max_vals = f[sorted_idx[-1, :], np.arange(M)]
+        denom = max_vals - min_vals
+        for j in range(M):
+            if denom[j] == 0:
+                continue
+            prev = f[sorted_idx[:-2, j], j]
+            nxt = f[sorted_idx[2:, j], j]
+            dist[sorted_idx[1:-1, j]] += (nxt - prev) / denom[j]
+        return dist
 
-        # 1) Sort each column j in ascending order, capture sorted indices
-        sorted_idx = np.argsort(f, axis=0)   # shape = (F, M)
-
-        # 2) Initialize distances to zero, then set boundaries to inf
-        distances = np.zeros(F, dtype=float)
-        distances[sorted_idx[0, :]] = np.inf
-        distances[sorted_idx[-1, :]] = np.inf
-
-        # 3) For each objective j, compute denom[j] = f_max - f_min
-        f_min = f[sorted_idx[0, :], np.arange(M)]    # shape = (M,)
-        f_max = f[sorted_idx[-1, :], np.arange(M)]   # shape = (M,)
-        denom = f_max - f_min                         # shape = (M,)
-
-        # 4) Build a shifted version of f_sorted to get (next − prev) for interior points
-        #    We first reorder f according to sorted_idx along axis=0
-        f_sorted = np.take_along_axis(f, sorted_idx, axis=0)  # shape = (F, M)
-
-        # 5) Compute difference between values two steps apart for interior points:
-        #    prev_vals = f_sorted[0:F-2, j], next_vals = f_sorted[2:F, j]
-        #    So diff_all = (f_sorted[2:] - f_sorted[:-2])  → shape = (F-2, M)
-        diff_all = f_sorted[2:, :] - f_sorted[:-2, :]  # shape = (F-2, M)
-
-        # 6) Normalize by denom (broadcasting) → shape = (F-2, M)
-        #    If denom[j] == 0, we avoid dividing that column by zero by masking it out:
-        zero_denom = (denom == 0)
-        denom_safe = denom.copy()
-        denom_safe[zero_denom] = 1.0  # avoid division by zero; those columns will be zeroed out next
-
-        normalized_diff = diff_all / denom_safe[np.newaxis, :]  # shape = (F-2, M)
-        normalized_diff[:, zero_denom] = 0.0  # zero out any columns where denom was zero
-
-        # 7) Sum normalized_diff across objectives → shape = (F-2,)
-        sums = np.sum(normalized_diff, axis=1)  # shape = (F-2,)
-
-        # 8) Now add `sums[j]` to distances at index `sorted_idx[j+1, :]` for each objective j:
-        #    Because sorted_idx[1:-1, k] gives the positions (in `f`) of interior points
-        interior_idx = sorted_idx[1:-1, :]  # shape = (F-2, M)
-        # We want to add `sums[i]` to distances at all `interior_idx[i, :]` (for each objective).
-        # We can vectorize by flattening:
-        flat_positions = interior_idx.reshape(-1)          # length = (F-2)*M
-        flat_sums = np.repeat(sums, M)                    # length = (F-2)*M
-        # But only add each `sums[i]` to each of the M positions for objective i
-        np.add.at(distances, flat_positions, flat_sums)
-
-        return distances
 
     def environmental_selection(
         self, pop: np.ndarray, fits: np.ndarray
