@@ -21,6 +21,9 @@ def main(**args):
         phase = 'continue_evolution'
         logger.info(f"Continue evolution from: {args['continue_path']}. Checking files ...")
         check_files(args['continue_path'])
+        
+    if args['early_stopping']:
+        logger.info(f"Early stopping is enabled. Patience: {args['patience']} generations.")
 
     logger.info(f"Getting parameters from {args['config_file']} ...")
     config = cfg.ConfigParameters(args, phase=phase)
@@ -57,6 +60,7 @@ def main(**args):
                         fn_list=args['fn_list'],
                         crossover_rate=args['crossover_rate'],
                         mutation_rate=args['mutation_rate'],
+                        early_stopping=args['early_stopping'],
                         elitism=args['elitism'],
                         patience=args['patience'],
                         params_ranges=config.QNAS_spec['params_ranges'])
