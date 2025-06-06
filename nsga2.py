@@ -324,24 +324,47 @@ class NSGA2(GA):
         self.pareto_global_ids = [ids0[i] for i, keep in enumerate(mask) if keep]
         return all_pop, all_fit, all_ids, fronts
 
-    def record_global_fronts_history(self, fronts_info):
+    def record_global_fronts_history(self, fronts_info=None, hv=None):
         """
-        Persist all global Pareto fronts into the history dictionary and disk.
+        Record Pareto fronts into self.fronts_history (including hypervolume) and persist to disk.
+
+        If fronts_info is provided, it should be a tuple
+        (all_pop, all_fits, all_ids, fronts) representing the combined
+        archive + current population and the full Pareto fronts on them.
+        Otherwise, recompute fronts from self.pareto_global_*.
 
         Args:
-            fronts_info (tuple): Output of update_global_pareto_front.
+            fronts_info (tuple, optional):
+                all_pop (np.ndarray): stacked [old_archive; current_pop]
+                all_fits (np.ndarray): stacked [old_archive_fits; current_fits]
+                all_ids (list):     [old_archive_ids + current_ids]
+                fronts (list of lists): Pareto fronts on all_fits
+            hv (float, optional):
+                The hypervolume value for this generation. If provided, it will
+                be saved alongside the fronts.
         """
         all_pop, all_fit, all_ids, fronts = fronts_info
+
+        # Build a dict of fronts (level → list of individuals’ data)
         gen_global = {}
         for level, front in enumerate(fronts, start=1):
             gen_global[level] = [
-                {"id": all_ids[i],
+                {
+                    "id": all_ids[i],
                     "accuracy": float(all_fit[i][0]),
                     "params": float(all_fit[i][1]),
-                    "inference_time": float(all_fit[i][2])}
+                    "inference_time": float(all_fit[i][2])
+                }
                 for i in front
             ]
+
+        if hv is not None:
+            gen_global["hypervolume"] = float(hv)
+
+        # Save into fronts_history, keyed by this generation number
         self.fronts_history[self.current_gen] = gen_global
+
+        # Dump to disk
         with open(os.path.join(self.experiment_path, "pareto_history.pkl"), "wb") as f:
             pickle.dump(self.fronts_history, f)
 
@@ -355,7 +378,9 @@ class NSGA2(GA):
         - Preserves gen0 archive on first call.
         """
         fronts_info = self.update_global_pareto_front()
-        self.record_global_fronts_history(fronts_info)
+        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.3f}")
+        self.record_global_fronts_history(fronts_info, hv)
         delete_old_dirs_v2(
             self.experiment_path,
             self.current_gen,
@@ -363,9 +388,6 @@ class NSGA2(GA):
         )
         if self.current_gen == 1:
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
-            
-        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
-        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.6f}")
             
         self.logger.info(f"Generation {self.current_gen} Pareto front size: {len(self.pareto_global_population)}")
 
