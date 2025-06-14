@@ -518,6 +518,7 @@ class MOQNAS(QNAS):
             4. Delete old model directories, keeping only current global Pareto IDs.
             5. Log a summary line, then increment self.current_gen.
         """
+        self.update_quantum()
         all_pop, all_fits, all_ids, fronts = self.update_global_pareto_front()
         
         hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
