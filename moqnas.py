@@ -622,8 +622,20 @@ class MOQNAS(QNAS):
             # 2g) Identify Pareto front in combined_fits and assign to quantum populations
             fronts = self.fast_nondominated_sort(combined_fits)
             pareto_front = fronts[0]
-            pareto_nets = combined_nets[pareto_front]
-            pareto_params = np.vstack([p0_params, children_params])[pareto_front]
+            # Compute crowding distance for individuals in the Pareto front
+            cd = self.crowding_distance(combined_fits, pareto_front)
+            # Higher crowding distance → more isolated (diverse) solutions
+            # Sort indices of the Pareto front by crowding distance (desc)
+            sorted_pf = [pareto_front[i] for i in np.argsort(cd)[::-1]]
+            # Select only a diverse subset of the front for updating the quantum population
+            selected_pf = sorted_pf[: self.qpop_net.num_ind]
+            if len(selected_pf) < self.qpop_net.num_ind:
+                # Repeat the last index so the array matches the quantum population size
+                pad = [selected_pf[-1]] * (self.qpop_net.num_ind - len(selected_pf))
+                selected_pf.extend(pad)
+
+            pareto_nets = combined_nets[selected_pf]
+            pareto_params = np.vstack([p0_params, children_params])[selected_pf]
 
             # Assign Pareto survivors into quantum current_pop
             self.qpop_net.current_pop = pareto_nets
