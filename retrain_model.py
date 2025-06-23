@@ -32,6 +32,11 @@ def main(**args):
     train_loader, val_loader = data_loader.get_loader(pin_memory_device=args['device'])
     test_loader = data_loader.get_loader(for_train=False, pin_memory_device=args['device'])
     
+    # print the size of the train, validation and test sets
+    logger.info(f"Train set size: {len(train_loader.dataset)}")
+    logger.info(f"Validation set size: {len(val_loader.dataset)}")
+    logger.info(f"Test set size: {len(test_loader.dataset)}")
+    
     # update experiment path name to retrain_"config_code"_1
     config.train_spec['experiment_path'] = os.path.join(experiment_path, f"retrain_{config_code}_{1}")
     config.train_spec['backbone_name'] = config.evolved_params['backbone_name']
