@@ -480,6 +480,8 @@ class BaseTrainer:
                 if val_acc > self.best_accuracy:
                     self.best_accuracy = val_acc
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
+                    if self.params.get('phase') == 'retrain':
+                        torch.save(self.model.state_dict(), self.best_model_path)
                         
                 # Dynamically compute min_delta as a fraction of best_validation_loss
                 if self.best_validation_loss == float('inf'):
@@ -492,8 +494,8 @@ class BaseTrainer:
                     self.best_validation_loss = val_loss
                     self.best_epoch = epoch
                     no_improve_count = 0
-                    if self.params.get('phase') == 'retrain':
-                        torch.save(self.model.state_dict(), self.best_model_path)
+                    # if self.params.get('phase') == 'retrain':
+                    #     torch.save(self.model.state_dict(), self.best_model_path)
                         
                 else:
                     # no sufficient improvement
