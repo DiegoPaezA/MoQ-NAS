@@ -500,11 +500,11 @@ class BaseTrainer:
                 else:
                     # no sufficient improvement
                     no_improve_count += 1
-                    if epoch % 5 == 0:
-                        self.logger.info(
-                            "Epoch [%d/%d] - No val_loss drop > %.4f for %d/%d evals",
-                            epoch, max_epochs, min_delta, no_improve_count, patience_max
-                        )
+                    # if epoch % 5 == 0:
+                    #     self.logger.info(
+                    #         "Epoch [%d/%d] - No val_loss drop > %.4f for %d/%d evals",
+                    #         epoch, max_epochs, min_delta, no_improve_count, patience_max
+                    #     )
                     if no_improve_count >= patience_max and self.params.get('phase') == 'retrain':
                         self.logger.info("Early stopping at epoch %d", epoch)
                         break
