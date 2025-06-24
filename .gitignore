@@ -184,6 +184,9 @@ pathmnist_data/
 tissuemnist_data/
 atleta_axial_data/
 atleta_coronal_data/
+facet_data/
+coco_subset/
+cocobin_data/
 
 # Results
 exp*/
