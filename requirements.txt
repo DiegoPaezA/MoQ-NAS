@@ -10,3 +10,4 @@ gputil
 pymoo
 plotly
 nbformat
+pycocotools
