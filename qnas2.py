@@ -75,6 +75,7 @@ class QNAS(object):
         self.patience = None
         self.early_stopping_counter = 0
         self.last_best_so_far = 0.0
+        self.since_last_mutation = 0  # Counter for mutation frequency
 
         # population crossover settings
         self.en_pop_crossover = None
@@ -616,8 +617,15 @@ class QNAS(object):
 
             if improvement > 0.005:
                 self.early_stopping_counter = 0
+                # self.since_last_mutation = 0
             else:
                 self.early_stopping_counter += 1
+                # self.since_last_mutation += 1
+                # interval = max(1, self.patience // 4)
+                # if self.since_last_mutation >= interval:
+                #     self.qpop_net.mutate_probabilities(fraction=0.2, intensity=0.1) # 20% pop, 10% noise
+                #     self.since_last_mutation = 0
+                #     self.logger.info("Mutating quantum population due to stagnation")
 
             self.logger.info("Early stopping counter: %d", self.early_stopping_counter)
             if self.early_stopping_counter >= self.patience:
@@ -686,16 +694,6 @@ class QNAS(object):
             # Resuming from a prior run: shift max_gen accordingly
             max_gen += (self.current_gen + 1)
             self.current_gen += 1
-
-        # (1) If first generation, we need an initial classical sample + eval
-        # if self.current_gen == 0:
-        #     p0, n0 = self.generate_classical()
-        #     f0_pen, f0_raw = self.eval_pop(p0, n0)
-        #     self.qpop_params.current_pop = p0
-        #     self.qpop_net.current_pop = n0
-        #     self.fitnesses               = f0_pen
-        #     self.raw_fitnesses           = f0_raw
-        #     self.best_so_far             = f0_pen[0]
 
         # (2) Main loop
         while self.current_gen < max_gen:
