@@ -157,6 +157,7 @@ class QPopulationNetwork(QPopulation):
 
         self.max_update = 0.05
         self.max_prob = 0.99
+        self.min_prob = 1e-8
 
         self.chromosome = QChromosomeNetwork(max_num_nodes, fn_list, self.dtype)
 
@@ -236,31 +237,72 @@ class QPopulationNetwork(QPopulation):
             self.crossover_method = method
         else:
             raise ValueError(f"Unknown crossover method: {method}")
+        
+    def mutate_probabilities(self, fraction: float = 0.2, intensity: float = 0.1):
+        """
+        Perform exploratory mutation on a subset of quantum individuals’ probability distributions.
 
-    def _update(self, chromosomes, idx, update_value):
-        """ Modify *chromosomes* by adding *update_value* to the genes indicated by *idx* and
-            subtracting *update_value* from the other genes proportional to the size of each
-            probability.
+        This method selects a fraction of the population at random and blends each selected
+        individual’s probability tensor with uniform noise. After mixing, values are clipped
+        to enforce a minimum probability floor and then renormalized so that each distribution
+        still sums to 1.
 
         Args:
-            chromosomes: 2D float numpy array representing the chromosomes to be updated.
-            idx: (int) index of the genes to have their value increased.
-            update_value: (float) value that will be added to the selected functions in
-                *chromosomes* by *idx*.
+            fraction (float, optional): Proportion of individuals to mutate, in the range [0.0, 1.0].
+                Defaults to 0.2 (i.e., 20% of the population).
+            intensity (float, optional): Mixing weight for the noise, in the range [0.0, 1.0].
+                A value of 0.0 leaves the original probabilities unchanged; 1.0 replaces them
+                entirely with noise. Defaults to 0.1 (i.e., 10% noise).
+        """
+        if not (0.0 <= fraction <= 1.0):
+            raise ValueError(f"fraction must be between 0.0 and 1.0, got {fraction}")
+        if not (0.0 <= intensity <= 1.0):
+            raise ValueError(f"intensity must be between 0.0 and 1.0, got {intensity}")
+
+        # Determine how many individuals to mutate (at least one)
+        num_mut = max(1, int(self.num_ind * fraction))
+        idx = np.random.choice(self.num_ind, num_mut, replace=False)
+
+        noise = np.random.rand(num_mut,self.chromosome.num_genes,self.chromosome.num_functions)
+        mutated = (1 - intensity) * self.probabilities[idx] + intensity * noise
+        mutated = np.maximum(mutated, self.min_prob)
+        mutated /= mutated.sum(axis=2, keepdims=True)
+        self.probabilities[idx] = mutated
+
+    def _update(self, chromosomes, idx, update_value):
+        """
+        Modify *chromosomes* by adding *update_value* to the genes indicated by *idx* and
+        subtracting *update_value* from the other genes proportional to the size of each
+        probability. Refuerza la robustez numérica asegurando límites mínimo y renormalización.
+
+        Args:
+            chromosomes (np.ndarray): shape (N, M)
+            idx (int): índice del gen a incrementar
+            update_value (float): valor a añadir (antes limitado por max_prob)
 
         Returns:
-            modified chromosome
+            np.ndarray: matriz de probabilidades actualizada y normalizada
         """
-
         idx0 = np.arange(chromosomes.shape[0])
-        update_array = np.where(chromosomes[idx0, idx] + update_value > self.max_prob,
-                                0, update_value)
+
+        update_array = np.where(
+            chromosomes[idx0, idx] + update_value > self.max_prob,
+            0.0,
+            update_value
+        )
         sum_values = chromosomes[idx0, idx] + update_array
-        chromosomes[idx0, idx] = 0
-        decrease = (update_array / np.sum(chromosomes, axis=1)).reshape(-1, 1)
-        decrease = decrease * chromosomes
-        chromosomes = chromosomes - decrease
+
+        chromosomes[idx0, idx] = 0.0
+
+        totals = np.sum(chromosomes, axis=1)
+        totals = np.where(totals == 0, 1e-8, totals)  # Avoid division by zero
+        decrease = (update_array / totals).reshape(-1, 1) * chromosomes
+        chromosomes -= decrease
+
         chromosomes[idx0, idx] = sum_values
+
+        chromosomes = np.maximum(chromosomes, self.min_prob)
+        chromosomes /= np.sum(chromosomes, axis=1, keepdims=True)
 
         return chromosomes
 
