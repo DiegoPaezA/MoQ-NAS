@@ -3,12 +3,12 @@ import os
 from run_ga_evolution import main  # assumes run_evolution.py is on your PYTHONPATH
 
 # — optional: lock to a specific GPU
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 # — experiment parameters
 params = {
     # Core run_evolution args:
-    "experiment_path":      "experiment_cifar10_ga/exp1_repeat_1",
+    "experiment_path":      "experiment_cifar10_gaX/exp1_repeat_1",
     "data_path":            "cifar10_data",
     "dataset":              "cifar10",
     "config_file":          "config_files_cifar/config0.txt",
