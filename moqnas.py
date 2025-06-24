@@ -18,15 +18,7 @@ from util import calculate_time, delete_old_dirs_v2
 class MOQNAS(QNAS):
     """ Multi‐Objective QNAS: extends QNAS to optimize multiple objectives via NSGA‐II. """
 
-    def __init__(
-        self,
-        eval_func,
-        experiment_path,
-        objectives,
-        log_file,
-        log_level,
-        data_file,
-    ):
+    def __init__(self,eval_func,experiment_path,objectives,log_file,log_level,data_file,):
         """
         Initialize MoQNAS.
 
@@ -124,6 +116,7 @@ class MOQNAS(QNAS):
         # 4) Initialize global Pareto archive empty
         self.pareto_global_population = None
         self.pareto_global_fitnesses = None
+        self.pareto_global_params = None
         self.pareto_global_ids = []
         self.fronts_history = {}
 
@@ -209,23 +202,23 @@ class MOQNAS(QNAS):
         return float(hv_value)
 
     @staticmethod
-    def dominates(a: np.ndarray, b: np.ndarray) -> bool:
+    def dominates(a, b):
         """
-        Return True if vector a Pareto‐dominates vector b
-        under the convention that *larger* is better for all objectives
-        except we penalize the first objective in multiobjective_fitness,
-        so here we assume a and b are all to‐be maximized.
+        Determine Pareto domination between two fitness tuples.
 
-        For strict Pareto dominance: a_i >= b_i for all i, and a_i > b_i for some i.
+        Converts the first objective to minimization by negating it, then checks
+        if `a` is no worse in all objectives and strictly better in at least one.
 
         Args:
-            a (np.ndarray): shape=(n_obj,)
-            b (np.ndarray): shape=(n_obj,)
+            a (tuple or list): Fitness values for candidate a.
+            b (tuple or list): Fitness values for candidate b.
 
         Returns:
             bool: True if a dominates b, False otherwise.
         """
-        return np.all(a >= b) and np.any(a > b)
+        obj_a = np.array([-a[0]] + list(a[1:]))
+        obj_b = np.array([-b[0]] + list(b[1:]))
+        return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
 
     def fast_nondominated_sort(self, fitnesses: np.ndarray):
         """
@@ -246,15 +239,14 @@ class MOQNAS(QNAS):
 
         for p in range(N):
             for q in range(N):
-                if p == q:
-                    continue
+                # if p == q:
+                #     continue
                 if self.dominates(fitnesses[p], fitnesses[q]):
                     dominated_sets[p].add(q)
                 elif self.dominates(fitnesses[q], fitnesses[p]):
                     dom_count[p] += 1
             if dom_count[p] == 0:
                 fronts[0].append(p)
-
         i = 0
         while fronts[i]:
             next_front = []
@@ -269,48 +261,6 @@ class MOQNAS(QNAS):
         # The last appended front will be empty; discard it
         return fronts[:-1]
 
-    # def crowding_distance(self, fitnesses: np.ndarray, front: list) -> np.ndarray:
-    #     """
-    #     Compute the crowding distance for a given Pareto front.
-
-    #     Args:
-    #         fitnesses (np.ndarray): shape=(N_all, M) array of fitness values.
-    #         front (list of int): indices of individuals in the same Pareto front.
-
-    #     Returns:
-    #         distances (np.ndarray): shape=(len(front),) crowding distances (boundary points = +inf).
-    #     """
-    #     f = fitnesses[front]
-    #     F, M = f.shape
-    #     if F <= 2:
-    #         return np.full(F, np.inf, dtype=float)
-
-    #     sorted_idx = np.argsort(f, axis=0)   # (F, M)
-    #     distances = np.zeros(F, dtype=float)
-    #     distances[sorted_idx[0,  :]] = np.inf
-    #     distances[sorted_idx[-1, :]] = np.inf
-
-    #     f_min = f[sorted_idx[0,  :], np.arange(M)]
-    #     f_max = f[sorted_idx[-1, :], np.arange(M)]
-    #     denom = f_max - f_min
-
-    #     f_sorted = np.take_along_axis(f, sorted_idx, axis=0)  # (F, M)
-    #     diff_all  = f_sorted[2:, :] - f_sorted[:-2, :]        # (F-2, M)
-
-    #     zero_denom = (denom == 0)
-    #     denom_safe = denom.copy()
-    #     denom_safe[zero_denom] = 1.0
-    #     normalized_diff = diff_all / denom_safe[np.newaxis, :]
-    #     normalized_diff[:, zero_denom] = 0.0
-
-    #     interior_idx = sorted_idx[1:-1, :]     # (F-2, M)
-    #     flat_positions = interior_idx.reshape(-1)      # (F-2)*M
-    #     flat_values    = normalized_diff.reshape(-1)   # (F-2)*M
-
-    #     np.add.at(distances, flat_positions, flat_values)
-
-    #     return distances
-    
     def crowding_distance(self, fits, front):
         """
         Compute the crowding distance for individuals in a given front.
@@ -343,7 +293,6 @@ class MOQNAS(QNAS):
             nxt = f[sorted_idx[2:, j], j]
             dist[sorted_idx[1:-1, j]] += (nxt - prev) / denom[j]
         return dist
-
 
     def environmental_selection(
         self, pop: np.ndarray, fits: np.ndarray
@@ -434,11 +383,13 @@ class MOQNAS(QNAS):
             # If archive is empty, start with current population
             all_pop = self.classical_nets.copy()
             all_fits = self.fits.copy()
+            all_params = self.classical_params.copy()
             all_ids = curr_ids.copy()
         else:
             # Otherwise, stack old archive + current pop
             all_pop = np.vstack([self.pareto_global_population, self.classical_nets])
             all_fits = np.vstack([self.pareto_global_fitnesses, self.fits])
+            all_params = np.vstack([self.pareto_global_params, self.classical_params])
             all_ids = self.pareto_global_ids + curr_ids
 
         # 1) Full Pareto sort on combined fitnesses
@@ -448,6 +399,7 @@ class MOQNAS(QNAS):
         # 2) Take only front 0 entries
         pop0 = all_pop[idx0]
         fit0 = all_fits[idx0]
+        param0 = all_params[idx0]
         ids0 = [all_ids[i] for i in idx0]
 
         # 3) Compute crowding distances on front 0
@@ -458,6 +410,7 @@ class MOQNAS(QNAS):
         # 4) Update the archive to only those survivors
         self.pareto_global_population = pop0[mask]
         self.pareto_global_fitnesses = fit0[mask]
+        self.pareto_global_params = param0[mask]
         self.pareto_global_ids = [ids0[i] for i, keep in enumerate(mask) if keep]
 
         return all_pop, all_fits, all_ids, fronts
@@ -518,8 +471,23 @@ class MOQNAS(QNAS):
             4. Delete old model directories, keeping only current global Pareto IDs.
             5. Log a summary line, then increment self.current_gen.
         """
-        self.update_quantum()
+        
         all_pop, all_fits, all_ids, fronts = self.update_global_pareto_front()
+        
+        if self.pareto_global_population is not None:
+            fronts_archive = self.fast_nondominated_sort(self.pareto_global_fitnesses)
+            pf = fronts_archive[0]
+            cd = self.crowding_distance(self.pareto_global_fitnesses, pf)
+            sorted_pf = [pf[i] for i in np.argsort(cd)[::-1]]
+            selected_pf = sorted_pf[: self.qpop_net.num_ind]
+            if len(selected_pf) < self.qpop_net.num_ind and selected_pf:
+                selected_pf.extend([selected_pf[-1]] * (self.qpop_net.num_ind - len(selected_pf)))
+            self.qpop_net.current_pop = self.pareto_global_population[selected_pf]
+            if self.pareto_global_params is not None:
+                self.qpop_params.current_pop = self.pareto_global_params[selected_pf]
+
+        # 2) Update quantum populations after setting current_pop
+        self.update_quantum()
         
         hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
         self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.3f}")
@@ -559,7 +527,6 @@ class MOQNAS(QNAS):
                 d) Combine parents + children and run NSGA‐II
                 e) Assign survivors → self.classical_nets, self.fits, self.raw_fits
                 f) Resample hyperparams for next gen: children_params already from generate_classical()
-                g) Identify Pareto front in combined, assign to qpop_*.current_pop
                 h) Call self.go_next_gen()    # handles global Pareto archiving, cleanup, logging, ++gen
                 i) Early stop if check_early_stopping()
                 j) Prepare (p0_params, p0_nets, f0, p0_raws) for next iteration
@@ -618,28 +585,6 @@ class MOQNAS(QNAS):
             # 2f) Resample hyperparams for next generation via generate_classical()
             #     (we will overwrite these again at the top of the next loop iteration anyway)
             self.classical_params = children_params
-
-            # 2g) Identify Pareto front in combined_fits and assign to quantum populations
-            fronts = self.fast_nondominated_sort(combined_fits)
-            pareto_front = fronts[0]
-            # Compute crowding distance for individuals in the Pareto front
-            cd = self.crowding_distance(combined_fits, pareto_front)
-            # Higher crowding distance → more isolated (diverse) solutions
-            # Sort indices of the Pareto front by crowding distance (desc)
-            sorted_pf = [pareto_front[i] for i in np.argsort(cd)[::-1]]
-            # Select only a diverse subset of the front for updating the quantum population
-            selected_pf = sorted_pf[: self.qpop_net.num_ind]
-            if len(selected_pf) < self.qpop_net.num_ind:
-                # Repeat the last index so the array matches the quantum population size
-                pad = [selected_pf[-1]] * (self.qpop_net.num_ind - len(selected_pf))
-                selected_pf.extend(pad)
-
-            pareto_nets = combined_nets[selected_pf]
-            pareto_params = np.vstack([p0_params, children_params])[selected_pf]
-
-            # Assign Pareto survivors into quantum current_pop
-            self.qpop_net.current_pop = pareto_nets
-            self.qpop_params.current_pop = pareto_params
 
             # 2h) Advance generation: update global Pareto, backup, save, log, cleanup, increment gen
             self.go_next_gen()
