@@ -9,7 +9,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # — experiment parameters
 params = {
     # Core run_evolution args:
-    "experiment_path":      "experiment_cifar10_nsga/exp1_repeat_5",
+    "experiment_path":      "experiment_cifar10_nsgaX/exp1_repeat_1",
     "data_path":            "cifar10_data",
     "dataset":              "cifar10",
     "config_file":          "config_files_cifar/config0.txt",
