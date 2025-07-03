@@ -12,20 +12,20 @@ backbone_name="resnet18" # only used if network_config is  backbone
 
 # —— GA hyperparameters —— 
 population_size=20
-num_generations=300
+num_generations=150
 max_num_nodes=20
 crossover_rate=0.5
 mutation_rate=0.2
 elitism=true
 multi_objective=true
-early_stopping=true
+early_stopping=false
 patience=60
 
 # —— sample size & repeats —— 
 dataset_sample_size=10000
 configs=("config0.txt")     # list your config files here
-exps=("exp1")               # corresponding experiment names
-cuda_devices=("0,1")          # GPU IDs for each run
+exps=("exp3")               # corresponding experiment names
+cuda_devices=("1")          # GPU IDs for each run
 
 # —— Loop over configs & repeats —— 
 for ((j=0; j<${#configs[@]}; j++)); do
@@ -35,7 +35,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
     echo "=== Running ${dataset} / ${configs[$j]} on GPU ${cuda_device} ==="
 
-    for ((i=1; i<=3; i++)); do  # change 1 to your number of repeats
+    for ((i=3; i<=3; i++)); do  # change 1 to your number of repeats
         exp_path="${exp_path_base}/${exp_name}_repeat_${i}"
 
         CUDA_VISIBLE_DEVICES="$cuda_device" python run_nsga_evolution.py \
