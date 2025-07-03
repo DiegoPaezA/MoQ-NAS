@@ -713,41 +713,32 @@ def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
     archive_dir = os.path.join(base, archive_subdir)
     os.makedirs(archive_dir, exist_ok=True)
 
-    # If no temp results folder, skip everything
-    if not os.path.isdir(results_dir):
-        logger.warning(f"prune_and_archive: no temp folder at {results_dir}")
-        return
+    # 1) Mueve todos los keep_ids que existan en results_dir → archive_dir
+    if os.path.isdir(results_dir):
+        for kid in keep_ids:
+            src = os.path.join(results_dir, kid)
+            dst = os.path.join(archive_dir, kid)
+            if os.path.isdir(src):
+                try:
+                    # Solo mueve si no existe ya en archive
+                    if not os.path.isdir(dst):
+                        shutil.move(src, dst)
+                        logger.debug(f"Archived {src} → {dst}")
+                    else:
+                        logger.debug(f"{dst} ya existe, no lo muevo")
+                except Exception as e:
+                    logger.warning(f"Error moviendo {src} → {dst}: {e}")
 
-    # 1) Move any new keep_ids out of results_dir → archive_dir
-    moved_any = False
-    for kid in keep_ids:
-        src = os.path.join(results_dir, kid)
-        dst = os.path.join(archive_dir, kid)
-        if os.path.isdir(src) and not os.path.isdir(dst):
-            try:
-                shutil.move(src, dst)
-                moved_any = True
-                logger.debug(f"Archived {src} → {dst}")
-            except Exception as e:
-                logger.warning(f"Failed to move {src} → {dst}: {e}")
-        else:
-            # either wasn't in results (already archived) or already exists
-            logger.debug(f"Skipping move for {kid}: "
-                        f"{'not in results' if not os.path.isdir(src) else 'already in archive'}")
+        # Borra siempre el directorio de resultados temp
+        try:
+            shutil.rmtree(results_dir)
+            logger.debug(f"Removed temp dir {results_dir}")
+        except Exception as e:
+            logger.warning(f"No pude borrar {results_dir}: {e}")
+    else:
+        logger.debug(f"No existe {results_dir}, salto al pruning")
 
-    # always delete the temp results_dir
-    try:
-        shutil.rmtree(results_dir)
-        logger.debug(f"Removed temp dir {results_dir}")
-    except Exception as e:
-        logger.warning(f"Could not remove temp dir {results_dir}: {e}")
-
-    # if nothing new was moved, we stop here
-    if not moved_any:
-        logger.info("No new winners found in this generation; archive and symlink unchanged.")
-        return
-
-    # 2) Remove any folder in archive_dir not in keep_ids
+    # 2) PRUNING: elimina de archive/ todo lo que NO esté en keep_ids
     for folder in os.listdir(archive_dir):
         if folder not in keep_ids:
             path = os.path.join(archive_dir, folder)
@@ -756,27 +747,27 @@ def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
                     shutil.rmtree(path)
                     logger.debug(f"Pruned {path}")
                 except Exception as e:
-                    logger.warning(f"Failed to remove {path}: {e}")
+                    logger.warning(f"Error borrando {path}: {e}")
 
-    # 3) Update best_so_far symlink to the *first* keep_id
+    # 3) ACTUALIZAR SYMLINK al primer keep_id
     if not keep_ids:
-        logger.error("prune_and_archive: keep_ids empty, no best to link")
+        logger.error("keep_ids vacío, no hay best_so_far que linkear")
         return
 
     best = keep_ids[0]
     target = os.path.join(archive_dir, best)
     linkpath = os.path.join(base, link_name)
 
-    # Remove any old link or file
+    # quita enlace o archivo viejo
     try:
         if os.path.islink(linkpath) or os.path.exists(linkpath):
             os.unlink(linkpath)
     except Exception as e:
-        logger.warning(f"Could not remove old link {linkpath}: {e}")
+        logger.warning(f"No pude quitar enlace viejo {linkpath}: {e}")
 
-    # Create new symlink
+    # crea el nuevo symlink
     try:
         os.symlink(target, linkpath)
         logger.info(f"Updated {link_name} → {target}")
     except Exception as e:
-        logger.error(f"Failed to create symlink {linkpath} → {target}: {e}")
+        logger.error(f"Error creando symlink {linkpath} → {target}: {e}")
