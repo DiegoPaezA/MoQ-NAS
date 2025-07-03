@@ -394,72 +394,54 @@ class MOQNAS(QNAS):
 
         # 1) Full Pareto sort on combined fitnesses
         fronts = self.fast_nondominated_sort(all_fits)
-        idx0 = fronts[0]
-
+        self._last_full_fronts = fronts
+        
         # 2) Take only front 0 entries
-        pop0 = all_pop[idx0]
+        idx0 = fronts[0]
         fit0 = all_fits[idx0]
-        param0 = all_params[idx0]
-        ids0 = [all_ids[i] for i in idx0]
+
 
         # 3) Compute crowding distances on front 0
-        cd = self.crowding_distance(fit0, list(range(len(pop0))))
+        cd = self.crowding_distance(fit0, list(range(len(idx0))))
         # Keep boundary (inf) or any with cd > 0
         mask = np.isinf(cd) | (cd > 0)
+        filtered_idx = [idx0[i] for i, keep in enumerate(mask) if keep]
+        self._last_filtered_idx = filtered_idx
 
         # 4) Update the archive to only those survivors
-        self.pareto_global_population = pop0[mask]
-        self.pareto_global_fitnesses = fit0[mask]
-        self.pareto_global_params = param0[mask]
-        self.pareto_global_ids = [ids0[i] for i, keep in enumerate(mask) if keep]
-
-        return all_pop, all_fits, all_ids, fronts
+        self.pareto_global_population  = all_pop[filtered_idx]
+        self.pareto_global_fitnesses   = all_fits[filtered_idx]
+        self.pareto_global_params      = all_params[filtered_idx]
+        self.pareto_global_ids         = [all_ids[i] for i in filtered_idx]
 
 
-    def record_global_fronts_history(self, fronts_info=None, hv=None):
-        """
-        Record Pareto fronts into self.fronts_history (including hypervolume) and persist to disk.
-
-        If fronts_info is provided, it should be a tuple
-        (all_pop, all_fits, all_ids, fronts) representing the combined
-        archive + current population and the full Pareto fronts on them.
-        Otherwise, recompute fronts from self.pareto_global_*.
-
-        Args:
-            fronts_info (tuple, optional):
-                all_pop (np.ndarray): stacked [old_archive; current_pop]
-                all_fits (np.ndarray): stacked [old_archive_fits; current_fits]
-                all_ids (list):     [old_archive_ids + current_ids]
-                fronts (list of lists): Pareto fronts on all_fits
-            hv (float, optional):
-                The hypervolume value for this generation. If provided, it will
-                be saved alongside the fronts.
-        """
-        all_pop, all_fit, all_ids, fronts = fronts_info
-
-        # Build a dict of fronts (level → list of individuals’ data)
-        gen_global = {}
-        for level, front in enumerate(fronts, start=1):
-            gen_global[level] = [
-                {
-                    "id": all_ids[i],
-                    "accuracy": float(all_fit[i][0]),
-                    "params": float(all_fit[i][1]),
-                    "inference_time": float(all_fit[i][2])
-                }
-                for i in front
-            ]
-
-        if hv is not None:
-            gen_global["hypervolume"] = float(hv)
-
-        # Save into fronts_history, keyed by this generation number
-        self.fronts_history[self.current_gen] = gen_global
-
-        # Dump to disk
+        # — graba el histórico usando fronts sin filtrar —
+        gen_record = {}
+        gen_record[1] = [
+            {
+                "id":              self.pareto_global_ids[i],
+                "accuracy":        float(self.pareto_global_fitnesses[i][0]),
+                "params":          float(self.pareto_global_fitnesses[i][1]),
+                "inference_time":  float(self.pareto_global_fitnesses[i][2])
+            }
+            for i in range(len(self.pareto_global_ids))
+        ]
+        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        gen_record["hypervolume"] = float(hv)
+        self.fronts_history[self.current_gen] = gen_record
         with open(os.path.join(self.experiment_path, "pareto_history.pkl"), "wb") as f:
             pickle.dump(self.fronts_history, f)
 
+
+        cd_filtered = self.crowding_distance(
+            self.pareto_global_fitnesses,
+            list(range(len(self.pareto_global_fitnesses)))
+        )
+
+        # guardas para devolverlo a go_next_gen
+        self._last_cd = cd_filtered
+        return filtered_idx, cd_filtered
+    
     def go_next_gen(self):
         """
         Archive and record the current global Pareto front, then advance to the next generation.
@@ -472,43 +454,99 @@ class MOQNAS(QNAS):
             5. Log a summary line, then increment self.current_gen.
         """
         
-        all_pop, all_fits, all_ids, fronts = self.update_global_pareto_front()
-        
-        if self.pareto_global_population is not None:
-            fronts_archive = self.fast_nondominated_sort(self.pareto_global_fitnesses)
-            pf = fronts_archive[0]
-            cd = self.crowding_distance(self.pareto_global_fitnesses, pf)
-            sorted_pf = [pf[i] for i in np.argsort(cd)[::-1]]
-            selected_pf = sorted_pf[: self.qpop_net.num_ind]
-            if len(selected_pf) < self.qpop_net.num_ind and selected_pf:
-                selected_pf.extend([selected_pf[-1]] * (self.qpop_net.num_ind - len(selected_pf)))
-            self.qpop_net.current_pop = self.pareto_global_population[selected_pf]
-            if self.pareto_global_params is not None:
-                self.qpop_params.current_pop = self.pareto_global_params[selected_pf]
+        filtered_idx, cd = self.update_global_pareto_front()
+        # sorted_rel y pick SOBRE cd_filtered, que coincide en tamaño
+        sorted_rel = np.argsort(cd)[::-1]
 
-        # 2) Update quantum populations after setting current_pop
+        # lógica de pick (sin trunca en out-of-range porque cd y pop tienen mismo tamaño)
+        pick = sorted_rel[: self.qpop_net.num_ind]
+        # padding si quieres…
+
+        # ahora sí:
+        self.qpop_net.current_pop = self.pareto_global_population[pick]
+        if self.pareto_global_params is not None:
+            self.qpop_params.current_pop = self.pareto_global_params[pick]
+
+        # 3) Actualiza quantum, hypervolume y logging
         self.update_quantum()
-        
-        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
-        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.3f}")
-        
-        self.record_global_fronts_history((all_pop, all_fits, all_ids, fronts), hv=hv)
+        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {self.fronts_history[self.current_gen]['hypervolume']:.3f}")
 
-        # Delete old model directories, keep only global Pareto IDs
-        delete_old_dirs_v2(self.experiment_path,self.current_gen,keep_ids=self.pareto_global_ids.copy())
+        # 4) Limpieza de carpetas
+        delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=self.pareto_global_ids.copy())
+        # if self.current_gen == 1:
+        #     delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
+
         
-        if self.current_gen == 1:
-            delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
-            
-        # Log global front size
-        self.logger.info(
-            "Generation %d global Pareto front size: %d",
+        self.logger.info("Generation %d: updated global Pareto front with %d individuals.",
             self.current_gen,
             len(self.pareto_global_population),
         )
+        
+        self.logger.info("Generation %d: current global Pareto IDs:\n%s",
+            self.current_gen,
+            self.pareto_global_ids,
+        )
+
+        fitness_str = np.array2string(
+            self.pareto_global_fitnesses,
+            separator='  ',
+            formatter={'float_kind': lambda x: f"{x:.2f}"}
+        )
+
+        self.logger.info(
+            "Generation %d global Pareto fitness:\n%s (n=%d)",
+            self.current_gen,
+            fitness_str,
+            len(self.pareto_global_population),
+        )
+        
+        # 5) Guardar datos y avanzar generación
         self.save_data()
-        # Finally, increment generation counter
         self.current_gen += 1
+
+    def record_global_fronts_history(self, fronts_info=None, hv=None):
+            """
+            Record Pareto fronts into self.fronts_history (including hypervolume) and persist to disk.
+
+            If fronts_info is provided, it should be a tuple
+            (all_pop, all_fits, all_ids, fronts) representing the combined
+            archive + current population and the full Pareto fronts on them.
+            Otherwise, recompute fronts from self.pareto_global_*.
+
+            Args:
+                fronts_info (tuple, optional):
+                    all_pop (np.ndarray): stacked [old_archive; current_pop]
+                    all_fits (np.ndarray): stacked [old_archive_fits; current_fits]
+                    all_ids (list):     [old_archive_ids + current_ids]
+                    fronts (list of lists): Pareto fronts on all_fits
+                hv (float, optional):
+                    The hypervolume value for this generation. If provided, it will
+                    be saved alongside the fronts.
+            """
+            all_pop, all_fit, all_ids, fronts = fronts_info
+
+            # Build a dict of fronts (level → list of individuals’ data)
+            gen_global = {}
+            for level, front in enumerate(fronts, start=1):
+                gen_global[level] = [
+                    {
+                        "id": all_ids[i],
+                        "accuracy": float(all_fit[i][0]),
+                        "params": float(all_fit[i][1]),
+                        "inference_time": float(all_fit[i][2])
+                    }
+                    for i in front
+                ]
+
+            if hv is not None:
+                gen_global["hypervolume"] = float(hv)
+
+            # Save into fronts_history, keyed by this generation number
+            self.fronts_history[self.current_gen] = gen_global
+
+            # Dump to disk
+            with open(os.path.join(self.experiment_path, "pareto_history.pkl"), "wb") as f:
+                pickle.dump(self.fronts_history, f)
 
     def evolve(self) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -543,6 +581,15 @@ class MOQNAS(QNAS):
 
         # Evaluate generation 0
         f0 = self.multiobjective_fitness()
+        self.logger.info("Generation 0: evaluated %d classical networks with %d objectives.",
+            self.pop_size,
+            self.num_objectives,
+        )
+        self.logger.info("Generation 0: fitnesses:\n%s", f0)
+        
+        p0_ids = [f"0_{i}" for i in range(len(p0_nets))]
+        self.classical_ids = p0_ids # Initialize a new attribute to hold current IDs
+    
         self.fits = f0
         self.raw_fits = self.raw_fits.copy()
 
@@ -559,6 +606,8 @@ class MOQNAS(QNAS):
 
             # 2a) Sample children classical population (both params and nets) at once
             children_params, children_nets = self.generate_classical()
+            child_ids = [f"{self.current_gen}_{i}" for i in range(len(children_nets))]
+
 
             children_params = self.random_crossover_hyperparams(children_params)
             children_nets = self.crossover_network(children_nets)
@@ -573,7 +622,8 @@ class MOQNAS(QNAS):
             combined_nets = np.vstack([p0_nets, children_nets])   # shape = (2*pop_size, net_dim)
             combined_fits = np.vstack([f0, child_fits])           # shape = (2*pop_size, n_obj)
             combined_raws = np.vstack([p0_raws, child_raw])       # shape = (2*pop_size, n_obj)
-
+            combined_ids = p0_ids + child_ids                    # shape = (2*pop_size,)
+            combined_params = np.vstack([p0_params, children_params])
             # 2d) NSGA‐II environmental selection
             next_nets, next_fits, survivor_idx = self.environmental_selection(combined_nets, combined_fits)
 
@@ -581,6 +631,8 @@ class MOQNAS(QNAS):
             self.classical_nets = next_nets
             self.fits = next_fits
             self.raw_fits = combined_raws[survivor_idx]
+            self.classical_ids = [combined_ids[i] for i in survivor_idx]
+            self.classical_params = combined_params[survivor_idx]
 
             # 2f) Resample hyperparams for next generation via generate_classical()
             #     (we will overwrite these again at the top of the next loop iteration anyway)
@@ -598,6 +650,7 @@ class MOQNAS(QNAS):
             p0_nets = self.classical_nets
             f0 = self.fits
             p0_raws = self.raw_fits
+            p0_ids = self.classical_ids
             if self.current_gen > 0 and (self.current_gen % 5 == 0):
                 curr_time = time.time()
                 h, m, est_h, est_m = calculate_time(
