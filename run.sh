@@ -5,14 +5,14 @@ config_file="config_files_cifar"
 fitness_metric="best_accuracy"
 data_path="${dataset}_data"
 log_level="INFO"
-network_config="backbone"
+network_config="default"
 backbone_name="resnet18"
 
 dataset_sample_size=10000
 
-configs=("config4.txt")
-exps=("exp4")
-cuda_devices=("0")
+configs=("config0_0.txt")
+exps=("exp5")
+cuda_devices=("1")
 
 # Loop over the length of the configs array
 for ((j=0; j<${#configs[@]}; j++)); do
@@ -25,7 +25,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
     for ((i=2; i<=3; i++)); do # Change the range to the number of repeats
         exp_path="${exp_path_base}/${exp}_repeat_$i"
 
-        CUDA_VISIBLE_DEVICES="$cuda_device" python run_evolution.py \
+        CUDA_VISIBLE_DEVICES="$cuda_device" python run_evolution2.py \
             --experiment_path "$exp_path" \
             --config_file "${config_file}/${config}" \
             --data_path "$data_path" \
