@@ -1,7 +1,7 @@
 import argparse
 import os
 
-import qnas
+import qnas2 as qnas
 import qnas_config as cfg
 import evaluation
 from util import check_files, init_log, download_dataset
