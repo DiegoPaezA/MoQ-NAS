@@ -115,15 +115,20 @@ def worker(task_args):
             v = getattr(args, k, None)
             if v is not None: params[k] = v
 
+        logger.info(f"Creating DataLoader for {cid} on {device}")
+        loader = input.GenericDataLoader(params=params)
+        train_loader, val_loader = loader.get_loader(pin_memory_device=device)
+        test_loader = loader.get_loader(for_train=False, pin_memory_device=device)
+        logger.info(f"Train loader: {len(train_loader.dataset)} samples, "
+        f"Validation loader: {len(val_loader.dataset)} samples, "
+        f"Test loader: {len(test_loader.dataset)} samples")
         results = {}
         for rep in range(args.num_repetitions):
             model_save_path = os.path.join(archive_dir, cid, f"retrain_parallel_{rep+1}")
             params["experiment_path"] = model_save_path
             
             logger.info(f"Starting retraining for {cid} repetition {rep+1} on {device}")
-            loader = input.GenericDataLoader(params=params)
-            train_loader, val_loader = loader.get_loader(pin_memory_device=device)
-            test_loader = loader.get_loader(for_train=False, pin_memory_device=device)
+            
             res = master.retrain(params=params, fn_dict=fn_dict, net_list=net_list,
                                 train_loader=train_loader, val_loader=val_loader,
                                 test_loader=test_loader)
@@ -145,53 +150,53 @@ def main(arguments):
     
     logger = init_log("INFO", name=__name__, file_path=log_file)
 
-    config = load_log_params_evolution(arguments.experiment_path)
-    train_spec = config['train_spec']
-    fn_dict = config['fn_dict']
+    try:
+        config = load_log_params_evolution(arguments.experiment_path)
+        train_spec = config['train_spec']
+        fn_dict = config['fn_dict']
 
-    candidate_ids = arguments.ids or parse_pareto_ids(
-        arguments.experiment_path, arguments.top_n, arguments.sort_by
-    )
-    logger.info(f"Found {len(candidate_ids)} valid candidates to retrain: {candidate_ids}")
-    if not candidate_ids:
-        logger.error("No candidate IDs found to retrain.")
-        return
+        candidate_ids = arguments.ids or parse_pareto_ids(
+            arguments.experiment_path, arguments.top_n, arguments.sort_by
+        )
+        logger.info(f"Found {len(candidate_ids)} valid candidates to retrain: {candidate_ids}")
+        if not candidate_ids:
+            logger.error("No candidate IDs found to retrain.")
+            return
 
-    devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
-    if not devices: devices = ["cpu"]
-    
-    if arguments.max_parallel_workers:
-        num_workers = arguments.max_parallel_workers
-        logger.info(f"User specified --max_parallel_workers={num_workers}. Overriding device count.")
-    else:
-        # Default to one worker per available GPU
-        num_workers = len(devices)
+        devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        if not devices: devices = ["cpu"]
+        
+        if arguments.max_parallel_workers:
+            num_workers = min(arguments.max_parallel_workers, len(candidate_ids))
+            logger.info(f"Using {num_workers} parallel workers as specified by --max_parallel_workers.")
+        else:
+            num_workers = len(devices)
 
-    # --- Prepare a list of task arguments, one for each candidate ---
-    tasks = []
-    for i, cid in enumerate(candidate_ids):
-        device = devices[i % len(devices)]
-        tasks.append((cid, train_spec, fn_dict, arguments, device, log_file))
+        tasks = []
+        for i, cid in enumerate(candidate_ids):
+            device = devices[i % len(devices)]
+            tasks.append((cid, train_spec, fn_dict, arguments, device, log_file))
 
-    final_results = {}
-    
-    # --- Use ProcessPoolExecutor for robust, modern parallel processing ---
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        # .map applies the 'worker' function to each item in 'tasks' and returns an iterator of results
-        future_results = executor.map(worker, tasks)
+        final_results = {}
+        
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            future_results = executor.map(worker, tasks)
+            logger.info(f"Starting retraining for {len(tasks)} models on {len(devices)} devices...")
+            for cid, res in future_results:
+                if isinstance(res, dict) and "error" in res:
+                    logger.error(f"--- Worker Error for Candidate {cid} ---\n{res['error']}\n"
+                                f"-------------------------------------------")
+                else:
+                    logger.info(f"Successfully finished retraining for candidate {cid}.")
+                    final_results[cid] = res
 
-        logger.info(f"Starting retraining for {len(tasks)} models on {len(devices)} devices...")
-        for cid, res in future_results:
-            if isinstance(res, dict) and "error" in res:
-                logger.error(f"--- Worker Error for Candidate {cid} ---\n{res['error']}\n"
-                            f"-------------------------------------------")
-            else:
-                logger.info(f"Successfully finished retraining for candidate {cid}.")
-                final_results[cid] = res
-
-    save_results_file(arguments.experiment_path, final_results,
-                        file_name='retrain_results_parallel.txt')
-    logger.info("Retraining finished")
+        save_results_file(arguments.experiment_path, final_results,
+                            file_name='retrain_results_parallel.txt')
+        
+    except Exception as e:
+        logger.critical(f"A critical error occurred in the main process: {e}", exc_info=True)
+    finally:
+        logger.info("Retraining script finished.")
 
 
 if __name__ == '__main__':
@@ -199,7 +204,6 @@ if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
     
     parser = argparse.ArgumentParser()
-    # ... (all your arguments remain the same) ...
     parser.add_argument('--experiment_path', type=str, required=True)
     parser.add_argument('--data_path', type=str, required=True)
     parser.add_argument('--dataset', type=str, required=True)
@@ -220,7 +224,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr_scheduler', type=str, default="multistep")
     parser.add_argument('--optimizer', type=str, default='AdamW')
     parser.add_argument('--data_augmentation', action='store_true')
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5)
     parser.add_argument('--patience_retrain', type=int, default=25)
     parser.add_argument('--delta_fraction', type=float, default=0.005)
