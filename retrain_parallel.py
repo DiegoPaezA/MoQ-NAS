@@ -9,25 +9,55 @@ from cnn import input, master
 from util import load_log_params_evolution, init_log, save_results_file
 
 
-def parse_pareto_ids(exp_path: str, top_n: int | None = None):
-    """Load candidate IDs from the last generation of pareto_history.pkl.
-    Falls back to listing the archive directory."""
+def parse_pareto_ids(exp_path: str, top_n: int | None = None, sort_by: str | None = None):
+    """
+    Load candidate IDs from the final Pareto front that exist on disk.
+
+    Reads IDs from pareto_history.pkl, then filters them to ensure a
+    corresponding directory exists in the 'archive' folder.
+    """
     history_file = os.path.join(exp_path, "pareto_history.pkl")
-    ids = []
-    if os.path.isfile(history_file):
-        with open(history_file, "rb") as f:
-            history = pickle.load(f)
-        if history:
-            last_gen = max(history.keys())
-            front = history[last_gen].get(1, [])
-            front = sorted(front, key=lambda x: x.get("accuracy", 0), reverse=True)
-            ids = [rec["id"] for rec in front]
     archive_dir = os.path.join(exp_path, "archive")
+    ids = []
+
+    try:
+        if os.path.isfile(history_file):
+            with open(history_file, "rb") as f:
+                history = pickle.load(f)
+
+            if history:
+                last_gen = max(history.keys())
+                front = history[last_gen].get(1, [])
+
+                if sort_by:
+                    is_reversed = sort_by not in ['params', 'inference_time']
+                    front = sorted(front, key=lambda x: x.get(sort_by, 0), reverse=is_reversed)
+
+                # 1. Get a set of all directories that actually exist in the archive.
+                if os.path.isdir(archive_dir):
+                    existing_dirs = set(os.listdir(archive_dir))
+                else:
+                    existing_dirs = set()
+
+                # 2. Load all IDs from the history file's front.
+                all_front_ids = [rec.get("id") for rec in front if rec.get("id")]
+                
+                # 3. Keep only the IDs that have an existing directory.
+                ids = [cid for cid in all_front_ids if cid in existing_dirs]
+
+    except (pickle.UnpicklingError, EOFError) as e:
+        print(f"Warning: Could not load {history_file}. It may be corrupted. Error: {e}")
+
+    # Fallback logic remains the same
     if not ids and os.path.isdir(archive_dir):
+        print("Warning: No valid IDs found in pareto_history.pkl. "
+            "Falling back to alphabetical list of models in archive directory.")
         ids = sorted(d for d in os.listdir(archive_dir)
                     if os.path.isdir(os.path.join(archive_dir, d)))
+
     if top_n:
         ids = ids[:top_n]
+
     return ids
 
 
@@ -92,7 +122,11 @@ def main(arguments):
     if arguments.ids:
         candidate_ids = arguments.ids
     else:
-        candidate_ids = parse_pareto_ids(arguments.experiment_path, arguments.top_n)
+        candidate_ids = parse_pareto_ids(
+            arguments.experiment_path,
+            arguments.top_n,
+            arguments.sort_by  # Pass the new argument here
+        )
     logger.info(f"Candidates to retrain: {candidate_ids}")
     if not candidate_ids:
         logger.error("No candidate IDs found to retrain.")
@@ -138,6 +172,9 @@ if __name__ == '__main__':
                                 'atleta_axial', 'atleta_coronal'])
     parser.add_argument('--ids', nargs='+', default=None,
                         help='Specific candidate IDs to retrain.')
+    parser.add_argument('--sort_by', type=str, default=None,
+                        choices=['accuracy', 'params', 'inference_time'],
+                        help='Metric to sort the Pareto front by before retraining.')
     parser.add_argument('--top_n', type=int, default=None,
                         help='Number of top models from final Pareto front.')
     parser.add_argument('--log_level', choices=['NONE', 'INFO', 'DEBUG'],
