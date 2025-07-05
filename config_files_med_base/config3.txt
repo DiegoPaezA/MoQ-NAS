@@ -154,8 +154,8 @@ train:
     threads: 20
 
     # penalization parameters - scalarized fitness
-    max_params: 800000 # 0.8M
-    max_inference_time: 16290 # us
+    max_params: 1800000 # 0.8M
+    max_inference_time: 8250 # us
 
     # Network structure Configuration
     network_config: default
