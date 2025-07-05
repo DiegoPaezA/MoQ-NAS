@@ -8,7 +8,7 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor
 
 from cnn import input, master
-from util import load_log_params_evolution, init_log, save_results_file, setup_dataset_info
+from util import load_log_params_evolution, init_log, save_results_file
 
 
 def parse_pareto_ids(exp_path: str, top_n: int | None = None, sort_by: str | None = None):
@@ -47,7 +47,7 @@ def parse_pareto_ids(exp_path: str, top_n: int | None = None, sort_by: str | Non
 
     if not ids and os.path.isdir(archive_dir):
         print("Warning: No valid IDs found in pareto_history.pkl. "
-              "Falling back to alphabetical list of models in archive directory.")
+                "Falling back to alphabetical list of models in archive directory.")
         ids = sorted(d for d in os.listdir(archive_dir)
                     if os.path.isdir(os.path.join(archive_dir, d)))
 
@@ -146,7 +146,7 @@ def main(arguments):
     logger = init_log("INFO", name=__name__, file_path=log_file)
 
     config = load_log_params_evolution(arguments.experiment_path)
-    train_spec = setup_dataset_info(config['train_spec'])
+    train_spec = config['train_spec']
     fn_dict = config['fn_dict']
 
     candidate_ids = arguments.ids or parse_pareto_ids(
@@ -207,7 +207,7 @@ if __name__ == '__main__':
     parser.add_argument('--sort_by', type=str, default=None, choices=['accuracy', 'params', 'inference_time'])
     parser.add_argument('--max_parallel_workers', type=int, default=None,
                         help='Manually set the number of parallel workers. '
-                             'Defaults to the number of available GPUs.')
+                            'Defaults to the number of available GPUs.')
     parser.add_argument('--top_n', type=int, default=None)
     parser.add_argument('--log_level', choices=['NONE', 'INFO', 'DEBUG'], default='INFO')
     parser.add_argument('--max_epochs', type=int, default=25)
