@@ -474,10 +474,10 @@ class MOQNAS(QNAS):
                 len(self.pareto_global_population),
                 hv,
             )
-            
+            display_ids = self.pareto_global_ids.tolist()
             self.logger.info("Generation %d: current global Pareto IDs:\n%s",
                 self.current_gen,
-                self.pareto_global_ids,
+                display_ids,
             )
 
             fitness_str = np.array2string(
