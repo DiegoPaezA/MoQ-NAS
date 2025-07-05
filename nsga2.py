@@ -33,6 +33,7 @@ class NSGA2(GA):
         """
         super().__init__(eval_func, experiment_path,objectives, log_file, log_level, data_file)
         self.eval_cache = {}
+        self.population_ids = None 
         self.pareto_global_population = None
         self.pareto_global_fitnesses = None
         self.pareto_global_ids = []
@@ -53,34 +54,38 @@ class NSGA2(GA):
         decoded_nets, decoded_params = self.decode_pop()
         pop = self.population
         N = len(pop)
-
-        # Ensure objectives are set
-        metrics_keys = self.objectives  # e.g. ['best_accuracy','total_params','cuda_inference_time']
+        metrics_keys = self.objectives
         M = len(metrics_keys)
 
-        # Initialize fitness array and keys for caching
         fits = [[0.0] * M for _ in range(N)]
-        keys = [pop[i].tobytes() for i in range(N)]
-        to_eval = []
+        keys = [p.tobytes() for p in pop]
+        to_eval_indices = []
 
         # Check cache for existing evaluations
         for i, k in enumerate(keys):
             if k in self.eval_cache:
-                cached = self.eval_cache[k]           # es un dict
-                fits[i] = [cached[key] for key in metrics_keys]
+                fits[i] = [self.eval_cache[k][key] for key in metrics_keys]
             else:
-                to_eval.append(i)
+                to_eval_indices.append(i)
 
-        # evaluate only the individuals that are not cached
-        if to_eval:
-            sub_nets   = [decoded_nets[i]   for i in to_eval]
-            sub_params = [decoded_params[i] for i in to_eval]
-            sub_results= self.eval_func(sub_params, sub_nets,generation=self.current_gen)
-            for i in sub_results.keys():
-                res_dict    = sub_results[i]
+        # Evaluate only the individuals that are not cached
+        if to_eval_indices:
+            sub_nets   = [decoded_nets[i] for i in to_eval_indices]
+            sub_params = [decoded_params[i] for i in to_eval_indices]
+
+            # CONTRACT: eval_func MUST return a list of dicts, same length and order as input lists.
+            sub_results_list = self.eval_func(sub_params, sub_nets, generation=self.current_gen)
+
+            # Iterate through the returned results and the original indices together
+            for i, original_index in enumerate(to_eval_indices):
+                res_dict = sub_results_list[i]
                 metric_vals = [res_dict[key] for key in metrics_keys]
-                fits[i]     = metric_vals
-                self.eval_cache[keys[i]] = res_dict
+
+                # Update the main fitness array at the correct original index
+                fits[original_index] = metric_vals
+
+                # Update the cache using the key for the original index
+                self.eval_cache[keys[original_index]] = res_dict
 
         self.fitnesses = np.array(fits, dtype=float)
         return self.fitnesses
@@ -227,6 +232,7 @@ class NSGA2(GA):
         # Preallocate result arrays
         new_pop = np.empty((pop_size, pop.shape[1]), dtype=pop.dtype)
         new_fits = np.empty((pop_size, M), dtype=float)
+        survivor_indices = [] 
         count = 0
         for front in fronts:
             front_size = len(front)
@@ -234,6 +240,7 @@ class NSGA2(GA):
             if count + front_size <= pop_size:
                 new_pop[count:count+front_size] = pop[front]
                 new_fits[count:count+front_size] = fits[front]
+                survivor_indices.extend(front)
                 count += front_size
             else:
                 rem = pop_size - count
@@ -244,9 +251,10 @@ class NSGA2(GA):
                     chosen = [front[i] for i in sel_indices]
                     new_pop[count:count+rem] = pop[chosen]
                     new_fits[count:count+rem] = fits[chosen]
+                    survivor_indices.extend(chosen)
                 # Either way, stop filling
                 break
-        return new_pop, new_fits
+        return new_pop, new_fits, survivor_indices
     
     def tournament_select(self, pop, fits, rank, crowd):
         """
@@ -306,91 +314,108 @@ class NSGA2(GA):
         Returns:
             tuple: (all_pop, all_fit, all_ids, fronts) for history recording.
         """
-        curr_ids = [f"{self.current_gen}_{i}" for i in range(len(self.population))]
+        curr_ids = self.population_ids
         if self.pareto_global_population is None:
-            all_pop, all_fit, all_ids = self.population.copy(), self.fitnesses.copy(), curr_ids
+            # If the archive is empty, initialize it with the current population.
+            all_pop = self.population.copy() # In MOQNAS, self.classical_nets
+            all_fits = self.fitnesses.copy() # In MOQNAS, self.fits
+            all_params = self.classical_params.copy() if hasattr(self, 'classical_params') else None
+            all_ids = curr_ids.copy()
         else:
-            all_pop = np.vstack([self.pareto_global_population, self.population])
-            all_fit = np.vstack([self.pareto_global_fitnesses, self.fitnesses])
+            # Otherwise, combine the existing archive with the current population.
+            all_pop = np.vstack([self.pareto_global_population, self.population]) # or self.classical_nets
+            all_fits = np.vstack([self.pareto_global_fitnesses, self.fitnesses]) # or self.fits
             all_ids = self.pareto_global_ids + curr_ids
-        fronts = self.fast_nondominated_sort(all_fit)
+            if hasattr(self, 'classical_params') and self.pareto_global_params is not None:
+                all_params = np.vstack([self.pareto_global_params, self.classical_params])
+            else:
+                all_params = None
+
+        unique_ids, unique_indices = np.unique(all_ids, return_index=True)
+        unique_pop = all_pop[unique_indices]
+        unique_fits = all_fits[unique_indices]
+        unique_params = all_params[unique_indices] if all_params is not None else None
+        unique_ids = list(unique_ids) # Convert back to a list
+        
+        # 1) Perform a full non-dominated sort on the combined set.
+        fronts = self.fast_nondominated_sort(unique_fits)
+        
+        # 2) The new global archive is the entire first front. No filtering is applied.
         idx0 = fronts[0]
-        pop0, fit0 = all_pop[idx0], all_fit[idx0]
-        ids0 = [all_ids[i] for i in idx0]
-        cd = self.crowding_distance(fit0, list(range(len(pop0))))
-        mask = np.isinf(cd) | (cd > 0) #
-        self.pareto_global_population = pop0[mask]
-        self.pareto_global_fitnesses = fit0[mask]
-        self.pareto_global_ids = [ids0[i] for i, keep in enumerate(mask) if keep]
-        return all_pop, all_fit, all_ids, fronts
+        
+        # 3) Update the global archive class attributes.
+        self.pareto_global_population  = unique_pop[idx0]
+        self.pareto_global_fitnesses   = unique_fits[idx0]
+        self.pareto_global_ids         = [unique_ids[i] for i in idx0]
+        if all_params is not None:
+            self.pareto_global_params = unique_params[idx0]
 
-    def record_global_fronts_history(self, fronts_info=None, hv=None):
+        # 4) Compute crowding distance on the final global front for the *next* step's selection.
+        self._last_cd = self.crowding_distance(
+            self.pareto_global_fitnesses,
+            list(range(len(self.pareto_global_fitnesses)))
+        )
+
+    def record_and_save_history(self):
         """
-        Record Pareto fronts into self.fronts_history (including hypervolume) and persist to disk.
-
-        If fronts_info is provided, it should be a tuple
-        (all_pop, all_fits, all_ids, fronts) representing the combined
-        archive + current population and the full Pareto fronts on them.
-        Otherwise, recompute fronts from self.pareto_global_*.
-
-        Args:
-            fronts_info (tuple, optional):
-                all_pop (np.ndarray): stacked [old_archive; current_pop]
-                all_fits (np.ndarray): stacked [old_archive_fits; current_fits]
-                all_ids (list):     [old_archive_ids + current_ids]
-                fronts (list of lists): Pareto fronts on all_fits
-            hv (float, optional):
-                The hypervolume value for this generation. If provided, it will
-                be saved alongside the fronts.
+        Records the current global Pareto front, calculates its hypervolume,
+        and saves the entire history to a pickle file.
         """
-        all_pop, all_fit, all_ids, fronts = fronts_info
+        # 1) Build the record for the current generation from the final global archive.
+        gen_record = {1: []} # Key '1' represents the first (and only) front being saved.
+        
+        for i in range(len(self.pareto_global_ids)):
+            individual_data = {
+                "id":              self.pareto_global_ids[i],
+                "accuracy":        float(self.pareto_global_fitnesses[i][0]),
+                "params":          float(self.pareto_global_fitnesses[i][1]),
+                "inference_time":  float(self.pareto_global_fitnesses[i][2])
+            }
+            gen_record[1].append(individual_data)
 
-        # Build a dict of fronts (level → list of individuals’ data)
-        gen_global = {}
-        for level, front in enumerate(fronts, start=1):
-            gen_global[level] = [
-                {
-                    "id": all_ids[i],
-                    "accuracy": float(all_fit[i][0]),
-                    "params": float(all_fit[i][1]),
-                    "inference_time": float(all_fit[i][2])
-                }
-                for i in front
-            ]
-
-        if hv is not None:
-            gen_global["hypervolume"] = float(hv)
-
-        # Save into fronts_history, keyed by this generation number
-        self.fronts_history[self.current_gen] = gen_global
-
-        # Dump to disk
-        with open(os.path.join(self.experiment_path, "pareto_history.pkl"), "wb") as f:
+        # 2) Calculate the hypervolume of the current global front.
+        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        gen_record["hypervolume"] = float(hv)
+        
+        # 3) Add the record for this generation to the main history dictionary.
+        self.fronts_history[self.current_gen] = gen_record
+        
+        # 4) Persist the entire history to disk.
+        history_path = os.path.join(self.experiment_path, "pareto_history.pkl")
+        with open(history_path, "wb") as f:
             pickle.dump(self.fronts_history, f)
 
     def go_next_gen(self):
         """
-        Archive and record the current global Pareto front, then increment generation.
-
-        - Updates global buffer via update_global_pareto_front.
-        - Records full Pareto fronts history.
-        - Calls delete_old_dirs_v2 to archive front 0 only.
-        - Preserves gen0 archive on first call.
+        Orchestrates end-of-generation tasks for NSGA-II: updating the global
+        archive, recording history, logging, and cleaning up old directories.
         """
-        fronts_info = self.update_global_pareto_front()
-        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
-        self.logger.info(f"Gen {self.current_gen} → Hypervolume = {hv:.3f}")
-        self.record_global_fronts_history(fronts_info, hv)
+        # 1. Update the global Pareto archive.
+        # This method handles updating the self.pareto_global_* attributes.
+        self.update_global_pareto_front()
+
+        # 2. Record the history of the updated global front and save it to a file.
+        # This method now also calculates the hypervolume internally.
+        self.record_and_save_history()
+
+        # 3. Log a summary of the generation's results for monitoring.
+        hv = self.fronts_history[self.current_gen]['hypervolume']
+        self.logger.info(
+            f"Gen {self.current_gen} → Hypervolume = {hv:.4f}, "
+            f"Global Front Size = {len(self.pareto_global_population)}"
+        )
+
+        # 4. Clean up old model directories, keeping only those in the final global archive.
         delete_old_dirs_v2(
             self.experiment_path,
             self.current_gen,
             keep_ids=self.pareto_global_ids.copy()
         )
         if self.current_gen == 1:
+            # On the first run, also clean up directories from generation 0.
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
-            
-        self.logger.info(f"Generation {self.current_gen} Pareto front size: {len(self.pareto_global_population)}")
 
+        # 5. Advance the generation counter.
         self.current_gen += 1
 
     def evolve(self):
@@ -410,18 +435,31 @@ class NSGA2(GA):
         start_time = time.time()
         fits_old = self.evaluate_population()
         pop_old = self.population.copy()
+        
+        ids_old = [f"0_{i}" for i in range(len(pop_old))]
+        self.population_ids = ids_old.copy() 
+    
         self.best_so_far = np.max(fits_old[:, 0])
         self.last_best_so_far = self.best_so_far
         self.current_gen = 1
         while self.current_gen < self.num_generations:
             self.generate_offspring()
             fits_new = self.evaluate_population()
+            pop_new = self.population.copy()
+            ids_new = [f"{self.current_gen}_{i}" for i in range(len(pop_new))]
+            
+            
             combined_pop = np.vstack([pop_old, self.population])
             combined_fits = np.vstack([fits_old, fits_new])
-            self.population, self.fitnesses = self.environmental_selection(
-                combined_pop, combined_fits)
+            combined_ids = ids_old + ids_new
+            self.population, self.fitnesses, survivor_idx = self.environmental_selection(
+                        combined_pop, combined_fits)
+            
+            self.population_ids = [combined_ids[i] for i in survivor_idx]
+            
             self.go_next_gen()
-            pop_old, fits_old = self.population.copy(), self.fitnesses.copy()
+            pop_old, fits_old, ids_old = self.population.copy(), self.fitnesses.copy(), self.population_ids.copy()
+        
             if self.early_stopping and self.check_early_stopping():break
             
         total_time = time.time() - start_time
