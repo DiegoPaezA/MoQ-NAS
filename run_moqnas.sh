@@ -2,7 +2,7 @@
 
 # —— Experiment settings —— 
 dataset="cifar10"
-exp_path_base="experiment_${dataset}_moqnasX"
+exp_path_base="experiment_${dataset}_moqnas"
 config_dir="config_files_cifar"
 fitness_metric="best_accuracy"
 data_path="${dataset}_data"
@@ -23,11 +23,11 @@ multi_objective=true
 # —— sample size & repeats —— 
 dataset_sample_size=10000
 configs=("config0.txt")   # list your MO-QNAS config files here (inside ${config_dir}/)
-exps=("exp4")               # corresponding experiment names
+exps=("exp3")               # corresponding experiment names
 cuda_devices=("0")          # GPU IDs for each run
 
 # Number of repeats per configuration
-num_repeats=1
+num_repeats=3
 
 # —— Loop over configs & repeats —— 
 for ((j=0; j<${#configs[@]}; j++)); do
