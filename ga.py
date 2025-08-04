@@ -206,12 +206,22 @@ class GA(object):
         self.fitnesses = self.fitnesses[idx]
 
     def _evaluate_without_cache(self, decoded_net, decoded_params):
-        """Evaluates the entire population without using any cache."""
-        #self.logger.info("Evaluating population of %d individuals without cache.", len(decoded_net))
+        """Evaluates the entire population, handling dictionary-based results."""
+        self.logger.info("Evaluating population of %d individuals without cache.", len(decoded_net))
         results = self.eval_func(decoded_params, decoded_net, generation=self.current_gen)
+
+        if not results:
+            return [None] * len(decoded_net)
+
+        fitness_values = [None] * len(decoded_net)
         metric_key = self.objectives[0]
-        # Assumes eval_func returns a list of dicts in the same order
-        fitness_values = [res[metric_key] for res in results]
+
+        # Correctly map results from the dictionary using candidate_id
+        for i in range(len(decoded_net)):
+            candidate_id = decoded_params[i]['candidate_id']
+            if candidate_id in results:
+                fitness_values[i] = results[candidate_id][metric_key]
+        
         self.total_eval += len(self.population)
         return fitness_values
 
@@ -240,29 +250,35 @@ class GA(object):
 
         # 2) Train all scheduled individuals in one batch
         if indices_to_evaluate:
+            # `results` is a DICTIONARY mapping candidate_id to metrics.
             results = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
             metric_key = self.objectives[0]
-            new_vals = np.array([results[i][metric_key] for i in range(len(eval_net))])
+            # Map results back to the original population indices
+            for i, original_idx in enumerate(indices_to_evaluate):
+                # Get the candidate_id that was sent for this individual
+                candidate_id = eval_dp[i]['candidate_id']
+                
+                if candidate_id in results:
+                    # Look up the result for this specific candidate
+                    result_for_candidate = results[candidate_id]
+                    raw_fitness = result_for_candidate[metric_key]
 
-            for i, idx in enumerate(indices_to_evaluate):
-                key = tuple(self.population[idx].tolist())
-                raw = new_vals[i]
-                self.eval_history[key].append(raw)
-                self.total_eval += 1
-                if len(self.eval_history[key]) == 3: # On the 3rd run, compute & cache the mean
-                    mean_f = sum(self.eval_history[key]) / 3.0
-                    self.evaluated[key] = mean_f
-                    fitness_list[idx] = mean_f
-                else: # Fewer than 3 runs so far: use raw fitness for selection
-                    fitness_list[idx] = raw
-        
+                    # Now, do the caching logic with the correctly retrieved 'raw_fitness'
+                    key = tuple(self.population[original_idx].tolist())
+                    self.eval_history[key].append(raw_fitness)
+                    self.total_eval += 1
+
+                    if len(self.eval_history[key]) == 3: # On the 3rd run, compute & cache the mean
+                        mean_f = sum(self.eval_history[key]) / 3.0
+                        self.evaluated[key] = mean_f
+                        fitness_list[original_idx] = mean_f
+                    else: # Fewer than 3 runs: use raw fitness for selection
+                        fitness_list[original_idx] = raw_fitness
         return fitness_list
 
     def evaluate_population(self):
         """
         Evaluate the current population using the appropriate strategy (cached or not).
-        Returns:
-            fitnesses: A NumPy array with the fitness values for the population.
         """
         decoded_net, decoded_params = self.decode_pop()
         
@@ -271,7 +287,7 @@ class GA(object):
         else:
             fitness_values = self._evaluate_without_cache(decoded_net, decoded_params)
 
-        self.fitnesses = np.array(fitness_values)
+        self.fitnesses = np.array(fitness_values, dtype=object)
 
         # Finalize generation results
         self.update_best_id(self.fitnesses)
