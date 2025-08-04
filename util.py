@@ -27,6 +27,12 @@ from cnn import model, input
 import GPUtil
 from pickle import dump, load, HIGHEST_PROTOCOL
 
+import plotly.express as px
+from pymoo.indicators.hv import Hypervolume
+
+from collections import defaultdict
+import statistics
+
 def natural_key(string):
     """ Key to use with sort() in order to sort string lists in natural order.
         Example: [1_1, 1_2, 1_5, 1_10, 1_13].
@@ -686,24 +692,15 @@ def load_cache(file_path: str) -> Dict:
     return data
 
 
-def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
-                        results_subdir: str = "results",archive_subdir: str = "archive",
-                        link_name: str = "best_so_far",logger: Optional[logging.Logger] = None) -> None:
+def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],is_snapshot_gen: bool = False,
+                    results_subdir: str = "results",archive_subdir: str = "archive",snapshots_subdir: str = "snapshots",
+                    link_name: str = "best_so_far",logger: Optional[logging.Logger] = None) -> None:
     """
-    Moves temp folders from
-        <experiment_path>/<results_subdir>/gen_<generation>/<id>
-    into
-        <experiment_path>/<archive_subdir>/
-    Deletes any archived folder not in keep_ids,
-    updates a symlink
-        <experiment_path>/<link_name>
-    to point at the first kept folder,
-    and finally deletes the temp gen_<generation> directory.
-
-    Only the first time a given keep_id is seen in the results folder
-    will the archive be updated and the best_so_far link be re-pointed.
-    Subsequent calls with the same keep_ids will simply delete the temp
-    results folder without pruning or relinking.
+    Manages experiment artifacts by moving results, taking snapshots,
+    pruning the archive, and updating a symlink.
+    
+    If `is_snapshot_gen` is True, this function will also copy the current
+    set of `keep_ids` to a permanent snapshot directory for that generation.
     """
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -713,61 +710,404 @@ def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
     archive_dir = os.path.join(base, archive_subdir)
     os.makedirs(archive_dir, exist_ok=True)
 
-    # 1) Mueve todos los keep_ids que existan en results_dir → archive_dir
+    # 1) Move any new results from the temporary 'results' dir to the 'archive' dir
     if os.path.isdir(results_dir):
         for kid in keep_ids:
             src = os.path.join(results_dir, kid)
             dst = os.path.join(archive_dir, kid)
-            if os.path.isdir(src):
+            if os.path.isdir(src) and not os.path.isdir(dst):
                 try:
-                    # Solo mueve si no existe ya en archive
-                    if not os.path.isdir(dst):
-                        shutil.move(src, dst)
-                        logger.debug(f"Archived {src} → {dst}")
-                    else:
-                        logger.debug(f"{dst} ya existe, no lo muevo")
+                    shutil.move(src, dst)
+                    logger.debug(f"Archived {src} -> {dst}")
                 except Exception as e:
-                    logger.warning(f"Error moviendo {src} → {dst}: {e}")
-
-        # Borra siempre el directorio de resultados temp
+                    logger.warning(f"Error moving {src} -> {dst}: {e}")
         try:
             shutil.rmtree(results_dir)
             logger.debug(f"Removed temp dir {results_dir}")
         except Exception as e:
-            logger.warning(f"No pude borrar {results_dir}: {e}")
-    else:
-        logger.debug(f"No existe {results_dir}, salto al pruning")
+            logger.warning(f"Could not remove temp dir {results_dir}: {e}")
 
-    # 2) PRUNING: elimina de archive/ todo lo que NO esté en keep_ids
+    # --- NEW: Take a snapshot if this is a snapshot generation ---
+    if is_snapshot_gen:
+        snapshot_gen_dir = os.path.join(base, snapshots_subdir, f"gen_{generation}")
+        os.makedirs(snapshot_gen_dir, exist_ok=True)
+        logger.info(f"Taking snapshot for generation {generation} -> {snapshot_gen_dir}")
+        
+        for kid in keep_ids:
+            src = os.path.join(archive_dir, kid)
+            dst = os.path.join(snapshot_gen_dir, kid)
+            if os.path.isdir(src) and not os.path.isdir(dst):
+                try:
+                    shutil.copytree(src, dst)
+                    logger.debug(f"Copied {src} to snapshot {dst}")
+                except Exception as e:
+                    logger.warning(f"Error copying snapshot for {kid}: {e}")
+
+    # 2) PRUNING: Always prune the main archive to keep it clean.
+    #    This removes any models from 'archive/' that are no longer in the current Pareto front.
     for folder in os.listdir(archive_dir):
         if folder not in keep_ids:
             path = os.path.join(archive_dir, folder)
             if os.path.isdir(path):
                 try:
                     shutil.rmtree(path)
-                    logger.debug(f"Pruned {path}")
+                    logger.debug(f"Pruned old model from archive: {path}")
                 except Exception as e:
-                    logger.warning(f"Error borrando {path}: {e}")
+                    logger.warning(f"Error pruning {path}: {e}")
 
     # 3) ACTUALIZAR SYMLINK al primer keep_id
     if not keep_ids:
-        logger.error("keep_ids vacío, no hay best_so_far que linkear")
+        logger.error("keep_ids is empty, cannot link best_so_far")
         return
 
     best = keep_ids[0]
     target = os.path.join(archive_dir, best)
     linkpath = os.path.join(base, link_name)
 
-    # quita enlace o archivo viejo
+    # Remove old link or file
     try:
         if os.path.islink(linkpath) or os.path.exists(linkpath):
             os.unlink(linkpath)
     except Exception as e:
-        logger.warning(f"No pude quitar enlace viejo {linkpath}: {e}")
+        logger.warning(f"Could not remove old symlink {linkpath}: {e}")
 
-    # crea el nuevo symlink
+    # Create new symlink
     try:
-        os.symlink(target, linkpath)
-        logger.info(f"Updated {link_name} → {target}")
+        # Check if target exists before creating a link to it
+        if os.path.isdir(target):
+            os.symlink(target, linkpath)
+            logger.info(f"Updated {link_name} -> {target}")
+        else:
+            logger.warning(f"Target for symlink {target} does not exist. Cannot create link.")
     except Exception as e:
-        logger.error(f"Error creando symlink {linkpath} → {target}: {e}")
+        logger.error(f"Error creating symlink {linkpath} -> {target}: {e}")
+        
+def compute_hypervolume_mixed(front_raw: np.ndarray, ε: float = 1e-6) -> float:
+    """
+    Compute hypervolume for a 3-objective Pareto front where:
+        - front_raw[:, 0] = accuracy (to be maximized)
+        - front_raw[:, 1] = num_parameters (to be minimized)
+        - front_raw[:, 2] = inference_time (to be minimized)
+
+    We first convert everything into minimization form by flipping accuracy → -accuracy,
+    then build a reference point slightly above the “worst” in each dimension,
+    and finally call pymoo’s Hypervolume on that minimization front.
+    Args:
+        front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
+        ε (float): tiny margin to add to the reference point.
+    Returns:
+        float: the hypervolume (in the original mixed‐obj space).
+    """
+    if front_raw.size == 0:
+        return 0.0
+    # 1) Build minimization front: acc → -acc, params & time unchanged
+    front_min = front_raw.copy()
+    front_min[:, 0] *= -1.0   # flip accuracy
+    # 2) Construct the reference point (for each column, take max(front_min[:,j]) + ε)
+    ref = np.max(front_min, axis=0) + ε
+    # 3) Call pymoo’s Hypervolume (which expects a minimization front and ref_point)
+    hv_indicator = Hypervolume(ref_point=ref)
+    hv_value     = hv_indicator(front_min)
+    return float(hv_value)
+
+def load_pareto_history(filepath="pareto_history.pkl"):
+    """
+    Carga el archivo pickle que contiene fronts_history.
+    Devuelve un dict: {generacion: {nivel_frente: [registros...]}}
+    """
+    with open(filepath, "rb") as f:
+        history = pkl.load(f)
+    return history
+
+def plot_hypervolume_over_epochs(main_path, experiment_pattern="exp1_repeat"):
+
+    folder_list = [f for f in os.listdir(main_path) if experiment_pattern in f]
+    print(f"Found {len(folder_list)} folders matching the pattern '{experiment_pattern}'.")
+    plt.figure(figsize=(10, 6))
+    num_plots = 0
+
+    for folder in folder_list:
+        history_path = os.path.join(main_path, folder, "pareto_history.pkl")
+        if not os.path.exists(history_path):
+            continue
+
+        with open(history_path, "rb") as pf:
+            history = pkl.load(pf)
+
+        generations = sorted(history.keys())
+        hypervolumes = [history[gen].get("hypervolume", 0.0) for gen in generations]
+
+        if generations and any(hypervolumes):
+            plt.plot(generations, hypervolumes, marker='o', label=folder)
+            num_plots += 1
+
+    plt.title("Hypervolume over Generations for Each Experiment")
+    plt.xlabel("Generation")
+    plt.ylabel("Hypervolume")
+    if num_plots > 0:
+        plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def _get_hypervolume_stats(path_or_pattern):
+    """
+    Helper function to load hypervolume data. It supports three modes:
+    1. Path to a single run folder.
+    2. Path to a main directory containing multiple run sub-folders.
+    3. Path with a prefix to match specific run folders (e.g., "results/exp_").
+    """
+    run_paths_to_check = []
+
+    # Mode 3: Path is a prefix pattern
+    # This is likely if the path itself doesn't exist but its parent directory does.
+    if not os.path.exists(path_or_pattern) and os.path.isdir(os.path.dirname(path_or_pattern)):
+        parent_dir, prefix = os.path.split(path_or_pattern)
+        # Handle case where parent_dir is empty (relative path)
+        if not parent_dir:
+            parent_dir = '.'
+        print(f"Interpreting '{path_or_pattern}' as a prefix pattern.")
+        run_paths_to_check = [
+            f.path for f in os.scandir(parent_dir)
+            if f.is_dir() and f.name.startswith(prefix)
+        ]
+    # If the path exists, handle Modes 1 and 2
+    elif os.path.exists(path_or_pattern):
+        # Mode 1: Path is a single run folder
+        single_run_pkl = os.path.join(path_or_pattern, "pareto_history.pkl")
+        if os.path.isfile(single_run_pkl):
+            print(f"Interpreting '{path_or_pattern}' as a single run.")
+            run_paths_to_check.append(path_or_pattern)
+        # Mode 2: Path is a main directory containing run folders
+        elif os.path.isdir(path_or_pattern):
+            subdirs = [f.path for f in os.scandir(path_or_pattern) if f.is_dir()]
+            if subdirs:
+                print(f"Interpreting '{path_or_pattern}' as a main directory containing {len(subdirs)} run(s).")
+                run_paths_to_check = subdirs
+
+    if not run_paths_to_check:
+        print(f"Warning: No runs found for path/pattern '{path_or_pattern}'")
+        return np.array([]), np.array([]), np.array([])
+
+    hvs_by_gen = defaultdict(list)
+    # Process all identified runs from any of the modes
+    for run_path in run_paths_to_check:
+        history_path = os.path.join(run_path, "pareto_history.pkl")
+        if not os.path.exists(history_path):
+            continue
+        with open(history_path, "rb") as pf:
+            history = pkl.load(pf)
+        for gen, data in history.items():
+            if 'hypervolume' in data and isinstance(data['hypervolume'], (int, float)):
+                hvs_by_gen[gen].append(data['hypervolume'])
+
+    if not hvs_by_gen:
+        print(f"Warning: No valid hypervolume data could be loaded. Please check your 'pareto_history.pkl' files.")
+        return np.array([]), np.array([]), np.array([])
+
+    generations = np.array(sorted(hvs_by_gen.keys()))
+    mean_hvs = np.array([np.mean(hvs_by_gen[gen]) for gen in generations])
+    std_hvs = np.array([np.std(hvs_by_gen[gen]) for gen in generations])
+    return generations, mean_hvs, std_hvs
+
+
+def plot_hypervolume_comparison(path_exp1, path_exp2, label_exp1="Method 1", label_exp2="Method 2"):
+    """
+    Compares the hypervolume evolution of two experiments by plotting their
+    mean performance and standard deviation across multiple runs.
+
+    Args:
+        path_exp1 (str): Directory path for the first experiment. This directory
+                        should contain a subfolder for each independent run.
+        path_exp2 (str): Directory path for the second experiment.
+        label_exp1 (str): Plot label for the first experiment.
+        label_exp2 (str): Plot label for the second experiment.
+    """
+    # Get statistics for the first experiment
+    print(f"--- Processing Experiment 1: {label_exp1} ---")
+    gens1, means1, stds1 = _get_hypervolume_stats(path_exp1)
+
+    # Get statistics for the second experiment
+    print(f"\n--- Processing Experiment 2: {label_exp2} ---")
+    gens2, means2, stds2 = _get_hypervolume_stats(path_exp2)
+
+    # Set up the plot
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Plot for Experiment 1
+    if len(gens1) > 0:
+        ax.plot(gens1, means1, label=label_exp1, lw=2.5)
+        ax.fill_between(gens1, means1 - stds1, means1 + stds1, alpha=0.2, label=f'{label_exp1} (Std. Dev.)')
+    else:
+        print(f"Could not plot '{label_exp1}' due to lack of data.")
+
+    # Plot for Experiment 2
+    if len(gens2) > 0:
+        ax.plot(gens2, means2, label=label_exp2, lw=2.5)
+        ax.fill_between(gens2, means2 - stds2, means2 + stds2, alpha=0.2, label=f'{label_exp2} (Std. Dev.)')
+    else:
+        print(f"Could not plot '{label_exp2}' due to lack of data.")
+        
+    # Final plot styling
+    ax.set_title("Hypervolume Comparison", fontsize=16, weight='bold')
+    ax.set_xlabel("Generation", fontsize=12)
+    ax.set_ylabel("Hypervolume", fontsize=12)
+    
+    if len(gens1) > 0 or len(gens2) > 0:
+        ax.legend(fontsize=11)
+        
+    ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    plt.tight_layout()
+    plt.show()
+    
+def plot_pareto_evolution(history, dims="3d",
+                            x="params", y="inference_time", z="accuracy",
+                            width=1200, height=800, y_range=None):
+    """
+    Plot the evolution of Pareto fronts over generations en 2D o 3D con tooltips
+    formateados a 2 decimales y unidad.
+    """
+    # 1) Flatten the history into a DataFrame, skipping the "hypervolume" key
+    rows = []
+    for gen, fronts in history.items():
+        for level, recs in fronts.items():
+            # Skip any non-integer key (e.g. "hypervolume")
+            if not isinstance(level, int):
+                continue
+
+            for rec in recs:
+                rows.append({
+                    "generation": gen,
+                    "front_level": level,
+                    "accuracy": rec["accuracy"],
+                    "params": rec["params"],
+                    "inference_time": rec["inference_time"]
+                })
+
+    df = pd.DataFrame(rows)
+
+    # 2) Build the plot in 3D or 2D
+    if dims == "3d":
+        fig = px.scatter_3d(
+            df,
+            x=x, y=y, z=z,
+            color="front_level",
+            animation_frame="generation",
+            width=width, height=height,
+            title="Pareto Front Evolution (3D)",
+            labels={
+                x: "Params (M)",
+                y: "Inference Time (µs)",
+                z: "Accuracy (%)",
+                "front_level": "Front Level",
+                "generation": "Generation"
+            },
+            custom_data=["front_level", "generation"]
+        )
+        fig.update_traces(
+            marker=dict(size=4),
+            hovertemplate=(
+                "Params: %{x:.2f} M<br>"
+                "Inference Time: %{y:.2f} µs<br>"
+                "Accuracy: %{z:.2f}%<br>"
+                "Front Level: %{customdata[0]}<br>"
+                "Generation: %{customdata[1]}<extra></extra>"
+            )
+        )
+        fig.update_layout(
+            scene=dict(
+                yaxis=dict(range=[df[y].min() * 0.9, df[y].max() * 1.5],),
+            ),
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
+
+    else:
+        # 2D scatter
+        fig = px.scatter(
+            df,
+            x=x, y=y,
+            color="front_level",
+            animation_frame="generation",
+            width=width, height=height,
+            title="Pareto Front Evolution (2D)",
+            labels={
+                x: "Params (M)",
+                y: "Inference Time (µs)",
+                "front_level": "Front Level",
+                "generation": "Generation"
+            },
+            custom_data=["front_level", "generation"]
+        )
+        fig.update_traces(
+            marker=dict(size=6),
+            hovertemplate=(
+                "Params: %{x:.2f} M<br>"
+                "Inference Time: %{y:.2f} µs<br>"
+                "Front Level: %{customdata[0]}<br>"
+                "Generation: %{customdata[1]}<extra></extra>"
+            )
+        )
+        if y_range is not None:
+            fig.update_layout(yaxis=dict(range=y_range))
+        fig.update_layout(margin=dict(l=20, r=20, t=50, b=20))
+
+    fig.show()
+    
+def load_data_for_pareto(file_path):
+    """
+    Loads and processes data from a single large JSON results file and 
+    formats it for the plot_pareto_evolution function.
+
+    This version correctly reads the entire file as a single JSON object.
+
+    Args:
+        file_path (str): The path to the input JSON file.
+
+    Returns:
+        dict: A dictionary formatted for the plot_pareto_evolution function.
+    """
+    # Open and load the entire file as a single JSON object
+    with open(file_path, 'r') as f:
+        full_data = json.load(f)
+
+    # Since 'generation' and 'front_level' are not in the source data,
+    # we place all results into a single generation (0) and front (0) for plotting.
+    pareto_front_records = []
+
+    # Iterate through each main key (e.g., "0_17", "0_2") in the JSON data
+    for key, retrain_data in full_data.items():
+        # Lists to store metrics from each retrain trial for averaging
+        accuracies = []
+        params_list = []
+        inference_times = []
+
+        # Iterate through each retrain instance (e.g., "retrain_1", "retrain_2")
+        for retrain_key, metrics in retrain_data.items():
+            # Ensure the retrain entry has the necessary metrics
+            if "test_accuracy" in metrics and "total_params" in metrics and "cuda_inference_time" in metrics:
+                accuracies.append(metrics['test_accuracy'])
+                params_list.append(metrics['total_params'])
+                inference_times.append(metrics['cuda_inference_time'])
+
+        # If we found any valid retrain data, calculate the means
+        if accuracies:
+            mean_accuracy = statistics.mean(accuracies)
+            mean_params = statistics.mean(params_list)
+            mean_inference_time = statistics.mean(inference_times)
+            
+            pareto_front_records.append({
+                "accuracy": mean_accuracy,
+                # Convert params to millions (M) for a more readable plot scale
+                "params": mean_params / 1_000_000, 
+                "inference_time": mean_inference_time
+            })
+
+    # Structure the data into the nested dictionary format expected by the plotting function
+    history = {
+        0: {  # Generation 0
+            0: pareto_front_records  # Front Level 0
+        }
+    }
+    return history
