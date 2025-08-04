@@ -24,6 +24,9 @@ def main(**args):
         
     if args['early_stopping']:
         logger.info(f"Early stopping is enabled. Patience: {args['patience']} generations.")
+        
+    if args["use_cache"]:
+        logger.info(f"Using cached evaluations to speed up runs.")
 
     logger.info(f"Getting parameters from {args['config_file']} ...")
     config = cfg.ConfigParameters(args, phase=phase)
@@ -47,7 +50,8 @@ def main(**args):
                     objectives=config.train_spec['objectives'],
                     log_file=config.files_spec['log_file'],
                     log_level=config.train_spec['log_level'],
-                    data_file=config.files_spec['data_file'])
+                    data_file=config.files_spec['data_file'],
+                    use_cache=args['use_cache'])
 
     # if fn_list not passed on CLI, fall back to config
     if args.get('fn_list') is None:
@@ -126,6 +130,11 @@ if __name__ == '__main__':
                         help='Keep the best individual into the next generation.')
     parser.add_argument('--patience', type=int, default=60,
                         help='Generations with no improvement before early stopping.')
+
+
+    # Use cache for evaluations
+    parser.add_argument('--use_cache', action='store_true', default=False,
+                        help='Use cached evaluations to speed up runs. Default = False.')
 
     arguments = parser.parse_args()
 
