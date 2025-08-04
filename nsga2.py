@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 from ga import GA
 from pymoo.indicators.hv import Hypervolume
-from util import backup_cache, delete_old_dirs_v2
+from util import backup_cache, delete_old_dirs_v2, calculate_time
 
 class NSGA2(GA):
     """
@@ -18,7 +18,7 @@ class NSGA2(GA):
         - Global Pareto front archive with crowding-based filtering.
         - History recording of all Pareto fronts per generation.
     """
-    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=True):
         """
         Initialize NSGA2 instance.
 
@@ -32,6 +32,7 @@ class NSGA2(GA):
             data_file (str): Path to initial data or checkpoint.
         """
         super().__init__(eval_func, experiment_path,objectives, log_file, log_level, data_file)
+        self.use_cache = use_cache
         self.eval_cache = {}
         self.population_ids = None 
         self.pareto_global_population = None
@@ -41,16 +42,8 @@ class NSGA2(GA):
         self.objectives = objectives
         self.num_objectives = len(objectives) if objectives else None
 
-    def evaluate_population(self):
-        """
-        Evaluate the current population, using a cache to avoid re-evaluating.
-
-        Decodes the population, hashes individuals to detect repeats, and updates
-        fitnesses. Sets self.fitnesses and num_objectives on first run.
-
-        Returns:
-            np.ndarray: Array of shape (population_size, num_objectives) with fitnesses.
-        """
+    def _evaluate_with_cache(self):
+        """Private method to evaluate the population using the cache."""
         decoded_nets, decoded_params = self.decode_pop()
         pop = self.population
         N = len(pop)
@@ -61,33 +54,51 @@ class NSGA2(GA):
         keys = [p.tobytes() for p in pop]
         to_eval_indices = []
 
-        # Check cache for existing evaluations
         for i, k in enumerate(keys):
             if k in self.eval_cache:
                 fits[i] = [self.eval_cache[k][key] for key in metrics_keys]
             else:
                 to_eval_indices.append(i)
 
-        # Evaluate only the individuals that are not cached
         if to_eval_indices:
-            sub_nets   = [decoded_nets[i] for i in to_eval_indices]
+            sub_nets = [decoded_nets[i] for i in to_eval_indices]
             sub_params = [decoded_params[i] for i in to_eval_indices]
+            
+            # eval_func returns a dictionary for the subset
+            sub_results_dict = self.eval_func(sub_params, sub_nets, generation=self.current_gen)
 
-            # CONTRACT: eval_func MUST return a list of dicts, same length and order as input lists.
-            sub_results_list = self.eval_func(sub_params, sub_nets, generation=self.current_gen)
-
-            # Iterate through the returned results and the original indices together
-            for i, original_index in enumerate(to_eval_indices):
-                res_dict = sub_results_list[i]
+            # Correctly map the dictionary results back to the main fits array
+            for sub_index, res_dict in sub_results_dict.items():
+                original_index = to_eval_indices[sub_index]
                 metric_vals = [res_dict[key] for key in metrics_keys]
-
-                # Update the main fitness array at the correct original index
                 fits[original_index] = metric_vals
-
-                # Update the cache using the key for the original index
                 self.eval_cache[keys[original_index]] = res_dict
-
-        self.fitnesses = np.array(fits, dtype=float)
+        
+        return np.array(fits, dtype=float)
+    
+    def evaluate_population(self):
+        """
+        Evaluates the current population. Uses a cache if enabled, otherwise
+        evaluates the entire population directly.
+        """
+        if self.use_cache:
+            self.fitnesses = self._evaluate_with_cache()
+        else:
+            # Bypass the cache and evaluate the entire population
+            decoded_nets, decoded_params = self.decode_pop()
+            
+            # eval_func returns a dictionary mapping index -> result_dict
+            results_dict = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
+            
+            N = len(decoded_params)
+            fits = np.zeros((N, len(self.objectives)))
+            
+            for index, res_dict in results_dict.items():
+                metric_vals = [res_dict[key] for key in self.objectives]
+                fits[index] = metric_vals
+                
+            self.fitnesses = np.array(fits, dtype=float)
+        
         return self.fitnesses
     
     @staticmethod
@@ -406,11 +417,10 @@ class NSGA2(GA):
         )
 
         # 4. Clean up old model directories, keeping only those in the final global archive.
-        delete_old_dirs_v2(
-            self.experiment_path,
-            self.current_gen,
-            keep_ids=self.pareto_global_ids.copy()
-        )
+        is_snapshot = (self.current_gen % 5 == 0) and (self.current_gen > 0)
+        delete_old_dirs_v2(self.experiment_path,self.current_gen,
+                            keep_ids=self.pareto_global_ids.copy(),
+                            is_snapshot_gen=is_snapshot,)
         if self.current_gen == 1:
             # On the first run, also clean up directories from generation 0.
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
@@ -461,6 +471,16 @@ class NSGA2(GA):
             pop_old, fits_old, ids_old = self.population.copy(), self.fitnesses.copy(), self.population_ids.copy()
         
             if self.early_stopping and self.check_early_stopping():break
+            
+            if self.current_gen > 0 and (self.current_gen % 5 == 0):
+                curr_time = time.time()
+                h, m, est_h, est_m = calculate_time(
+                    start_time, curr_time, self.current_gen, self.num_generations, end_evol=False
+                )
+                self.logger.info(
+                    "Gen %d: elapsed %dh %dm; ETA %dh %dm",
+                    self.current_gen, h, m, est_h, est_m,
+                )
             
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
