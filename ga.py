@@ -7,7 +7,7 @@ import evaluation
 import qnas_config as cfg
 from collections import defaultdict
 from pickle import dump, load, HIGHEST_PROTOCOL
-from util import delete_old_dirs_v2, init_log, check_files, download_dataset, backup_cache, load_cache
+from util import delete_old_dirs_v2, init_log, check_files, download_dataset, backup_cache, load_cache, calculate_time
 
 #TODO: add docstrings to all functions
 #TODO: use the utils functions for handling the folder structure
@@ -28,7 +28,7 @@ class GA(object):
         evaluated: Cache for previously evaluated individuals.
         eval_history: History of evaluations for each individual.
     """
-    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=True):
         """
         Initialize the GA evolution.
 
@@ -39,6 +39,7 @@ class GA(object):
             log_file: Filename for log output.
             log_level: Logging level, e.g., "INFO", "DEBUG".
             data_file: Path to file for saving evolution data (pickle).
+            use_cache (bool): If True, enables caching of evaluated individuals.
         """
         # GA parameters (to be set later via initialize_ga)
         self.fn_list = None
@@ -74,13 +75,22 @@ class GA(object):
         self.experiment_path = experiment_path
         self.data_file = data_file
         self.objectives = objectives
-        # Initialize the cache for evaluated individuals.
-        cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
-        self.evaluated = load_cache(cache_file)
-        # this collects the raw fitness's until we have 3 of them
-        self.eval_history = defaultdict(list)
-        # Create a logger using the provided utility function (or basicConfig)
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
+        # Initialize the cache for evaluated individuals.
+        self.use_cache = use_cache
+        
+        if self.use_cache:
+            self.logger.info("Cache is enabled.")
+            # Initialize the cache for evaluated individuals.
+            cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
+            self.evaluated = load_cache(cache_file)
+            # this collects the raw fitness's until we have 3 of them
+            self.eval_history = defaultdict(list)
+        else:
+            self.logger.info("Cache is disabled.")
+            self.evaluated = {}
+            self.eval_history = defaultdict(list)
+        
     
     def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list, params_ranges,
                     crossover_rate, mutation_rate, early_stopping, elitism=False, patience=60):
@@ -194,70 +204,76 @@ class GA(object):
         self.population = self.population[idx]
         self.pop_params = self.pop_params[idx]
         self.fitnesses = self.fitnesses[idx]
-        
-    def evaluate_population(self):
-        """
-        Evaluate the current population using eval_func in batch while caching
-        evaluations to avoid re-computing fitness for duplicate candidates.
-        Returns:
-            fitnesses: a NumPy array with the fitness values for the population.
-        """
-        decoded_net, decoded_params = self.decode_pop()
-        
+
+    def _evaluate_without_cache(self, decoded_net, decoded_params):
+        """Evaluates the entire population without using any cache."""
+        #self.logger.info("Evaluating population of %d individuals without cache.", len(decoded_net))
+        results = self.eval_func(decoded_params, decoded_net, generation=self.current_gen)
+        metric_key = self.objectives[0]
+        # Assumes eval_func returns a list of dicts in the same order
+        fitness_values = [res[metric_key] for res in results]
+        self.total_eval += len(self.population)
+        return fitness_values
+
+    def _evaluate_with_cache(self, decoded_net, decoded_params):
+        """Evaluates the population using a 3-run average cache to avoid re-computation."""
         indices_to_evaluate = []
-        eval_dp            = []
-        eval_net           = []
-        fitness_list       = [None] * len(decoded_net)
+        eval_dp = []
+        eval_net = []
+        fitness_list = [None] * len(decoded_net)
 
         # 1) First pass: reuse cached means or schedule new runs
         for idx, individual in enumerate(self.population):
             key = tuple(individual.tolist())
-
-            # If we've already computed the 3-run mean, reuse it
             if key in self.evaluated:
                 fitness_list[idx] = self.evaluated[key]
                 continue
-
-            # Otherwise see how many raw runs we already did
             hist = self.eval_history[key]
             if len(hist) < 3:
-                # still need more runs → schedule one
                 indices_to_evaluate.append(idx)
                 eval_dp.append(decoded_params[idx])
                 eval_net.append(decoded_net[idx])
-            else:
-                # 3 runs done, but not yet moved into evaluated?
+            else: # 3 runs done, but not yet moved into evaluated
                 mean_f = sum(hist) / 3.0
                 self.evaluated[key] = mean_f
-                fitness_list[idx]   = mean_f
+                fitness_list[idx] = mean_f
 
         # 2) Train all scheduled individuals in one batch
         if indices_to_evaluate:
             results = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
-            metric_key = self.objectives[0] # for now, just use the first objective
-            new_vals = np.array([
-                results[idx][metric_key]
-                for idx in range(len(eval_net))
-            ])
+            metric_key = self.objectives[0]
+            new_vals = np.array([results[i][metric_key] for i in range(len(eval_net))])
+
             for i, idx in enumerate(indices_to_evaluate):
                 key = tuple(self.population[idx].tolist())
                 raw = new_vals[i]
-
-                # record this raw run
                 self.eval_history[key].append(raw)
                 self.total_eval += 1
-
-                if len(self.eval_history[key]) == 3:
-                    # on the 3rd run, compute & cache the mean
+                if len(self.eval_history[key]) == 3: # On the 3rd run, compute & cache the mean
                     mean_f = sum(self.eval_history[key]) / 3.0
                     self.evaluated[key] = mean_f
-                    fitness_list[idx]   = mean_f
-                else:
-                    # fewer than 3 runs so far: use raw fitness for selection
+                    fitness_list[idx] = mean_f
+                else: # Fewer than 3 runs so far: use raw fitness for selection
                     fitness_list[idx] = raw
+        
+        return fitness_list
 
-        # 3) finalize
-        self.fitnesses = np.array(fitness_list)
+    def evaluate_population(self):
+        """
+        Evaluate the current population using the appropriate strategy (cached or not).
+        Returns:
+            fitnesses: A NumPy array with the fitness values for the population.
+        """
+        decoded_net, decoded_params = self.decode_pop()
+        
+        if self.use_cache:
+            fitness_values = self._evaluate_with_cache(decoded_net, decoded_params)
+        else:
+            fitness_values = self._evaluate_without_cache(decoded_net, decoded_params)
+
+        self.fitnesses = np.array(fitness_values)
+
+        # Finalize generation results
         self.update_best_id(self.fitnesses)
         self.order_population()
         self.current_population = self.population.copy()
@@ -544,6 +560,16 @@ class GA(object):
             self.generate_offspring()
             self.go_next_gen()
             if self.early_stopping and self.check_early_stopping():break
+            
+            if self.current_gen > 0 and (self.current_gen % 5 == 0):
+                curr_time = time.time()
+                h, m, est_h, est_m = calculate_time(
+                    start_time, curr_time, self.current_gen, self.num_generations, end_evol=False
+                )
+                self.logger.info(
+                    "Gen %d: elapsed %dh %dm; ETA %dh %dm",
+                    self.current_gen, h, m, est_h, est_m,
+                )
         
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
@@ -572,6 +598,7 @@ if __name__ == "__main__":
         "limit_data_value": 10000,
         "backbone_name": "resnet18",
         "network_config": "default",
+        'use_cache': True,  # Enable caching for faster evaluations
     }
 
     logger = init_log(args['log_level'], name=__name__)
@@ -609,7 +636,8 @@ if __name__ == "__main__":
     ga = GA(eval_pop, config.train_spec['experiment_path'], 
             config.files_spec['log_file'], 
             log_level=config.train_spec['log_level'], 
-            data_file=config.files_spec['data_file'])
+            data_file=config.files_spec['data_file'], 
+            use_cache=args['use_cache'])
     # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
     ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
                     crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20,

@@ -18,12 +18,13 @@ crossover_rate=0.5
 mutation_rate=0.2
 elitism=true
 patience=60
+use_cache=false  # Use cached evaluations to speed up runs
 
 # —— sample size & repeats —— 
 dataset_sample_size=10000
-configs=("config2.txt")     # list your config files here
-exps=("exp2")               # corresponding experiment names
-cuda_devices=("0,1")          # GPU IDs for each run
+configs=("config0.txt")     # list your config files here
+exps=("exp3")               # corresponding experiment names
+cuda_devices=("0")          # GPU IDs for each run
 
 # —— Loop over configs & repeats —— 
 for ((j=0; j<${#configs[@]}; j++)); do
@@ -50,6 +51,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --num_generations      "$num_generations" \
             --max_num_nodes        "$max_num_nodes" \
             $( $elitism && echo "--elitism" ) \
+            $($use_cache && echo "--use_cache")\
             --network_config       "$network_config" \
             --backbone_name        "$backbone_name" \
             --log_level            "$log_level"
