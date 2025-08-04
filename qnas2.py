@@ -27,7 +27,7 @@ from util import (
 class QNAS(object):
     """ Quantum-Inspired Neural Architecture Search (refactored) """
 
-    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=True):
         """
         Initialize the core QNAS object.
 
@@ -41,6 +41,7 @@ class QNAS(object):
             log_level (str): "INFO", "DEBUG", or "NONE" for logging verbosity.
             data_file (str): Path to a .pkl file used to store evolution data
                 across generations.
+            use_cache (bool): If True, enables caching of evaluated individuals.
         """
         # --- Basic settings & bookkeeping ---
         self.dtype = np.float64
@@ -57,6 +58,7 @@ class QNAS(object):
         self.objectives = objectives
 
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
+        self.use_cache = use_cache
 
         # These will be set in initialize_qnas(...)
         self.fitnesses = None         # 1D np.array of current-gen fitnesses
@@ -89,10 +91,16 @@ class QNAS(object):
         self.qpop_params = None       # type: QPopulationParams
         self.qpop_net = None          # type: QPopulationNetwork
 
-        # Caching of evaluated “genome → fitness” to avoid repeats
-        cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
-        self.evaluated = load_cache(cache_file)          # {tuple(genome): float}
-        self.eval_history = defaultdict(list)  # {tuple(genome): [raw1, raw2, raw3]}
+        if self.use_cache:
+            self.logger.info("Cache is enabled.")
+            # Caching of evaluated “genome → fitness” to avoid repeats
+            cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
+            self.evaluated = load_cache(cache_file)          # {tuple(genome): float}
+            self.eval_history = defaultdict(list)  # {tuple(genome): [raw1, raw2, raw3]}
+        else:
+            self.logger.info("Cache is disabled.")
+            self.evaluated = {}
+            self.eval_history = defaultdict(list)
 
 
     def initialize_qnas(self,num_quantum_ind,params_ranges,repetition,max_generations,
@@ -308,49 +316,36 @@ class QNAS(object):
         return decoded_params, decoded_nets
 
 
-    def eval_pop(self, pop_params: np.ndarray, pop_net: np.ndarray) -> np.ndarray:
-        """
-        Decode & evaluate each classical individual, with caching & 3-run averaging.
-        Return two arrays: penalized_fits and raw_fits (each shape=(N,)).
+    def _eval_pop_without_cache(self, decoded_params, decoded_nets):
+        """Evaluates the entire population without using any cache."""
+        self.logger.info("Evaluating population of %d individuals without cache.", len(decoded_nets))
+        results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
+        
+        if not results:
+            return [None] * len(decoded_nets)
 
-        Internally:
-            1. Decode param-dicts & network-structures.
-            2. For each genome-key (tuple of network chromosome):
-                - If in self.evaluated (cached), use cached mean fitness.
-                - Else, if <3 runs exist in self.eval_history[key], append to eval batch.
-                - If ≥3 runs exist, compute mean, cache, and assign to fitness_list.
-            3. Batch-evaluate all in eval batch via self.eval_func.
-                - Append each raw fitness to self.eval_history[key].
-                - Once it reaches 3 runs, compute mean, cache in self.evaluated, assign to fitness_list.
-                - If <3 runs, assign raw fitness to fitness_list (to be averaged later).
-            4. Build raw_fits array from fitness_list.
-            5. Compute penalized_fits by subtracting penalty for “reducing” layers if needed.
+        raw_fits = [None] * len(decoded_nets)
+        metric_key = self.objectives[0]
 
-        Args:
-            pop_params (np.ndarray): (N, param_dim) hyperparameter chromosomes.
-            pop_net (np.ndarray): (N, net_dim) network chromosomes.
+        # `results` is a dictionary keyed by candidate_id, map it back
+        for i in range(len(decoded_nets)):
+            candidate_id = decoded_params[i]['candidate_id']
+            if candidate_id in results:
+                raw_fits[i] = results[candidate_id][metric_key]
+        
+        self.total_eval += len(decoded_nets)
+        return np.array(raw_fits, dtype=float)
 
-        Returns:
-            penalized_fits (np.ndarray): (N,) penalized fitness values.
-            raw_fits (np.ndarray): (N,) unpenalized (raw) fitness values.
-        """
-        decoded_params, decoded_nets = self.decode_pop(pop_params, pop_net)
-        self.logger.info("Evaluating generation %d (size %d)…",
-                        self.current_gen, len(decoded_nets))
-
+    def _eval_pop_with_cache(self, decoded_params, decoded_nets, pop_net):
+        """Evaluates the population using a 3-run average cache."""
         num_ind = pop_net.shape[0]
         fitness_list = [None] * num_ind
+        to_eval_idx, to_eval_params, to_eval_nets, to_eval_keys = [], [], [], []
 
         # 1) Determine which need evaluation
-        to_eval_idx = []
-        to_eval_params = []
-        to_eval_nets = []
-        to_eval_keys = []
-
         for idx in range(num_ind):
             key = tuple(pop_net[idx].tolist())
             if key in self.evaluated:
-                # Already have cached mean
                 fitness_list[idx] = self.evaluated[key]
                 continue
 
@@ -361,54 +356,53 @@ class QNAS(object):
                 to_eval_nets.append(decoded_nets[idx])
                 to_eval_keys.append(key)
             else:
-                # We have >=3 runs cached, so compute mean once & cache
                 mean_f = sum(hist) / 3.0
                 self.evaluated[key] = mean_f
                 fitness_list[idx] = mean_f
 
         # 2) Batch‐evaluate those that still need runs 
         if to_eval_idx:
-            results = self.eval_func(to_eval_params, to_eval_nets,
-                                    generation=self.current_gen)
+            results = self.eval_func(to_eval_params, to_eval_nets, generation=self.current_gen)
+            metric_key = self.objectives[0]
             
-            metric_key = self.objectives[0] # for now, just use the first objective
-            raw_vals = np.array([
-                results[idx][metric_key]
-                for idx in range(len(to_eval_nets))
-            ])
-
             for i, idx in enumerate(to_eval_idx):
                 key = to_eval_keys[i]
-                raw_fitness = float(raw_vals[i])
-                self.eval_history[key].append(raw_fitness)
-                self.total_eval += 1
+                candidate_id = to_eval_params[i]['candidate_id']
 
-                if len(self.eval_history[key]) == 3:
-                    # On the 3rd run, compute & cache the mean
-                    mean_f = sum(self.eval_history[key]) / 3.0
-                    self.evaluated[key] = mean_f
-                    fitness_list[idx] = mean_f
-                    self.logger.debug(
-                        "Key %s now has 3 runs; caching mean = %.4f", key, mean_f
-                    )
-                else:
-                    # <3 runs => use raw for selection, but we'll do more runs later
-                    fitness_list[idx] = raw_fitness
-                    self.logger.debug(
-                        "Key %s: run %d/3, raw fitness = %.4f",
-                        key,
-                        len(self.eval_history[key]),
-                        raw_fitness,
-                    )
-        # 3) Apply penalty if needed (on “reducing layers”)
-        raw_fits = np.array(fitness_list, dtype=float)
+                if candidate_id in results:
+                    result_for_candidate = results[candidate_id]
+                    raw_fitness = float(result_for_candidate[metric_key])
+                    self.eval_history[key].append(raw_fitness)
+                    self.total_eval += 1
+
+                    if len(self.eval_history[key]) == 3:
+                        mean_f = sum(self.eval_history[key]) / 3.0
+                        self.evaluated[key] = mean_f
+                        fitness_list[idx] = mean_f
+                    else:
+                        fitness_list[idx] = raw_fitness
+        
+        return np.array(fitness_list, dtype=float)
+
+    def eval_pop(self, pop_params: np.ndarray, pop_net: np.ndarray) -> np.ndarray:
+        """
+        Decode & evaluate each classical individual, returning penalized and raw fitness arrays.
+        """
+        decoded_params, decoded_nets = self.decode_pop(pop_params, pop_net)
+        self.logger.info("Evaluating generation %d (size %d)…",
+                        self.current_gen, len(decoded_nets))
+
+        if self.use_cache:
+            raw_fits = self._eval_pop_with_cache(decoded_params, decoded_nets, pop_net)
+        else:
+            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
+        
         penalized_fits = raw_fits.copy()
         if self.penalize_number and self.reducing_fns_list:
             penalties = self.get_penalties(pop_net)
             penalized_fits -= penalties
 
         return penalized_fits, raw_fits
-
 
     def get_penalties(self, pop_net: np.ndarray, penalty_factor: float = 0.01) -> np.ndarray:
         """

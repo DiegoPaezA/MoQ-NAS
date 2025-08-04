@@ -22,6 +22,9 @@ def main(**args):
         logger.info(f"Continue evolution from: {args['continue_path']}. Checking files ...")
         check_files(args['continue_path'])
 
+    if args["use_cache"]:
+        logger.info(f"Using cached evaluations to speed up runs.")
+        
     logger.info(f"Getting parameters from {args['config_file']} ...")
     config = cfg.ConfigParameters(args, phase=phase)
     config.get_parameters()
@@ -44,7 +47,8 @@ def main(**args):
                         objectives=config.train_spec['objectives'],
                         log_file=config.files_spec['log_file'],
                         log_level=config.train_spec['log_level'],
-                        data_file=config.files_spec['data_file'])
+                        data_file=config.files_spec['data_file'],
+                        use_cache=args['use_cache'])
 
     qnas_cnn.initialize_qnas(**config.QNAS_spec)
     
@@ -89,6 +93,10 @@ if __name__ == '__main__':
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
                         choices=['default', 'dense', 'backbone'])
 
+    # Use cache for evaluations
+    parser.add_argument('--use_cache', action='store_true', default=False,
+                        help='Use cached evaluations to speed up runs. Default = False.')
+    
     arguments = parser.parse_args()
 
     main(**vars(arguments))
