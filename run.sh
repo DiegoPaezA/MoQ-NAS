@@ -7,11 +7,12 @@ data_path="${dataset}_data"
 log_level="INFO"
 network_config="default"
 backbone_name="resnet18"
+use_cache=true  # Use cached evaluations to speed up runs
 
 dataset_sample_size=10000
 
-configs=("config0_0.txt")
-exps=("exp5")
+configs=("config0.txt")
+exps=("exp6")
 cuda_devices=("1")
 
 # Loop over the length of the configs array
@@ -25,7 +26,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
     for ((i=2; i<=3; i++)); do # Change the range to the number of repeats
         exp_path="${exp_path_base}/${exp}_repeat_$i"
 
-        CUDA_VISIBLE_DEVICES="$cuda_device" python run_evolution2.py \
+        CUDA_VISIBLE_DEVICES="$cuda_device" python run_evolution.py \
             --experiment_path "$exp_path" \
             --config_file "${config_file}/${config}" \
             --data_path "$data_path" \
@@ -36,6 +37,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --network_config "$network_config" \
             --backbone_name "$backbone_name" \
             --en_pop_crossover \
+            $($use_cache && echo "--use_cache")\
             --log_level "$log_level"
     done
 done
