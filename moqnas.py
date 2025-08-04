@@ -474,7 +474,7 @@ class MOQNAS(QNAS):
                 len(self.pareto_global_population),
                 hv,
             )
-            display_ids = self.pareto_global_ids.tolist()
+            display_ids = [str(item) for item in self.pareto_global_ids]
             self.logger.info("Generation %d: current global Pareto IDs:\n%s",
                 self.current_gen,
                 display_ids,
@@ -492,9 +492,10 @@ class MOQNAS(QNAS):
                 fitness_str,
                 len(self.pareto_global_population),
             )
-
+            is_snapshot = (self.current_gen % 5 == 0) and (self.current_gen > 0)
             # 7. Clean up old model directories, keeping only those in the global archive.
-            delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=self.pareto_global_ids.copy())
+            delete_old_dirs_v2(self.experiment_path, self.current_gen, 
+                            keep_ids=self.pareto_global_ids.copy(), is_snapshot_gen=is_snapshot)
             if self.current_gen == 1:
                 # On the first run, also clean up directories from generation 0.
                 delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
