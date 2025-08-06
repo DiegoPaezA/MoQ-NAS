@@ -105,6 +105,7 @@ class ConfigParameters(object):
                                 ('crossover_frequency', int),
                                 ('pop_crossover_rate', float),
                                 ('pop_crossover_method', str),
+                                ('initial_prob_distribution', str),
                                 ('function_dict', dict)],
                     'train': [('batch_size', int),
                                 ('eval_batch_size', int),
@@ -176,8 +177,39 @@ class ConfigParameters(object):
         # Always set the experiment path
         self.train_spec['experiment_path'] = self.args['experiment_path']
 
+    # def _get_fn_spec(self):
+    #     """Organize function specifications for QNAS."""
+    #     self.QNAS_spec['fn_list'] = sorted(
+    #         self.QNAS_spec['function_dict'].keys(), key=natural_key
+    #     )
+    #     self.fn_dict = self.QNAS_spec.pop('function_dict')
+    #     self.QNAS_spec['initial_probs'] = []
+    #     self.QNAS_spec['reducing_fns_list'] = []
+
+    #     for fn in self.QNAS_spec['fn_list']:
+    #         if type(self.fn_dict[fn]['prob']) == str:
+    #             prob = eval(self.fn_dict[fn]['prob'])
+    #         else:
+    #             prob = self.fn_dict[fn]['prob']
+
+    #         # If all probabilities are None, the system assigns an equal value to all functions.
+    #         if prob is not None:
+    #             self.QNAS_spec['initial_probs'].append(prob)
+
+    #         # Populating the reducing functions list
+    #         strides = self.fn_dict[fn]['params'].get('strides')
+    #         if strides and strides > 1:
+    #             self.QNAS_spec['reducing_fns_list'].append(fn)
+                
+    #     for item in self.fn_dict.values():
+    #         del item['prob']
     def _get_fn_spec(self):
-        """Organize function specifications for QNAS."""
+        """
+        Organize function specifications for QNAS.
+        
+        This method now supports a new parameter `initial_prob_distribution`
+        in the QNAS config, which can be 'from_config' or 'uniform'.
+        """
         self.QNAS_spec['fn_list'] = sorted(
             self.QNAS_spec['function_dict'].keys(), key=natural_key
         )
@@ -185,17 +217,36 @@ class ConfigParameters(object):
         self.QNAS_spec['initial_probs'] = []
         self.QNAS_spec['reducing_fns_list'] = []
 
+        # Get the desired distribution method. Default to 'from_config' if not specified.
+        prob_distribution_method = self.QNAS_spec.get('initial_prob_distribution', 'from_config')
+        
+        self.QNAS_spec.pop('initial_prob_distribution', None)
+
+        # Conditionally populate the initial_probs list based on the chosen method.
+        if prob_distribution_method == 'from_config':
+            print("INFO: Initializing probabilities from the configuration file.")
+            for fn in self.QNAS_spec['fn_list']:
+                if type(self.fn_dict[fn]['prob']) == str:
+                    prob = eval(self.fn_dict[fn]['prob'])
+                else:
+                    prob = self.fn_dict[fn]['prob']
+                
+                if prob is not None:
+                    self.QNAS_spec['initial_probs'].append(prob)
+        
+        elif prob_distribution_method == 'uniform':
+            # By leaving `initial_probs` as an empty list, we signal the QPopulationNetwork
+            # class to create its own uniform distribution.
+            print("INFO: Using a uniform initial probability distribution for all operators.")
+            pass # Keep self.QNAS_spec['initial_probs'] as []
+
+        else:
+            raise ValueError(f"Unknown initial_prob_distribution: '{prob_distribution_method}'. "
+                            f"Please use 'from_config' or 'uniform'.")
+
+        # The rest of the function remains the same.
+        # It populates the reducing functions list independently of the probabilities.
         for fn in self.QNAS_spec['fn_list']:
-            if type(self.fn_dict[fn]['prob']) == str:
-                prob = eval(self.fn_dict[fn]['prob'])
-            else:
-                prob = self.fn_dict[fn]['prob']
-
-            # If all probabilities are None, the system assigns an equal value to all functions.
-            if prob is not None:
-                self.QNAS_spec['initial_probs'].append(prob)
-
-            # Populating the reducing functions list
             strides = self.fn_dict[fn]['params'].get('strides')
             if strides and strides > 1:
                 self.QNAS_spec['reducing_fns_list'].append(fn)
