@@ -1,6 +1,7 @@
 # Configuration file 1 : group 1
 
 QNAS:
+    initial_prob_distribution: uniform # 'from_config' or 'uniform'
     crossover_rate: 0.5
     max_generations: 300
     max_num_nodes: 20
