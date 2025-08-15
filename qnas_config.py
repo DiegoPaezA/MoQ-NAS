@@ -105,6 +105,11 @@ class ConfigParameters(object):
                                 ('crossover_frequency', int),
                                 ('pop_crossover_rate', float),
                                 ('pop_crossover_method', str),
+                                ('elite_mode', str),
+                                ('k_elites', int),
+                                ('pool_factor', int),
+                                ('ema_beta', float),
+                                ('rank_weighting', bool),
                                 ('initial_prob_distribution', str),
                                 ('function_dict', dict)],
                     'train': [('batch_size', int),
@@ -160,6 +165,7 @@ class ConfigParameters(object):
         self.QNAS_spec['params_ranges']    = OrderedDict(sorted(ranges.items()))
         self.QNAS_spec['early_stopping']   = self.args.get('early_stopping')
         self.QNAS_spec['en_pop_crossover'] = self.args.get('en_pop_crossover')
+        self.QNAS_spec['elite_mode'] = self.args.get('elite_mode', 'global_k')
         self._get_fn_spec()
 
         # Only override these specific training parameters if provided via args
