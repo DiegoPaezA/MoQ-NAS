@@ -21,6 +21,8 @@ from util import (
     calculate_time,
     backup_cache,
     load_cache,
+    load_history_from_json,
+    save_history_to_json
 )
 
 
@@ -102,6 +104,12 @@ class QNAS(object):
             self.evaluated = {}
             self.eval_history = defaultdict(list)
 
+        # use history
+        try:
+            self.history_database_path = os.path.join('network_history', "history_db_cifar_10_conv1.json")
+            self.history_database = load_history_from_json(self.history_database_path)
+        except:
+            print("Could not load history database, continuing without it.")
 
     def initialize_qnas(self,num_quantum_ind,params_ranges,repetition,max_generations,
                         crossover_rate,update_quantum_gen,replace_method,fn_list,
@@ -336,53 +344,151 @@ class QNAS(object):
         self.total_eval += len(decoded_nets)
         return np.array(raw_fits, dtype=float)
 
-    def _eval_pop_with_cache(self, decoded_params, decoded_nets, pop_net):
-        """Evaluates the population using a 3-run average cache."""
-        num_ind = pop_net.shape[0]
-        fitness_list = [None] * num_ind
-        to_eval_idx, to_eval_params, to_eval_nets, to_eval_keys = [], [], [], []
+    def _eval_pop_with_history(self, decoded_params, decoded_nets, pop_net):
+        """
+        Evaluates the entire population using a history database (memoization).
+        This version correctly uses the 'pop_net' argument for creating history keys
+        and 'self.history_database' for storage, matching the qnas2.py script.
+        """
+        num_individuals = len(pop_net)
+        final_fitnesses = [None] * num_individuals
+        
+        to_eval_indices = []
+        to_eval_params = []
+        to_eval_nets = []
+        to_eval_keys = []
 
-        # 1) Determine which need evaluation
-        for idx in range(num_ind):
-            key = tuple(pop_net[idx].tolist())
-            if key in self.evaluated:
-                fitness_list[idx] = self.evaluated[key]
-                continue
-
-            hist = self.eval_history[key]
-            if len(hist) < 3:
-                to_eval_idx.append(idx)
-                to_eval_params.append(decoded_params[idx])
-                to_eval_nets.append(decoded_nets[idx])
-                to_eval_keys.append(key)
-            else:
-                mean_f = sum(hist) / 3.0
-                self.evaluated[key] = mean_f
-                fitness_list[idx] = mean_f
-
-        # 2) Batch‐evaluate those that still need runs 
-        if to_eval_idx:
-            results = self.eval_func(to_eval_params, to_eval_nets, generation=self.current_gen)
-            metric_key = self.objectives[0]
+        # --- 1. Separate known individuals from new ones ---
+        self.logger.info("Checking history for %d individuals...", num_individuals)
+        for i, individual_net_array in enumerate(pop_net):
+            key = tuple(individual_net_array)
             
-            for i, idx in enumerate(to_eval_idx):
-                key = to_eval_keys[i]
+            if key in self.history_database:
+                final_fitnesses[i] = self.history_database[key]
+            else:
+                to_eval_indices.append(i)
+                to_eval_params.append(decoded_params[i])
+                to_eval_nets.append(decoded_nets[i])
+                to_eval_keys.append(key)
+        
+        self.logger.info(
+            "%d individuals found in history. %d new individuals need evaluation.",
+            num_individuals - len(to_eval_indices),
+            len(to_eval_indices)
+        )
+
+        # --- 2. Batch-evaluate the new individuals ---
+        if to_eval_indices:
+            self.logger.info("Sending %d new individuals for batch evaluation.", len(to_eval_indices))
+            results = self.eval_func(to_eval_params, to_eval_nets, generation=self.current_gen)
+            
+            if not results:
+                self.logger.error("Evaluation function returned no results for the batch.")
+                for i in to_eval_indices:
+                    final_fitnesses[i] = 0.0
+                # Fill any remaining None values before returning
+                final_fitnesses = [f if f is not None else 0.0 for f in final_fitnesses]
+                return np.array(final_fitnesses, dtype=float)
+
+            metric_key = self.objectives[0]
+
+            for i, original_index in enumerate(to_eval_indices):
+                key_to_update = to_eval_keys[i]
                 candidate_id = to_eval_params[i]['candidate_id']
 
                 if candidate_id in results:
-                    result_for_candidate = results[candidate_id]
-                    raw_fitness = float(result_for_candidate[metric_key])
-                    self.eval_history[key].append(raw_fitness)
+                    true_fitness = float(results[candidate_id][metric_key])
+                    final_fitnesses[original_index] = true_fitness
+                    
+                    # Update the history database and save it to the JSON file
+                    self.history_database[key_to_update] = true_fitness
+                    save_history_to_json(self.history_database, self.history_database_path)
                     self.total_eval += 1
+                else:
+                    final_fitnesses[original_index] = 0.0
+                    self.logger.warning("Candidate %s was sent for evaluation but not found in results.", candidate_id)
 
-                    if len(self.eval_history[key]) == 3:
-                        mean_f = sum(self.eval_history[key]) / 3.0
-                        self.evaluated[key] = mean_f
-                        fitness_list[idx] = mean_f
-                    else:
-                        fitness_list[idx] = raw_fitness
+        # Ensure no None values are left before returning
+        final_fitnesses = [f if f is not None else 0.0 for f in final_fitnesses]
+        return np.array(final_fitnesses, dtype=float)
+
+    def _eval_pop_with_cache(self, decoded_params, decoded_nets, pop_net, num_runs=1):
+        """
+        Evaluates the population using a cache that averages fitness over multiple runs.
+        This version correctly uses the 'pop_net' argument for creating cache keys.
+        """
+        num_individuals = len(pop_net)
+        fitness_list = [None] * num_individuals
         
-        return np.array(fitness_list, dtype=float)
+        to_eval_indices = []
+        to_eval_params = []
+        to_eval_nets = []
+        to_eval_keys = []
+
+        # --- 1. First Pass: Check caches and schedule evaluations ---
+        self.logger.info("Checking averaging cache for %d individuals...", num_individuals)
+        num_cache_hits = 0
+        for i, individual_net_array in enumerate(pop_net):
+            key = tuple(individual_net_array)
+
+            if key in self.evaluated:
+                fitness_list[i] = self.evaluated[key]
+                num_cache_hits += 1
+                self.logger.info(f"Cache HIT for individual {i}. Using stored average fitness: {fitness_list[i]:.4f}")
+                continue
+
+            history = self.eval_history[key]
+            if len(history) < num_runs:
+                to_eval_indices.append(i)
+                to_eval_params.append(decoded_params[i])
+                to_eval_nets.append(decoded_nets[i])
+                to_eval_keys.append(key)
+            else:
+                mean_fitness = sum(history) / len(history)
+                self.evaluated[key] = mean_fitness
+                fitness_list[i] = mean_fitness
+                self.logger.info(f"Calculated and cached new average fitness for individual {i}: {mean_fitness:.4f}")
+
+        self.logger.info(
+            "%d individuals found in cache. %d individuals need another evaluation run.",
+            num_cache_hits, len(to_eval_indices)
+        )
+
+        # --- 2. Second Pass: Batch-evaluate and update caches ---
+        if to_eval_indices:
+            # (The rest of the function remains the same as it correctly uses the 'to_eval' lists)
+            self.logger.info("Sending %d individuals for batch evaluation.", len(to_eval_indices))
+            results = self.eval_func(to_eval_params, to_eval_nets, generation=self.current_gen)
+            metric_key = self.objectives[0]
+
+            if not results:
+                self.logger.error("Evaluation function returned no results for the batch.")
+                for i in to_eval_indices:
+                    fitness_list[i] = 0.0
+                return np.array(fitness_list, dtype=float)
+
+            for i, original_index in enumerate(to_eval_indices):
+                key_to_update = to_eval_keys[i]
+                candidate_id = to_eval_params[i]['candidate_id']
+
+                if candidate_id in results:
+                    raw_fitness = float(results[candidate_id][metric_key])
+                    self.eval_history[key_to_update].append(raw_fitness)
+                    self.total_eval += 1
+                    current_history = self.eval_history[key_to_update]
+                    
+                    if len(current_history) == num_runs:
+                        mean_fitness = sum(current_history) / num_runs
+                        self.evaluated[key_to_update] = mean_fitness
+                        fitness_list[original_index] = mean_fitness
+                    else:
+                        fitness_list[original_index] = raw_fitness
+                else:
+                    self.logger.warning("Candidate %s was not found in evaluation results.", candidate_id)
+                    fitness_list[original_index] = 0.0
+
+        final_fitnesses = [f if f is not None else 0.0 for f in fitness_list]
+        return np.array(final_fitnesses, dtype=float)
 
     def eval_pop(self, pop_params: np.ndarray, pop_net: np.ndarray) -> np.ndarray:
         """
@@ -396,6 +502,7 @@ class QNAS(object):
             raw_fits = self._eval_pop_with_cache(decoded_params, decoded_nets, pop_net)
         else:
             raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
+            #raw_fits = self._eval_pop_with_history(decoded_params, decoded_nets, pop_net)
         
         penalized_fits = raw_fits.copy()
         if self.penalize_number and self.reducing_fns_list:
@@ -637,6 +744,7 @@ class QNAS(object):
         using `self.random` as the intensity parameter.
         """
         if self.current_gen > 0 and (self.current_gen % self.update_quantum_gen == 0):
+            self.logger.info("Updating quantum parameters...")
             self.qpop_params.update_quantum(intensity=self.random)
             self.qpop_net.update_quantum(intensity=self.random)
 
