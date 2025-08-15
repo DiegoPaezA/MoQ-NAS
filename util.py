@@ -1111,3 +1111,35 @@ def load_data_for_pareto(file_path):
         }
     }
     return history
+
+def load_history_from_json(file_path: str) -> dict:
+    """Loads a history database from a JSON file."""
+    try:
+        with open(file_path, 'r') as f:
+            history_from_json = json.load(f)
+        history_db = {tuple(map(int, k.split(','))): v for k, v in history_from_json.items()}
+        print(f"Successfully loaded {len(history_db)} architectures from {file_path}")
+        return history_db
+    except FileNotFoundError:
+        print(f"History file not found at {file_path}. Starting with an empty database.")
+        return {}
+
+def save_history_to_json(history: dict, file_path: str):
+    """
+    Saves the current state of the history database to a JSON file.
+
+        history: dict: The history database to save.
+        file_path: str: The path to the JSON file where the history will be saved.
+    """
+    # Convert tuple keys to comma-separated strings to make them JSON-compatible.
+    history_for_json = {",".join(map(str, k)): v for k, v in history.items()}
+    
+    try:
+        # Write to a temporary file first to prevent data corruption if the script crashes mid-write
+        temp_file_path = file_path + ".tmp"
+        with open(temp_file_path, 'w') as f:
+            json.dump(history_for_json, f, indent=4)
+        # If write is successful, rename the temporary file to the final name
+        os.replace(temp_file_path, file_path)
+    except IOError as e:
+        print("Failed to save history file: %s", e)    
