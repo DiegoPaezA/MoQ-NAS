@@ -47,7 +47,9 @@ class MOQNAS(QNAS):
                         update_quantum_gen,replace_method,fn_list,initial_probs,update_quantum_rate,
                         max_num_nodes,reducing_fns_list,patience,early_stopping,save_data_freq=0,
                         penalize_number=0,crossover_frequency=5,en_pop_crossover=False,
-                        pop_crossover_rate=0.25,pop_crossover_method="hux",):
+                        pop_crossover_rate=0.25,pop_crossover_method="hux",
+                        elite_mode="global_k",k_elites=5,pool_factor=2,ema_beta=0.7,
+                        rank_weighting=True,):
         """
         Initialize MoQNAS (quantum populations + multiobjective settings).
 
@@ -72,6 +74,16 @@ class MOQNAS(QNAS):
             en_pop_crossover (bool, optional): Whether to enable network crossover.
             pop_crossover_rate (float, optional): Fraction of offspring to crossover each time.
             pop_crossover_method (str, optional): “hux” or “uniform” method for network crossover.
+            elite_mode (str, optional): Elite strategy for quantum updates. Options: "single",
+                "global_k", "bootstrap_k". Defaults to "global_k".
+            k_elites (int, optional): Number of elites used when elite_mode requires it.
+                Defaults to 5.
+            pool_factor (int, optional): Multiplier for elite pool when using "bootstrap_k".
+                Defaults to 2.
+            ema_beta (float, optional): EMA smoothing factor for global elites; 0.0 disables.
+                Defaults to 0.7.
+            rank_weighting (bool, optional): Weight elites by inverse rank when building
+                target distributions. Defaults to True.
         """
         # 1) Store multiobjective sizes
         self.pop_size = num_quantum_ind*repetition  # Classical population size
@@ -100,6 +112,11 @@ class MOQNAS(QNAS):
             en_pop_crossover=en_pop_crossover,
             pop_crossover_rate=pop_crossover_rate,
             pop_crossover_method=pop_crossover_method,
+            elite_mode=elite_mode,
+            k_elites=k_elites,
+            pool_factor=pool_factor,
+            ema_beta=ema_beta,
+            rank_weighting=rank_weighting,
         )
 
         # 3) Create the very first classical network population by sampling from quantum

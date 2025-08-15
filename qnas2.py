@@ -116,7 +116,9 @@ class QNAS(object):
                         initial_probs,update_quantum_rate,max_num_nodes,reducing_fns_list,
                         patience,early_stopping,save_data_freq=0,penalize_number=0,
                         crossover_frequency=5,en_pop_crossover=False,
-                        pop_crossover_rate=0.25,pop_crossover_method="hux",):
+                        pop_crossover_rate=0.25,pop_crossover_method="hux",
+                        elite_mode="global_k",k_elites=5,pool_factor=2,ema_beta=0.7,
+                        rank_weighting=True,):
         """
         Initialize all QNAS-specific populations and hyperparameters.
 
@@ -141,6 +143,12 @@ class QNAS(object):
             en_pop_crossover (bool, optional): Whether to enable population crossover (network side).
             pop_crossover_rate (float, optional): Fraction of new offspring to mix by crossover with parents.
             pop_crossover_method (str, optional): “hux” or “uniform” crossover for network-chromosome.
+            elite_mode (str, optional): Elite strategy for quantum updates. Options: "single", "global_k", "bootstrap_k". Defaults to "global_k".
+            k_elites (int, optional): Number of elites used when elite_mode requires it. Defaults to 5.
+            pool_factor (int, optional): Multiplier for elite pool size when using "bootstrap_k" mode. Defaults to 2.
+            ema_beta (float, optional): EMA smoothing factor for global elites; set 0.0 to disable. Defaults to 0.7.
+            rank_weighting (bool, optional): Apply inverse-rank weights to elites when
+                building target distributions. Defaults to True.
         """
         # 1) Evolution settings
         self.generations = max_generations
@@ -187,6 +195,12 @@ class QNAS(object):
             fn_list=fn_list,
             initial_probs=initial_probs,
             crossover_method=pop_crossover_method,
+            elite_mode=elite_mode,
+            k_elites=k_elites,
+            pool_factor=pool_factor,
+            ema_beta=ema_beta,
+            rank_weighting=rank_weighting,
+            experiment_path= self.experiment_path,
         )
 
     def select_population(
