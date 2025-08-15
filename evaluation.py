@@ -114,10 +114,8 @@ class EvalPopulation(object):
             If the Dask operations exceed the specified timeout.
         """
         pop_size = len(decoded_nets)
-        manager = mp.Manager()
-        result_queue: mp.Queue = manager.Queue()
-        
-        
+        result_queue: mp.Queue = mp.Queue()
+
         # Temporal solution to distribute the individuals in the threads
         selected_thread = 0
         individual_per_thread = []
@@ -143,16 +141,16 @@ class EvalPopulation(object):
             p.start()
             processes.append(p)
 
-        for p in processes:
-            p.join()
-                    
         results: Dict[int, Dict[str, Any]] = {}
         for _ in range(pop_size):
             idx, res_dict = result_queue.get()
             # return only the self.metric_names
             res_dict = {k: res_dict[k] for k in self.metric_names if k in res_dict}
             results[idx] = res_dict
-            
+        
+        for p in processes:
+            p.join()
+
         evol_end_time = time.perf_counter()
         mins, secs = divmod(evol_end_time - evol_time_start, 60)
         self.logger.info(f"Time elapsed for {pop_size} individuals: {int(mins)}m {int(secs)}s")
