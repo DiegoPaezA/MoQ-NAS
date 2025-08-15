@@ -136,7 +136,7 @@ class QPopulationNetwork(QPopulation):
     """ QNAS Chromosomes for the networks to be evolved. """
 
     def __init__(self, num_quantum_ind, max_num_nodes, repetition, update_quantum_rate,
-                fn_list, initial_probs,crossover_method='hux'):
+                fn_list, initial_probs, crossover_method='hux', elite_mode="global_k"):
         """ Initialize QPopulationNetwork.
 
         Args:
@@ -155,11 +155,17 @@ class QPopulationNetwork(QPopulation):
                                                 update_quantum_rate)
         self.probabilities = None
 
-        self.max_update = 0.05
-        self.max_prob = 0.99
-        self.min_prob = 1e-8
-
         self.chromosome = QChromosomeNetwork(max_num_nodes, fn_list, self.dtype)
+
+        self.max_update = 0.05
+        self.max_prob = 0.90
+        self.min_prob = max(1e-8, 0.01 / self.chromosome.num_functions)
+
+        self.elite_mode = elite_mode  # "single" | "global_k" | "bootstrap_k"
+        self.k_elites   = 5            # quantos elites usar (comece com 5–10)
+        self.pool_factor = 2           # Factor del pool (E_pool ≈ pool_factor * k_elites)
+        self.ema_beta   = 0.7          # suavização do alvo q (0.0 desativa)
+        self.rank_weighting = True     # pesos 1/rank
 
         self.initial_probs = self.chromosome.initialize_qgenes(initial_probs=initial_probs)
         self.crossover_method = crossover_method  # Crossover method selection
@@ -269,6 +275,113 @@ class QPopulationNetwork(QPopulation):
         mutated /= mutated.sum(axis=2, keepdims=True)
         self.probabilities[idx] = mutated
 
+    def _elite_weights(self, E: int) -> np.ndarray:
+        """w_e ∝ 1/rank; e=0 es el mejor."""
+        if not self.rank_weighting:
+            return np.ones(E, dtype=float) / max(E, 1)
+        ranks = np.arange(E, dtype=float) + 1.0  # 1..E
+        w = 1.0 / ranks
+        return w / w.sum()
+
+    def _build_q_global(self, elites_choices: np.ndarray, F: int) -> np.ndarray:
+        """
+        Histograma global por gen: q (L, F).
+        elites_choices: (E, L) índices de función [0..F)
+        """
+        E, L = elites_choices.shape
+        w = self._elite_weights(E)                    # (E,)
+        counts = np.zeros((L, F), dtype=float)
+        for e in range(E):
+            counts[np.arange(L), elites_choices[e]] += w[e]
+        q = counts / np.maximum(counts.sum(axis=1, keepdims=True), 1e-12)
+
+        # EMA opcional
+        if self.ema_beta and self.ema_beta > 0.0:
+            if not hasattr(self, "_q_ema") or self._q_ema.shape != q.shape:
+                self._q_ema = q.copy()
+            self._q_ema = self.ema_beta * self._q_ema + (1 - self.ema_beta) * q
+            q = self._q_ema
+        return q  # (L, F)
+
+    def _build_q_bootstrap_rows(self,
+        pool_choices: np.ndarray,  # (E_pool, L)
+        rows: np.ndarray,          # idxs de individuos cuánticos seleccionados
+        cols: np.ndarray,          # idxs de genes seleccionados (alineado con rows)
+        F: int,
+        k: int,
+        weights: np.ndarray = None,
+        rng: np.random.Generator = None,) -> np.ndarray:
+        """
+        Devuelve q_rows (K_sel, F): para cada fila seleccionada (ind, gen=cols[i]),
+        muestrea k élites del pool (con reemplazo y ponderación) y arma el histograma.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+
+        E_pool, L = pool_choices.shape
+        K_sel = rows.size
+        q_rows = np.zeros((K_sel, F), dtype=float)
+        if weights is None:
+            weights = np.ones(E_pool, dtype=float) / max(E_pool, 1)
+
+        for i in range(K_sel):
+            c = cols[i]
+            sel = rng.choice(E_pool, size=k, replace=True, p=weights)  # (k,)
+            ops = pool_choices[sel, c]                                 # (k,)
+            # histograma uniforme
+            for op in ops:
+                q_rows[i, op] += 1.0
+            s = q_rows[i].sum()
+            q_rows[i] = (q_rows[i] / s) if s > 0 else (1.0 / F)
+        return q_rows  # (K_sel, F)
+
+    def _update_tilt_with_q(self, P_rows: np.ndarray, q_rows: np.ndarray, eta_base: float) -> np.ndarray:
+        """
+        P_rows: (K_sel, F) PMFs a actualizar
+        q_rows: (K_sel, F) objetivos por fila (global_k o bootstrap_k)
+        eta_base: paso base (intensity * max_update)
+        """
+        eps = 1e-12
+
+        # paso adaptativo por fila (consenso^2)
+        consensus = q_rows.max(axis=1, keepdims=True)  # (K_sel,1)
+        eta = eta_base * (consensus ** 2)
+
+        tilt = np.exp(eta * q_rows)                    # (K_sel,F)
+        P_new = P_rows * tilt
+        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
+
+        # piso/techo + renorm
+        P_new = np.clip(P_new, self.min_prob, self.max_prob)
+        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
+        return P_new
+
+    def _sample_intensity(self, lo=0.5, hi=1.0):
+        # Beta(2,5): más masa hacia valores pequeños; reescala a [lo, hi]
+        u = np.random.beta(2.0, 5.0)
+        return lo + (hi - lo) * u
+
+    def _suggest_max_update(self):
+        # k=5 (actualización cada 5 épocas) y F variable:
+        # más F -> paso base más pequeño (suave)
+        F = self.chromosome.num_functions
+        base = 0.07 if F <= 12 else 0.05 if F <= 32 else 0.04
+        return base
+
+    def _update_tilt(self, P_rows, winners, eta):
+        eps = 1e-12
+        K, F = P_rows.shape
+        q = np.zeros_like(P_rows)
+        q[np.arange(K), winners] = 1.0      # objetivo mínimo viable: one-hot
+
+        tilt = np.exp(eta * q)              # solo el ganador sube un poco
+        P_new = P_rows * tilt
+        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
+
+        P_new = np.clip(P_new, self.min_prob, self.max_prob)
+        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
+        return P_new
+
     def _update(self, chromosomes, idx, update_value):
         """
         Modify *chromosomes* by adding *update_value* to the genes indicated by *idx* and
@@ -285,17 +398,15 @@ class QPopulationNetwork(QPopulation):
         """
         idx0 = np.arange(chromosomes.shape[0])
 
-        update_array = np.where(
-            chromosomes[idx0, idx] + update_value > self.max_prob,
-            0.0,
-            update_value
-        )
-        sum_values = chromosomes[idx0, idx] + update_array
+        current = chromosomes[idx0, idx]
+        headroom = np.maximum(self.max_prob - current, 0.0)
+        update_array = np.minimum(update_value, headroom)   # <-- antes era todo o nada
+        sum_values = current + update_array
 
         chromosomes[idx0, idx] = 0.0
 
         totals = np.sum(chromosomes, axis=1)
-        totals = np.where(totals == 0, 1e-8, totals)  # Avoid division by zero
+        totals = np.where(totals == 0, 1e-8, totals)
         decrease = (update_array / totals).reshape(-1, 1) * chromosomes
         chromosomes -= decrease
 
@@ -303,21 +414,72 @@ class QPopulationNetwork(QPopulation):
 
         chromosomes = np.maximum(chromosomes, self.min_prob)
         chromosomes /= np.sum(chromosomes, axis=1, keepdims=True)
-
         return chromosomes
 
-    def update_quantum(self, intensity):
-        """ Update self.probabilities.
-
-        Args:
-            intensity: (float) value defining the intensity of the update.
+    def update_quantum(self, intensity=None, use_basic=False):
         """
+        Actualiza self.probabilities según self.elite_mode:
+        - "single": baseline emparejado 1–a–1 con los top N_q clásicos.
+        - "global_k": un q por gen a partir del top-K global (mismo para todas las filas).
+        - "bootstrap_k": un q por fila, muestreando K élites de un pool mayor.
+        """
+        # 1) intensidad estocástica si no viene
+        if intensity is None:
+            intensity = self._sample_intensity(lo=0.5, hi=1.0)  # Beta(2,5) reescalada en tu helper
 
-        random = np.random.rand(self.num_ind, self.chromosome.num_genes)
-        mask = np.where(random <= self.update_quantum_rate)
+        # 2) paso base sensible a F y frecuencia
+        self.max_update = self._suggest_max_update()  # 0.07 / 0.05 / 0.04 según F (tu helper)
+        eta_base = float(intensity) * float(self.max_update)
 
-        update_value = intensity * self.max_update
+        F = int(self.chromosome.num_functions)
 
-        best_classic = self.current_pop[:self.num_ind]
-        self.probabilities[mask] = self._update(self.probabilities[mask], best_classic[mask],
-                                                update_value)
+        # 3) seleccionar (ind, gen) a actualizar
+        rand = np.random.rand(self.num_ind, self.chromosome.num_genes)
+        rows, cols = np.where(rand <= self.update_quantum_rate)
+        if rows.size == 0:
+            return  # nada que hacer
+
+        # 4) rama aditiva (legado) con headroom
+        if use_basic:
+            # winners emparejados: best_classic[rows, cols]
+            E = min(self.num_ind, self.current_pop.shape[0])
+            best_classic = self.current_pop[:E]  # (E, L)
+            winners = best_classic[rows, cols]   # (K_sel,)
+            self.probabilities[rows, cols, :] = self._update(
+                self.probabilities[rows, cols, :],
+                winners,
+                eta_base  # aquí actúa como update_value
+            )
+            return
+
+        # 5) construir q_rows según elite_mode
+        P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)  # (K_sel, F)
+
+        if self.elite_mode == "single":
+            # === BASELINE EMPAREJADO (tu comportamiento original) ===
+            E = min(self.num_ind, self.current_pop.shape[0])
+            best_classic = self.current_pop[:E]           # (E, L)
+            winners = best_classic[rows, cols]            # (K_sel,)
+            q_rows = np.zeros_like(P_sel)
+            q_rows[np.arange(rows.size), winners] = 1.0   # one-hot por fila
+
+        elif self.elite_mode == "global_k":
+            # mismo top-K para todos, q por gen
+            E = min(self.k_elites, self.current_pop.shape[0])
+            topk   = self.current_pop[:E]                 # (E, L)
+            q_full = self._build_q_global(topk, F)        # (L, F)
+            q_rows = q_full[cols, :]                      # (K_sel, F)
+
+        elif self.elite_mode == "bootstrap_k":
+            # por fila: muestrear K élites de un pool grande
+            E_pool = min(self.current_pop.shape[0], max(self.k_elites, self.pool_factor * self.k_elites))
+            pool    = self.current_pop[:E_pool]           # (E_pool, L)
+            weights = self._elite_weights(E_pool)         # (E_pool,)
+            q_rows  = self._build_q_bootstrap_rows(pool, rows, cols, F, k=self.k_elites, weights=weights)
+
+        else:
+            raise ValueError(f"elite_mode desconocido: {self.elite_mode}")
+
+        # 6) aplicar tilt multiplicativo estable (con piso/techo internos)
+        P_upd = self._update_tilt_with_q(P_sel, q_rows, eta_base)
+        self.probabilities[rows, cols, :] = P_upd
