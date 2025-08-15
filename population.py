@@ -2,8 +2,15 @@
     * Licensed under The MIT License [see LICENSE for details]
 
     - Quantum population classes.
-"""
 
+    Refactored QPopulationNetwork with new Elite Method for the Update of the Quantum Population
+    - Added new crossover methods: HUX and Uniform.
+    - Improved mutation strategies for better exploration of the search space.
+    - Added Metrics to track the probabilities evolution. 
+    Diego Páez Ardila - 2025
+"""
+import os
+import csv
 import numpy as np
 
 from chromosome import QChromosomeParams, QChromosomeNetwork
@@ -136,7 +143,8 @@ class QPopulationNetwork(QPopulation):
     """ QNAS Chromosomes for the networks to be evolved. """
 
     def __init__(self, num_quantum_ind, max_num_nodes, repetition, update_quantum_rate,
-                fn_list, initial_probs, crossover_method='hux', elite_mode="global_k"):
+                fn_list, initial_probs, crossover_method='hux', elite_mode="global_k",
+                k_elites=5, pool_factor=2, ema_beta=0.7, rank_weighting=True, experiment_path:str=""):
         """ Initialize QPopulationNetwork.
 
         Args:
@@ -149,6 +157,17 @@ class QPopulationNetwork(QPopulation):
             fn_list: list of possible functions.
             initial_probs: list defining the initial probabilities for each function; if empty,
                 the algorithm will give the same probability for each function.
+            elite_mode (str, optional): Strategy to build target distributions from elites.
+                Options are "single", "global_k" or "bootstrap_k". Defaults to "global_k".
+            k_elites (int, optional): Number of elites used when elite_mode requires it.
+                Defaults to 5.
+            pool_factor (int, optional): Multiplier to determine the elite pool size when
+                using "bootstrap_k". Defaults to 2.
+            ema_beta (float, optional): Exponential moving average factor applied when
+                computing global elite distributions. Set to 0.0 to disable. Defaults to 0.7.
+            rank_weighting (bool, optional): If True, weight elite contributions by
+                inverse rank. Defaults to True.
+            experiment_path (str): Path to the experiment directory.
         """
 
         super(QPopulationNetwork, self).__init__(num_quantum_ind, repetition,
@@ -162,14 +181,20 @@ class QPopulationNetwork(QPopulation):
         self.min_prob = max(1e-8, 0.01 / self.chromosome.num_functions)
 
         self.elite_mode = elite_mode  # "single" | "global_k" | "bootstrap_k"
-        self.k_elites   = 5            # quantos elites usar (comece com 5–10)
-        self.pool_factor = 2           # Factor del pool (E_pool ≈ pool_factor * k_elites)
-        self.ema_beta   = 0.7          # suavização do alvo q (0.0 desativa)
-        self.rank_weighting = True     # pesos 1/rank
+        self.k_elites = k_elites
+        self.pool_factor = pool_factor
+        self.ema_beta = ema_beta
+        self.rank_weighting = rank_weighting
+
+        self.metrics_output = os.path.join(experiment_path, "qpop_update", "metrics_output.csv")
+        os.makedirs(os.path.dirname(self.metrics_output), exist_ok=True)
+        self._last_dump_idx = 0
+        self.epoch_idx = 0  # opcional, para métricas
 
         self.initial_probs = self.chromosome.initialize_qgenes(initial_probs=initial_probs)
         self.crossover_method = crossover_method  # Crossover method selection
         self.initialize_qpop()
+        self._init_metrics_min()
 
     def initialize_qpop(self):
         """ Initialize quantum population with *self.num_ind* individuals. """
@@ -275,6 +300,89 @@ class QPopulationNetwork(QPopulation):
         mutated /= mutated.sum(axis=2, keepdims=True)
         self.probabilities[idx] = mutated
 
+    def _init_metrics_min(self):
+        self.metrics = {
+            "epoch": [],
+            "update_idx": [],
+            "entropy_mean": [],
+            "kl_mean": [],            # puedes no llenar si no quieres KL
+            "frac_onehot_0p9": [],
+            "noop_mass_mean": []
+        }
+        self._last_P = None          # para KL entre updates
+        self._update_counter = 0     # contador de actualizaciones
+        
+    def _log_update_metrics_min(self, epoch_idx=None):
+        P = self.probabilities  # (Nq, L, F)
+
+        # Entropía media (promediando Nq y L)
+        H_mean = float(self._entropy_rows(P).mean())
+
+        # KL medio vs. último P (opcional)
+        if self._last_P is not None:
+            KL_mean = float(self._kl_rows(
+                P.reshape(-1, P.shape[-1]),
+                self._last_P.reshape(-1, self._last_P.shape[-1])
+            ).mean())
+        else:
+            KL_mean = float("nan")  # o 0.0 si prefieres
+
+        # Colapso (fracción de filas casi one-hot)
+        frac_oh = self._frac_onehot(P, thr=0.9)
+
+        # Masa en no_op (si tienes noop_id)
+        if hasattr(self, "noop_id"):
+            noop_mass = float(P[..., self.noop_id].mean())
+        else:
+            noop_mass = float("nan")
+
+        # Guardar en buffers
+        self.metrics["epoch"].append(int(epoch_idx) if epoch_idx is not None else len(self.metrics["epoch"]))
+        self.metrics["update_idx"].append(self._update_counter)
+        self.metrics["entropy_mean"].append(H_mean)
+        self.metrics["kl_mean"].append(KL_mean)
+        self.metrics["frac_onehot_0p9"].append(frac_oh)
+        self.metrics["noop_mass_mean"].append(noop_mass)
+
+        # actualizar referencia para próximo KL y contador
+        self._last_P = P.copy()
+        self._update_counter += 1
+
+    def save_metrics_csv(self, path_csv: str, overwrite: bool = False):
+        cols = ["epoch", "update_idx", "entropy_mean", "kl_mean", "frac_onehot_0p9", "noop_mass_mean"]
+
+        total = len(self.metrics["update_idx"])
+        start = 0 if overwrite or (not os.path.exists(path_csv)) else getattr(self, "_last_dump_idx", 0)
+        if start >= total:
+            return  # nada nuevo que escribir
+
+        mode = "w" if overwrite or (not os.path.exists(path_csv)) else "a"
+        write_header = (mode == "w")
+
+        with open(path_csv, mode, newline="") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            if write_header:
+                w.writeheader()
+            for i in range(start, total):
+                row = {k: self.metrics[k][i] for k in cols}
+                w.writerow(row)
+
+        self._last_dump_idx = total
+
+    def _entropy_rows(self, P, eps=1e-12):
+        F = P.shape[-1]
+        P = np.clip(P, eps, 1.0)
+        H = -(P * np.log(P)).sum(axis=-1) / np.log(F)
+        return H  # misma shape que P[...,:]
+
+    def _kl_rows(self, P_new, P_old, eps=1e-12):
+        P_new = np.clip(P_new, eps, 1.0)
+        P_old = np.clip(P_old, eps, 1.0)
+        return (P_new * (np.log(P_new) - np.log(P_old))).sum(axis=-1)
+
+    def _frac_onehot(self, P, thr=0.9):
+        return float(np.mean(P.max(axis=-1) > thr))
+    
     def _elite_weights(self, E: int) -> np.ndarray:
         """w_e ∝ 1/rank; e=0 es el mejor."""
         if not self.rank_weighting:
@@ -416,7 +524,7 @@ class QPopulationNetwork(QPopulation):
         chromosomes /= np.sum(chromosomes, axis=1, keepdims=True)
         return chromosomes
 
-    def update_quantum(self, intensity=None, use_basic=False):
+    def update_quantum(self, intensity=None):
         """
         Actualiza self.probabilities según self.elite_mode:
         - "single": baseline emparejado 1–a–1 con los top N_q clásicos.
@@ -440,7 +548,7 @@ class QPopulationNetwork(QPopulation):
             return  # nada que hacer
 
         # 4) rama aditiva (legado) con headroom
-        if use_basic:
+        if self.elite_mode == "old":
             # winners emparejados: best_classic[rows, cols]
             E = min(self.num_ind, self.current_pop.shape[0])
             best_classic = self.current_pop[:E]  # (E, L)
@@ -450,13 +558,17 @@ class QPopulationNetwork(QPopulation):
                 winners,
                 eta_base  # aquí actúa como update_value
             )
+            self._log_update_metrics_min(epoch_idx=self.epoch_idx)
+            self._log_update_metrics_min(epoch_idx=self.epoch_idx)
+            self.save_metrics_csv(self.metrics_output)
+            self.epoch_idx += 1
             return
 
         # 5) construir q_rows según elite_mode
         P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)  # (K_sel, F)
 
         if self.elite_mode == "single":
-            # === BASELINE EMPAREJADO (tu comportamiento original) ===
+            # === BASELINE EMPAREJADO (tu comportamiento original + tilt update)
             E = min(self.num_ind, self.current_pop.shape[0])
             best_classic = self.current_pop[:E]           # (E, L)
             winners = best_classic[rows, cols]            # (K_sel,)
@@ -483,3 +595,6 @@ class QPopulationNetwork(QPopulation):
         # 6) aplicar tilt multiplicativo estable (con piso/techo internos)
         P_upd = self._update_tilt_with_q(P_sel, q_rows, eta_base)
         self.probabilities[rows, cols, :] = P_upd
+        self._log_update_metrics_min(epoch_idx=self.epoch_idx)
+        self.save_metrics_csv(self.metrics_output)
+        self.epoch_idx += 1

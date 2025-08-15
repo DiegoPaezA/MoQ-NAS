@@ -93,6 +93,10 @@ if __name__ == '__main__':
     parser.add_argument('--network_config', type=str, required=True,  help='Network structure configuration.', default='default',
                         choices=['default', 'dense', 'backbone'])
 
+    parser.add_argument('--elite_mode', type=str, default='global_k',
+                        choices=['single', 'global_k', 'bootstrap_k'],
+                        help='Elite selection mode during evolution. Default = global_k.')
+
     # Use cache for evaluations
     parser.add_argument('--use_cache', action='store_true', default=False,
                         help='Use cached evaluations to speed up runs. Default = False.')
