@@ -189,7 +189,6 @@ class QPopulationNetwork(QPopulation):
         self.metrics_output = os.path.join(experiment_path, "qpop_update", "metrics_output.csv")
         os.makedirs(os.path.dirname(self.metrics_output), exist_ok=True)
         self._last_dump_idx = 0
-        self.epoch_idx = 0  # opcional, para métricas
 
         self.initial_probs = self.chromosome.initialize_qgenes(initial_probs=initial_probs)
         self.crossover_method = crossover_method  # Crossover method selection
@@ -524,7 +523,7 @@ class QPopulationNetwork(QPopulation):
         chromosomes /= np.sum(chromosomes, axis=1, keepdims=True)
         return chromosomes
 
-    def update_quantum(self, intensity=None):
+    def update_quantum(self, intensity=None, current_gen=None):
         """
         Actualiza self.probabilities según self.elite_mode:
         - "single": baseline emparejado 1–a–1 con los top N_q clásicos.
@@ -558,10 +557,8 @@ class QPopulationNetwork(QPopulation):
                 winners,
                 eta_base  # aquí actúa como update_value
             )
-            self._log_update_metrics_min(epoch_idx=self.epoch_idx)
-            self._log_update_metrics_min(epoch_idx=self.epoch_idx)
+            self._log_update_metrics_min(epoch_idx=current_gen)
             self.save_metrics_csv(self.metrics_output)
-            self.epoch_idx += 1
             return
 
         # 5) construir q_rows según elite_mode
@@ -595,6 +592,5 @@ class QPopulationNetwork(QPopulation):
         # 6) aplicar tilt multiplicativo estable (con piso/techo internos)
         P_upd = self._update_tilt_with_q(P_sel, q_rows, eta_base)
         self.probabilities[rows, cols, :] = P_upd
-        self._log_update_metrics_min(epoch_idx=self.epoch_idx)
+        self._log_update_metrics_min(epoch_idx=current_gen)
         self.save_metrics_csv(self.metrics_output)
-        self.epoch_idx += 1
