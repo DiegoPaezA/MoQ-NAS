@@ -185,6 +185,13 @@ class QPopulationNetwork(QPopulation):
         self.pool_factor = pool_factor
         self.ema_beta = ema_beta
         self.rank_weighting = rank_weighting
+        
+        self._U_total = None
+        
+        # Update-rate schedule (probability a (ind,gene) gets updated)
+        self.rate_start = max(0.2, self.update_quantum_rate)  # don’t go below current
+        self.rate_boost = 0.40                                # early exploration target
+        self.rate_end   = self.update_quantum_rate            # cool to your baseline
 
         self.metrics_output = os.path.join(experiment_path, "qpop_update", "metrics_output.csv")
         os.makedirs(os.path.dirname(self.metrics_output), exist_ok=True)
@@ -194,6 +201,9 @@ class QPopulationNetwork(QPopulation):
         self.crossover_method = crossover_method  # Crossover method selection
         self.initialize_qpop()
         self._init_metrics_min()
+
+    def set_schedule_total_updates(self, total_updates: int):
+        self._U_total = max(1, int(total_updates))
 
     def initialize_qpop(self):
         """ Initialize quantum population with *self.num_ind* individuals. """
@@ -303,10 +313,11 @@ class QPopulationNetwork(QPopulation):
         self.metrics = {
             "epoch": [],
             "update_idx": [],
+            "quantum_update_rate": [],
             "entropy_mean": [],
             "kl_mean": [],            # puedes no llenar si no quieres KL
             "frac_onehot_0p9": [],
-            "noop_mass_mean": []
+            # "noop_mass_mean": []
         }
         self._last_P = None          # para KL entre updates
         self._update_counter = 0     # contador de actualizaciones
@@ -329,26 +340,27 @@ class QPopulationNetwork(QPopulation):
         # Colapso (fracción de filas casi one-hot)
         frac_oh = self._frac_onehot(P, thr=0.9)
 
-        # Masa en no_op (si tienes noop_id)
-        if hasattr(self, "noop_id"):
-            noop_mass = float(P[..., self.noop_id].mean())
-        else:
-            noop_mass = float("nan")
+        # # Masa en no_op (si tienes noop_id)
+        # if hasattr(self, "noop_id"):
+        #     noop_mass = float(P[..., self.noop_id].mean())
+        # else:
+        #     noop_mass = float("nan")
 
         # Guardar en buffers
         self.metrics["epoch"].append(int(epoch_idx) if epoch_idx is not None else len(self.metrics["epoch"]))
         self.metrics["update_idx"].append(self._update_counter)
+        self.metrics["quantum_update_rate"].append(self.update_quantum_rate)
         self.metrics["entropy_mean"].append(H_mean)
         self.metrics["kl_mean"].append(KL_mean)
         self.metrics["frac_onehot_0p9"].append(frac_oh)
-        self.metrics["noop_mass_mean"].append(noop_mass)
+        # self.metrics["noop_mass_mean"].append(noop_mass)
 
         # actualizar referencia para próximo KL y contador
         self._last_P = P.copy()
         self._update_counter += 1
 
     def save_metrics_csv(self, path_csv: str, overwrite: bool = False):
-        cols = ["epoch", "update_idx", "entropy_mean", "kl_mean", "frac_onehot_0p9", "noop_mass_mean"]
+        cols = ["epoch", "update_idx", "quantum_update_rate", "entropy_mean", "kl_mean", "frac_onehot_0p9"]
 
         total = len(self.metrics["update_idx"])
         start = 0 if overwrite or (not os.path.exists(path_csv)) else getattr(self, "_last_dump_idx", 0)
@@ -475,6 +487,15 @@ class QPopulationNetwork(QPopulation):
         base = 0.07 if F <= 12 else 0.05 if F <= 32 else 0.04
         return base
 
+    def _lin_schedule(self, t, T, start, end):
+        t = max(0, min(int(t), int(T)))
+        return start + (end - start) * (t / float(T + 1e-12))
+
+    def _cosine_schedule(self, t, T, start, end):
+        t = max(0, min(int(t), int(T)))
+        w = 0.5 * (1.0 + np.cos(np.pi * t / float(T)))  # 1→0
+        return end + (start - end) * w
+
     def _update_tilt(self, P_rows, winners, eta):
         eps = 1e-12
         K, F = P_rows.shape
@@ -530,6 +551,17 @@ class QPopulationNetwork(QPopulation):
         - "global_k": un q por gen a partir del top-K global (mismo para todas las filas).
         - "bootstrap_k": un q por fila, muestreando K élites de un pool mayor.
         """
+        
+        u = getattr(self, "_update_counter", 0)
+        U_total = getattr(self, "_U_total", None)
+        if U_total is None:
+            # fallback if QNAS didn't call set_schedule_total_updates
+            U_total = max(1, (current_gen or 0) // 1)  # safe guard
+
+        # --- Schedule update-quantum rate (optional)
+        self.update_quantum_rate = self._cosine_schedule(u, U_total, self.rate_boost, self.rate_end)
+
+
         # 1) intensidad estocástica si no viene
         if intensity is None:
             intensity = self._sample_intensity(lo=0.5, hi=1.0)  # Beta(2,5) reescalada en tu helper
@@ -543,6 +575,11 @@ class QPopulationNetwork(QPopulation):
         # 3) seleccionar (ind, gen) a actualizar
         rand = np.random.rand(self.num_ind, self.chromosome.num_genes)
         rows, cols = np.where(rand <= self.update_quantum_rate)
+        
+        print(f"Update quantum: {self.update_quantum_rate:.3f} (intensity={intensity:.3f})")
+        print(f"Selected rows: {rows.size} (out of {self.num_ind * self.chromosome.num_genes})")
+        print(f"Selected cols: {cols.size} (out of {self.chromosome.num_genes})")
+        
         if rows.size == 0:
             return  # nada que hacer
 
