@@ -202,6 +202,9 @@ class QNAS(object):
             rank_weighting=rank_weighting,
             experiment_path= self.experiment_path,
         )
+        
+        U_total = max(1, max_generations // max(1, update_quantum_gen))
+        self.qpop_net.set_schedule_total_updates(U_total)
 
     def select_population(
         self,
@@ -760,7 +763,7 @@ class QNAS(object):
         if self.current_gen > 0 and (self.current_gen % self.update_quantum_gen == 0):
             self.logger.info("Updating quantum parameters...")
             self.qpop_params.update_quantum(intensity=self.random)
-            self.qpop_net.update_quantum(intensity=self.random, current_gen=current_gen)
+            self.qpop_net.update_quantum(intensity=None, current_gen=current_gen)
 
 
     def go_next_gen(self):
