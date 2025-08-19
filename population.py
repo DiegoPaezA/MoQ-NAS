@@ -454,27 +454,6 @@ class QPopulationNetwork(QPopulation):
             q_rows[i] = (q_rows[i] / s) if s > 0 else (1.0 / F)
         return q_rows  # (K_sel, F)
 
-    def _update_tilt_with_q(self, P_rows: np.ndarray, q_rows: np.ndarray, eta_base: float) -> np.ndarray:
-        """
-        P_rows: (K_sel, F) PMFs a actualizar
-        q_rows: (K_sel, F) objetivos por fila (global_k o bootstrap_k)
-        eta_base: paso base (intensity * max_update)
-        """
-        eps = 1e-12
-
-        # paso adaptativo por fila (consenso^2)
-        consensus = q_rows.max(axis=1, keepdims=True)  # (K_sel,1)
-        eta = eta_base * (consensus ** 2)
-
-        tilt = np.exp(eta * q_rows)                    # (K_sel,F)
-        P_new = P_rows * tilt
-        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
-
-        # piso/techo + renorm
-        P_new = np.clip(P_new, self.min_prob, self.max_prob)
-        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
-        return P_new
-
     def _sample_intensity(self, lo=0.5, hi=1.0):
         # Beta(2,5): más masa hacia valores pequeños; reescala a [lo, hi]
         u = np.random.beta(2.0, 5.0)
@@ -495,6 +474,27 @@ class QPopulationNetwork(QPopulation):
         t = max(0, min(int(t), int(T)))
         w = 0.5 * (1.0 + np.cos(np.pi * t / float(T)))  # 1→0
         return end + (start - end) * w
+
+    def _update_tilt_with_q(self, P_rows: np.ndarray, q_rows: np.ndarray, eta_base: float) -> np.ndarray:
+        """
+        P_rows: (K_sel, F) PMFs a actualizar
+        q_rows: (K_sel, F) objetivos por fila (global_k o bootstrap_k)
+        eta_base: paso base (intensity * max_update)
+        """
+        eps = 1e-12
+
+        # paso adaptativo por fila (consenso^2)
+        consensus = q_rows.max(axis=1, keepdims=True)  # (K_sel,1)
+        eta = eta_base * consensus
+
+        tilt = np.exp(eta * q_rows)                    # (K_sel,F)
+        P_new = P_rows * tilt
+        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
+
+        # piso/techo + renorm
+        P_new = np.clip(P_new, self.min_prob, self.max_prob)
+        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
+        return P_new
 
     def _update_tilt(self, P_rows, winners, eta):
         eps = 1e-12
@@ -567,7 +567,9 @@ class QPopulationNetwork(QPopulation):
             intensity = self._sample_intensity(lo=0.5, hi=1.0)  # Beta(2,5) reescalada en tu helper
 
         # 2) paso base sensible a F y frecuencia
-        self.max_update = self._suggest_max_update()  # 0.07 / 0.05 / 0.04 según F (tu helper)
+        #self.max_update = self._suggest_max_update()  # 0.07 / 0.05 / 0.04 según F (tu helper)
+        # --- Schedule max_update (from 0.2 → 0.05)
+        self.max_update = self._cosine_schedule(u, U_total, start=0.2, end=0.05)
         eta_base = float(intensity) * float(self.max_update)
 
         F = int(self.chromosome.num_functions)
