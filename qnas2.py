@@ -53,6 +53,7 @@ class QNAS(object):
         self.best_so_far_id = [0, 0]
         self.current_best_id = [0, 0]
         self.current_gen = 0
+        self.eval_idx = np.array([], dtype=int)
 
         self.data_file = data_file
         self.eval_func = eval_func
@@ -206,11 +207,9 @@ class QNAS(object):
         U_total = max(1, max_generations // max(1, update_quantum_gen))
         self.qpop_net.set_schedule_total_updates(U_total)
 
-    def select_population(
-        self,
-        old_params: np.ndarray, old_nets: np.ndarray, old_pen: np.ndarray,
-        old_raw: np.ndarray, new_params: np.ndarray, new_nets: np.ndarray,
-        new_pen: np.ndarray, new_raw: np.ndarray,):
+    def select_population(self, old_params: np.ndarray, old_nets: np.ndarray, old_pen: np.ndarray,
+                            old_raw: np.ndarray, old_eval_idx: np.ndarray,new_params: np.ndarray,
+                            new_nets: np.ndarray,new_pen: np.ndarray, new_raw: np.ndarray,new_eval_idx: np.ndarray):
         """
         Merge old and new classical populations (using penalized fitness for ordering),
         then keep the top num_classic = (num_quantum_ind × repetition) individuals.
@@ -221,10 +220,12 @@ class QNAS(object):
             old_nets (np.ndarray): (N_old, net_dim) array of old network chromosomes.
             old_pen (np.ndarray): (N_old,) penalized fitness of old individuals.
             old_raw (np.ndarray): (N_old,) raw (unpenalized) fitness of old individuals.
+            old_eval_idx (np.ndarray): (N_old,) evaluation indices of old individuals.
             new_params (np.ndarray): (N_new, param_dim) array of new hyperparameter chromosomes.
             new_nets (np.ndarray): (N_new, net_dim) array of new network chromosomes.
             new_pen (np.ndarray): (N_new,) penalized fitness of new individuals.
             new_raw (np.ndarray): (N_new,) raw (unpenalized) fitness of new individuals.
+            new_eval_idx (np.ndarray): (N_new,) evaluation indices of new individuals.
 
         Returns:
             sorted_params (np.ndarray): (num_classic, param_dim) hyperparameter chromosomes of survivors.
@@ -232,11 +233,14 @@ class QNAS(object):
             sorted_pen (np.ndarray): (num_classic,) penalized fitness of survivors.
             sorted_raw (np.ndarray): (num_classic,) raw fitness of survivors.
         """
+        num_classic = self.qpop_params.num_ind * self.qpop_params.repetition
         # 1) First generation: simply take new population wholesale (both penalized & raw)
         if self.current_gen == 0:
-            return new_params, new_nets, new_pen, new_raw
-
-        self.update_best_id(new_pen)
+            k = min(num_classic, new_pen.shape[0])
+            sorted_pen, sorted_raw, sorted_params, sorted_nets, sorted_eidx = self.order_pop(
+                new_pen, new_raw, new_params, new_nets, new_eval_idx, selection=range(k)
+            )
+            return sorted_params, sorted_nets, sorted_pen, sorted_raw, sorted_eidx
 
         if self.replace_method == "elitism":
             selected = [0]
@@ -252,17 +256,17 @@ class QNAS(object):
         all_raw = np.concatenate([kept_old_raw, new_raw])
         all_params = np.concatenate([kept_old_params, new_params])
         all_nets   = np.concatenate([kept_old_nets, new_nets])
+        all_eval_idx = np.concatenate([old_eval_idx[selected], new_eval_idx])
 
-        num_classic = self.qpop_params.num_ind * self.qpop_params.repetition
-        sorted_pen, sorted_raw, sorted_params, sorted_nets = self.order_pop(
-            all_pen, all_raw, all_params, all_nets, selection=range(num_classic)
+        sorted_pen, sorted_raw, sorted_params, sorted_nets, sorted_eidx = self.order_pop(
+            all_pen, all_raw, all_params, all_nets, all_eval_idx, selection=range(num_classic)
         )
-        
-        return sorted_params, sorted_nets, sorted_pen, sorted_raw
+
+        return sorted_params, sorted_nets, sorted_pen, sorted_raw, sorted_eidx
 
     @staticmethod
     def order_pop(fitnesses: np.ndarray,raw_fitnesses: np.ndarray,
-                    pop_params: np.ndarray,pop_net: np.ndarray,selection=None,):
+                    pop_params: np.ndarray,pop_net: np.ndarray, pop_eval_idx: np.ndarray, selection=None,):
         """
         Sort a population by `fitnesses` in descending order, then pick indices in `selection`.
 
@@ -271,6 +275,7 @@ class QNAS(object):
             raw_fitnesses (np.ndarray): (N,) array of raw (unpenalized) fitness values.
             pop_params (np.ndarray): (N, param_dim) array of hyperparameter chromosomes.
             pop_net (np.ndarray): (N, net_dim) array of network chromosomes.
+            pop_eval_idx (np.ndarray): (N,) array of evaluation indices.
             selection (iterable, optional): Indices to keep after sorting.
 
         Returns:
@@ -286,20 +291,32 @@ class QNAS(object):
         sorted_nets = pop_net[idx][selection]
         sorted_fits = fitnesses[idx][selection]
         sorted_raw = raw_fitnesses[idx][selection]
-        return sorted_fits, sorted_raw, sorted_params, sorted_nets
+        sorted_eval_idx = pop_eval_idx[idx][selection]
+        return sorted_fits, sorted_raw, sorted_params, sorted_nets, sorted_eval_idx
 
 
-    def update_best_id(self, new_fits: np.ndarray):
+    def update_best_id(self, penalized_fits: np.ndarray, eval_idx: np.ndarray):
         """
-        Update the IDs of the best individual based on new_fits.
-
-        Args:
-            new_fits (np.ndarray): (N,) penalized fitness array for the new population.
+        Update current-gen best and global best-so-far using *penalized* fitness.
+        Ignores NaNs. Must be called after survivor selection (except gen 0 bootstrap).
         """
-        idx_sorted = np.argsort(new_fits)[::-1]
-        self.current_best_id = [self.current_gen, int(idx_sorted[0])]
-        if new_fits[idx_sorted[0]] > self.best_so_far:
-            self.best_so_far_id = self.current_best_id
+        if penalized_fits is None or penalized_fits.size == 0:
+            return
+        safe   = np.where(np.isnan(penalized_fits), -np.inf, penalized_fits)
+        i_best = int(np.argmax(safe))      # survivor position of the best in this gen
+        val    = float(safe[i_best])
+        eidx   = int(eval_idx[i_best])     # <-- evaluation index (“candidate X”)
+
+        self.current_best_id    = [self.current_gen, eidx]
+        self.current_best_value = val
+
+        if getattr(self, "best_so_far", None) is None:
+            self.best_so_far    = -np.inf
+            self.best_so_far_id = [-1, -1]
+
+        if val > self.best_so_far:
+            self.best_so_far    = val
+            self.best_so_far_id = [self.current_gen, eidx]
 
 
     def generate_classical(self):
@@ -351,7 +368,6 @@ class QNAS(object):
 
         raw_fits = [None] * len(decoded_nets)
         metric_key = self.objectives[0]
-
         # `results` is a dictionary keyed by candidate_id, map it back
         for i in range(len(decoded_nets)):
             candidate_id = decoded_params[i]['candidate_id']
@@ -518,13 +534,19 @@ class QNAS(object):
         if self.use_cache:
             raw_fits = self._eval_pop_with_cache(decoded_params, decoded_nets, pop_net)
         else:
-            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
-            #raw_fits = self._eval_pop_with_history(decoded_params, decoded_nets, pop_net)
+            #raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
+            raw_fits = self._eval_pop_with_history(decoded_params, decoded_nets, pop_net)
         
         penalized_fits = raw_fits.copy()
         if self.penalize_number and self.reducing_fns_list:
             penalties = self.get_penalties(pop_net)
             penalized_fits -= penalties
+            diff = raw_fits - penalized_fits
+            self.logger.info(
+                "Penalization stats — min: %.4f, max: %.4f, mean: %.4f (nonzero count: %d)",
+                float(np.min(diff)), float(np.max(diff)), float(np.mean(diff)),
+                int(np.count_nonzero(diff))
+            )
 
         return penalized_fits, raw_fits
 
@@ -614,6 +636,16 @@ class QNAS(object):
                     pass
         return new_pop_net
 
+    @staticmethod
+    def _fmt_arr(a, prec=6):
+        # Robust formatter for numpy arrays with fixed precision
+        return np.array2string(
+            np.asarray(a),
+            formatter={'float_kind': lambda x: f"{x:.{prec}f}"},
+            max_line_width=200,
+            separator=' '
+        )
+
 
     def log_data(self):
         """
@@ -623,7 +655,6 @@ class QNAS(object):
             - penalized fitnesses array
             - raw fitnesses array
         """
-        np.set_printoptions(precision=4)
         self.logger.info(
             "Generation %d complete!\n"
             "- Best so far: %s → %.5f\n"
@@ -632,8 +663,8 @@ class QNAS(object):
             self.current_gen,
             self.best_so_far_id,
             self.best_so_far,
-            self.fitnesses,
-            self.raw_fitnesses,
+            self._fmt_arr(self.fitnesses, prec=3),
+            self._fmt_arr(self.raw_fitnesses, prec=3),
         )
 
 
@@ -781,9 +812,14 @@ class QNAS(object):
         self.save_data()
         self.log_data()
 
+        # Guard: only try to keep best dir if best id was set
         best_gen, best_idx = self.best_so_far_id
-        best_id = f"{best_gen}_{best_idx}"
-        delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=[best_id])
+        if best_gen >= 0 and best_idx >= 0:
+            best_id = f"{best_gen}_{best_idx}"
+            delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=[best_id])
+        else:
+            delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=[])
+
         self.current_gen += 1
 
 
@@ -839,15 +875,18 @@ class QNAS(object):
             # (2e) Evaluate new offspring
             new_f_pen, new_f_raw = self.eval_pop(new_p, new_n)
 
+            new_eval_idx = np.arange(new_p.shape[0], dtype=int)
+            
             # (2f) Merge & select next generation
             old_p = self.qpop_params.current_pop
             old_n = self.qpop_net.current_pop
             old_pen = self.fitnesses
             old_raw = self.raw_fitnesses
+            old_eval_idx = self.eval_idx 
 
-            next_p, next_n, next_pen, next_raw = self.select_population(
-                old_p, old_n, old_pen, old_raw,
-                new_p, new_n, new_f_pen, new_f_raw
+            next_p, next_n, next_pen, next_raw, next_eidx = self.select_population(
+                old_p, old_n, old_pen, old_raw, old_eval_idx,
+                new_p, new_n, new_f_pen, new_f_raw, new_eval_idx,
             )
 
             # (2g) Assign back
@@ -855,7 +894,8 @@ class QNAS(object):
             self.qpop_net.current_pop = next_n
             self.fitnesses               = next_pen
             self.raw_fitnesses           = next_raw
-            self.best_so_far             = next_pen[0]
+            self.eval_idx                = next_eidx
+            self.update_best_id(self.fitnesses, self.eval_idx)
 
             # (2h) Quantum update + logging + cleanup + increment gen
             self.go_next_gen()
