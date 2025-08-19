@@ -663,8 +663,8 @@ class QNAS(object):
             self.current_gen,
             self.best_so_far_id,
             self.best_so_far,
-            self._fmt_arr(self.fitnesses, prec=3),
-            self._fmt_arr(self.raw_fitnesses, prec=3),
+            self._fmt_arr(self.fitnesses, prec=2),
+            self._fmt_arr(self.raw_fitnesses, prec=2),
         )
 
 
