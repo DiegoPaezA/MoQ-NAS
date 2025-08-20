@@ -794,7 +794,7 @@ class QNAS(object):
         if self.current_gen > 0 and (self.current_gen % self.update_quantum_gen == 0):
             self.logger.info("Updating quantum parameters...")
             self.qpop_params.update_quantum(intensity=self.random)
-            self.qpop_net.update_quantum(intensity=None, current_gen=current_gen)
+            self.qpop_net.update_quantum(intensity=self.random, current_gen=current_gen)
 
 
     def go_next_gen(self):
