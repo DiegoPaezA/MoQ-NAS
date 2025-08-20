@@ -184,7 +184,7 @@ class MOQNAS(QNAS):
 
         return fits
     @staticmethod
-    def compute_hypervolume_mixed(front_raw: np.ndarray, ε: float = 1e-6) -> float:
+    def compute_hypervolume_mixed(front_raw: np.ndarray, ref_point=None) -> float:
         """
         Compute hypervolume for a 3-objective Pareto front where:
             - front_raw[:, 0] = accuracy (to be maximized)
@@ -197,27 +197,25 @@ class MOQNAS(QNAS):
 
         Args:
             front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
-            ε (float): tiny margin to add to the reference point.
+            ref_point (np.ndarray): shape=(3,) with the reference point for hypervolume calculation.
 
         Returns:
             float: the hypervolume (in the original mixed‐obj space).
         """
-        if front_raw.size == 0:
+        if front_raw is None or len(front_raw) == 0:
             return 0.0
 
-        # 1) Build minimization front: acc → -acc, params & time unchanged
-        front_min = front_raw.copy()
-        front_min[:, 0] *= -1.0   # flip accuracy
+        f = np.array(front_raw, dtype=float, copy=True)
+        f[:, 0] = -f[:, 0]  # flip accuracy to minimization
 
-        # 2) Construct the reference point (for each column, take max(front_min[:,j]) + ε)
-        ref = np.max(front_min, axis=0) + ε
+        # Choose a safe reference point (must be worse than all points for minimization)
+        if ref_point is None:
+            rp = np.max(f, axis=0) + 1e-6
+        else:
+            rp = np.asarray(ref_point, dtype=float)
 
-        # 3) Call pymoo’s Hypervolume (which expects a minimization front and ref_point)
-        hv_indicator = Hypervolume(ref_point=ref)
-        hv_value     = hv_indicator(front_min)
-
-        return float(hv_value)
-
+        return float(Hypervolume(ref_point=rp).do(f))
+    
     @staticmethod
     def dominates(a, b):
         """
@@ -482,7 +480,7 @@ class MOQNAS(QNAS):
                 self.qpop_params.current_pop = self.pareto_global_params[pick]
 
             # 5. Trigger the quantum population update (the learning step).
-            self.update_quantum()
+            self.update_quantum(self.current_gen)
 
             # 6. Log a summary of the generation's results.
             hv = self.fronts_history[self.current_gen]['hypervolume']
@@ -563,8 +561,9 @@ class MOQNAS(QNAS):
         self.raw_fits = self.raw_fits.copy()
 
         # Record best‐so‐far (by first objective)
-        self.best_so_far = self.fits[0, 0]
-        self.best_so_far_id = [0, 0]
+        i0 = int(np.nanargmax(f0[:, 0]))
+        self.best_so_far = float(f0[i0, 0])
+        self.best_so_far_id = [0, i0]
 
         # Keep copies for parent‐combination in next loop
         p0_raws = self.raw_fits.copy()
