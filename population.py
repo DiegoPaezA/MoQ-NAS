@@ -314,6 +314,7 @@ class QPopulationNetwork(QPopulation):
             "epoch": [],
             "update_idx": [],
             "quantum_update_rate": [],
+            "max_update": [],
             "entropy_mean": [],
             "kl_mean": [],            # puedes no llenar si no quieres KL
             "frac_onehot_0p9": [],
@@ -350,6 +351,7 @@ class QPopulationNetwork(QPopulation):
         self.metrics["epoch"].append(int(epoch_idx) if epoch_idx is not None else len(self.metrics["epoch"]))
         self.metrics["update_idx"].append(self._update_counter)
         self.metrics["quantum_update_rate"].append(self.update_quantum_rate)
+        self.metrics["max_update"].append(self.max_update)
         self.metrics["entropy_mean"].append(H_mean)
         self.metrics["kl_mean"].append(KL_mean)
         self.metrics["frac_onehot_0p9"].append(frac_oh)
@@ -360,7 +362,8 @@ class QPopulationNetwork(QPopulation):
         self._update_counter += 1
 
     def save_metrics_csv(self, path_csv: str, overwrite: bool = False):
-        cols = ["epoch", "update_idx", "quantum_update_rate", "entropy_mean", "kl_mean", "frac_onehot_0p9"]
+        cols = ["epoch","update_idx","quantum_update_rate","max_update",
+        "entropy_mean","kl_mean","frac_onehot_0p9"]
 
         total = len(self.metrics["update_idx"])
         start = 0 if overwrite or (not os.path.exists(path_csv)) else getattr(self, "_last_dump_idx", 0)
@@ -547,69 +550,69 @@ class QPopulationNetwork(QPopulation):
     def update_quantum(self, intensity=None, current_gen=None):
         """
         Actualiza self.probabilities según self.elite_mode:
-        - "single": baseline emparejado 1–a–1 con los top N_q clásicos.
-        - "global_k": un q por gen a partir del top-K global (mismo para todas las filas).
-        - "bootstrap_k": un q por fila, muestreando K élites de un pool mayor.
+        - "old": baseline aditivo (tu método previo) emparejado 1–a–1 con los top N_q clásicos.
+        - "single": construye q one-hot por fila a partir de los top N_q, pero aplica *actualización aditiva* (Option A).
+        - "global_k": un q por gen a partir del top-K global (mismo para todas las filas), luego *aditiva*.
+        - "bootstrap_k": un q por fila, muestreando K élites de un pool mayor, luego *aditiva*.
         """
-        
+        # --- progreso en espacio de "updates" (no épocas)
         u = getattr(self, "_update_counter", 0)
         U_total = getattr(self, "_U_total", None)
         if U_total is None:
-            # fallback if QNAS didn't call set_schedule_total_updates
-            U_total = max(1, (current_gen or 0) // 1)  # safe guard
+            # fallback si QNAS no llamó set_schedule_total_updates
+            U_total = max(1, (current_gen or 0) // 1)
 
-        # --- Schedule update-quantum rate (optional)
+        # --- Scheduler: prob. de actualizar (exploración alta → baseline)
         self.update_quantum_rate = self._cosine_schedule(u, U_total, self.rate_boost, self.rate_end)
 
-
-        # 1) intensidad estocástica si no viene
+        # --- Intensidad estocástica (puedes programarla si quieres)
         if intensity is None:
-            intensity = self._sample_intensity(lo=0.5, hi=1.0)  # Beta(2,5) reescalada en tu helper
+            intensity = self._sample_intensity(lo=0.5, hi=1.0)  # Beta(2,5) reescalada
 
-        # 2) paso base sensible a F y frecuencia
-        #self.max_update = self._suggest_max_update()  # 0.07 / 0.05 / 0.04 según F (tu helper)
-        # --- Schedule max_update (from 0.2 → 0.05)
-        self.max_update = self._cosine_schedule(u, U_total, start=0.2, end=0.05)
+        # --- Scheduler: tamaño de paso (fuerte al inicio → suave al final)
+        base = self._suggest_max_update()  # 0.07 (F<=12), 0.05 (<=32), else 0.04
+
+        # cosine multiplier: stronger early, cooler later
+        mult = self._cosine_schedule(u, U_total, start=1.5, end=0.8)
+        # e.g., if base=0.05 → starts at 0.08, ends at 0.04
+        # if base=0.07 → starts at ~0.112, ends at ~0.056
+
+        self.max_update = base * mult
         eta_base = float(intensity) * float(self.max_update)
 
         F = int(self.chromosome.num_functions)
 
-        # 3) seleccionar (ind, gen) a actualizar
+        # --- Seleccionar (ind, gen) a actualizar
         rand = np.random.rand(self.num_ind, self.chromosome.num_genes)
         rows, cols = np.where(rand <= self.update_quantum_rate)
-        
-        print(f"Update quantum: {self.update_quantum_rate:.3f} (intensity={intensity:.3f})")
-        print(f"Selected rows: {rows.size} (out of {self.num_ind * self.chromosome.num_genes})")
-        print(f"Selected cols: {cols.size} (out of {self.chromosome.num_genes})")
-        
         if rows.size == 0:
             return  # nada que hacer
 
-        # 4) rama aditiva (legado) con headroom
+        # --- Rama "old": tu baseline aditivo emparejado 1–a–1 (sin q_rows)
         if self.elite_mode == "old":
-            # winners emparejados: best_classic[rows, cols]
             E = min(self.num_ind, self.current_pop.shape[0])
-            best_classic = self.current_pop[:E]  # (E, L)
-            winners = best_classic[rows, cols]   # (K_sel,)
+            best_classic = self.current_pop[:E]          # (E, L)
+            winners = best_classic[rows, cols]           # (K_sel,)
+            # paso constante = eta_base (tu updater maneja headroom + renorm)
             self.probabilities[rows, cols, :] = self._update(
                 self.probabilities[rows, cols, :],
                 winners,
-                eta_base  # aquí actúa como update_value
+                eta_base
             )
             self._log_update_metrics_min(epoch_idx=current_gen)
             self.save_metrics_csv(self.metrics_output)
             return
 
-        # 5) construir q_rows según elite_mode
+        # --- Construir q_rows según elite_mode (todas terminan con q_rows: (K_sel, F))
         P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)  # (K_sel, F)
 
         if self.elite_mode == "single":
-            # === BASELINE EMPAREJADO (tu comportamiento original + tilt update)
+            # one-hot por fila a partir de los top N_q clásicos
             E = min(self.num_ind, self.current_pop.shape[0])
-            best_classic = self.current_pop[:E]           # (E, L)
-            winners = best_classic[rows, cols]            # (K_sel,)
+            best_classic = self.current_pop[:E]                 # (E, L)
+            winners_single = best_classic[rows, cols]           # (K_sel,)
             q_rows = np.zeros_like(P_sel)
-            q_rows[np.arange(rows.size), winners] = 1.0   # one-hot por fila
+            q_rows[np.arange(rows.size), winners_single] = 1.0  # one-hot por fila
 
         elif self.elite_mode == "global_k":
             # mismo top-K para todos, q por gen
@@ -628,8 +631,21 @@ class QPopulationNetwork(QPopulation):
         else:
             raise ValueError(f"elite_mode desconocido: {self.elite_mode}")
 
-        # 6) aplicar tilt multiplicativo estable (con piso/techo internos)
-        P_upd = self._update_tilt_with_q(P_sel, q_rows, eta_base)
-        self.probabilities[rows, cols, :] = P_upd
+        # --- OPTION A: actualización *aditiva* guiada por q_rows ---
+        # Ganadores por fila (argmax del target)
+        winners = np.argmax(q_rows, axis=1)  # (K_sel,)
+        # "Consenso" = confianza del ganador en q_rows ∈ [0,1]
+        consensus = q_rows[np.arange(q_rows.shape[0]), winners]  # (K_sel,)
+        # Paso por fila: escala eta por consenso (con un piso numérico pequeño)
+        bump = eta_base * np.maximum(consensus, 1e-8)            # (K_sel,)
+
+        # Aplicar updater aditivo (maneja headroom, piso, techo, renorm)
+        self.probabilities[rows, cols, :] = self._update(
+            self.probabilities[rows, cols, :],  # (K_sel, F)
+            winners,                             # (K_sel,) índices
+            bump                                 # (K_sel,) pasos por fila
+        )
+
+        # --- Métricas + volcado CSV
         self._log_update_metrics_min(epoch_idx=current_gen)
         self.save_metrics_csv(self.metrics_output)
