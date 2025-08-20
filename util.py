@@ -782,33 +782,31 @@ def delete_old_dirs_v2(experiment_path: str,generation: int,keep_ids: List[str],
     except Exception as e:
         logger.error(f"Error creating symlink {linkpath} -> {target}: {e}")
         
-def compute_hypervolume_mixed(front_raw: np.ndarray, ε: float = 1e-6) -> float:
+def compute_hypervolume_mixed(front_raw: np.ndarray, ref_point=None) -> float:
     """
     Compute hypervolume for a 3-objective Pareto front where:
         - front_raw[:, 0] = accuracy (to be maximized)
         - front_raw[:, 1] = num_parameters (to be minimized)
         - front_raw[:, 2] = inference_time (to be minimized)
-
     We first convert everything into minimization form by flipping accuracy → -accuracy,
     then build a reference point slightly above the “worst” in each dimension,
     and finally call pymoo’s Hypervolume on that minimization front.
     Args:
         front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
-        ε (float): tiny margin to add to the reference point.
+        ref_point (np.ndarray): shape=(3,) with the reference point for hypervolume calculation.
     Returns:
         float: the hypervolume (in the original mixed‐obj space).
     """
-    if front_raw.size == 0:
+    if front_raw is None or len(front_raw) == 0:
         return 0.0
-    # 1) Build minimization front: acc → -acc, params & time unchanged
-    front_min = front_raw.copy()
-    front_min[:, 0] *= -1.0   # flip accuracy
-    # 2) Construct the reference point (for each column, take max(front_min[:,j]) + ε)
-    ref = np.max(front_min, axis=0) + ε
-    # 3) Call pymoo’s Hypervolume (which expects a minimization front and ref_point)
-    hv_indicator = Hypervolume(ref_point=ref)
-    hv_value     = hv_indicator(front_min)
-    return float(hv_value)
+    f = np.array(front_raw, dtype=float, copy=True)
+    f[:, 0] = -f[:, 0]  # flip accuracy to minimization
+    # Choose a safe reference point (must be worse than all points for minimization)
+    if ref_point is None:
+        rp = np.max(f, axis=0) + 1e-6
+    else:
+        rp = np.asarray(ref_point, dtype=float)
+    return float(Hypervolume(ref_point=rp).do(f))
 
 def load_pareto_history(filepath="pareto_history.pkl"):
     """
