@@ -541,12 +541,6 @@ class QNAS(object):
         if self.penalize_number and self.reducing_fns_list:
             penalties = self.get_penalties(pop_net)
             penalized_fits -= penalties
-            diff = raw_fits - penalized_fits
-            self.logger.info(
-                "Penalization stats — min: %.4f, max: %.4f, mean: %.4f (nonzero count: %d)",
-                float(np.min(diff)), float(np.max(diff)), float(np.mean(diff)),
-                int(np.count_nonzero(diff))
-            )
 
         return penalized_fits, raw_fits
 
