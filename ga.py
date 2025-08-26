@@ -65,6 +65,9 @@ class GA(object):
         self.best_so_far_id = None
         self.current_gen = 0
         self.total_eval = 0
+        
+        self.eval_idx = None           # maps sorted rows -> original candidate_id
+        self.current_best_rank = None  # position in the sorted array (for logging)
 
         # Early stopping parameters
         self.patience = None
@@ -204,6 +207,8 @@ class GA(object):
         self.population = self.population[idx]
         self.pop_params = self.pop_params[idx]
         self.fitnesses = self.fitnesses[idx]
+        if self.eval_idx is not None:
+            self.eval_idx = self.eval_idx[idx]
 
     def _evaluate_without_cache(self, decoded_net, decoded_params):
         """Evaluates the entire population, handling dictionary-based results."""
@@ -287,26 +292,31 @@ class GA(object):
         else:
             fitness_values = self._evaluate_without_cache(decoded_net, decoded_params)
 
-        self.fitnesses = np.array(fitness_values, dtype=object)
+        self.fitnesses = np.array(fitness_values, dtype=float)
+        self.eval_idx = np.arange(self.population.shape[0], dtype=int)
 
         # Finalize generation results
-        self.update_best_id(self.fitnesses)
+        self.update_best_id(self.fitnesses, self.eval_idx)
         self.order_population()
         self.current_population = self.population.copy()
         self.log_data()
         return self.fitnesses
 
-    def update_best_id(self, fitnesses_):
+    def update_best_id(self, fitnesses_, eval_idx):
         """
         Update the best individual id based on current fitnesses_.
         Args:
             fitnesses_: numpy array of current population fitnesses_.
+            eval_idx: numpy array of indices mapping sorted rows to original candidate_ids.
         """
-        best_idx = np.argmax(fitnesses_)
-        best_fitness_ = fitnesses_[best_idx]
-        if best_fitness_ > self.best_so_far:
-            self.best_so_far = best_fitness_
-            self.best_so_far_id = (self.current_gen, best_idx)
+        best_rank = int(np.nanargmax(fitnesses_))
+        eval_id   = int(eval_idx[best_rank])      # original candidate_id
+        best_fit  = float(fitnesses_[best_rank])
+
+        self.current_best_rank = best_rank        # for logs
+        if best_fit > self.best_so_far:
+            self.best_so_far   = best_fit
+            self.best_so_far_id = (self.current_gen, eval_id)
 
     def selection(self):
         """
@@ -495,9 +505,11 @@ class GA(object):
         """ Log GA evolution statistics such as generation number and fitnesses. """
         
         self.logger.info(
-            f"[Gen {self.current_gen:03d}] Generation finished: \n"
-            f"Best candidate: {self.best_so_far_id}, fitness: {self.best_so_far:.4f}; \n"
-            f"fitnesses: {self.fitnesses}; \n"
+            f"[Gen {self.current_gen:03d}] Generation finished:\n"
+            f"Best (orig id, rank): (g={int(self.best_so_far_id[0])}, "
+            f"id={int(self.best_so_far_id[1])}, r={int(self.current_best_rank)}) "
+            f"fitness: {float(self.best_so_far):.4f};\n"
+            f"fitnesses: {self.fitnesses};"
         )
 
     def save_data(self):
