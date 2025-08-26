@@ -11,3 +11,5 @@ pymoo
 plotly
 nbformat
 pycocotools
+gdown
+datasets
