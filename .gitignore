@@ -25,6 +25,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.vscode/*
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -184,9 +185,14 @@ pathmnist_data/
 tissuemnist_data/
 atleta_axial_data/
 atleta_coronal_data/
-facet_data/
+facet_data/*
 coco_subset/
 cocobin_data/
+data/*
+checkpoints*/*
+checkpoints_*/*
+
+medmodels*/*
 
 # Results
 exp*/
