@@ -106,11 +106,13 @@ class QNAS(object):
             self.eval_history = defaultdict(list)
 
         # use history
+        self.history_database_path = os.path.join('network_history', "history_db_cifar_10_conv1.json")
+        os.makedirs(os.path.dirname(self.history_database_path), exist_ok=True)
         try:
-            self.history_database_path = os.path.join('network_history', "history_db_cifar_10_conv1.json")
             self.history_database = load_history_from_json(self.history_database_path)
-        except:
-            print("Could not load history database, continuing without it.")
+        except Exception:
+            self.logger.info("Could not load history database, creating a new one.")
+            self.history_database = {}
 
     def initialize_qnas(self,num_quantum_ind,params_ranges,repetition,max_generations,
                         crossover_rate,update_quantum_gen,replace_method,fn_list,
@@ -550,7 +552,7 @@ class QNAS(object):
 
         return penalized_fits, raw_fits
 
-    def get_penalties(self, pop_net: np.ndarray, penalty_factor: float = 0.01) -> np.ndarray:
+    def get_penalties(self, pop_net: np.ndarray, penalty_factor: float = 0.02) -> np.ndarray:
         """
         Compute penalty for each network encoding based on “reducing” genes.
 
