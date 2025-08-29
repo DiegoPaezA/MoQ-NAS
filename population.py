@@ -603,15 +603,11 @@ class QPopulationNetwork(QPopulation):
             self.save_metrics_csv(self.metrics_output)
             return
 
-        # --- Construir q_rows según elite_mode (todas terminan con q_rows: (K_sel, F))
-        P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)  # (K_sel, F)
-
         if self.elite_mode == "single":
             # one-hot por fila a partir de los top N_q clásicos
             E = min(self.num_ind, self.current_pop.shape[0])
             best_classic = self.current_pop[:E]                 # (E, L)
             winners_single = best_classic[rows, cols]           # (K_sel,)
-            q_rows = np.zeros_like(P_sel)
             q_rows[np.arange(rows.size), winners_single] = 1.0  # one-hot por fila
 
         elif self.elite_mode == "global_k":
