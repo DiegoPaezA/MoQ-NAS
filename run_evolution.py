@@ -94,7 +94,7 @@ if __name__ == '__main__':
                         choices=['default', 'dense', 'backbone'])
 
     parser.add_argument('--elite_mode', type=str, default='global_k',
-                        choices=['single', 'global_k', 'bootstrap_k'],
+                        choices=['single', 'global_k', 'bootstrap_k', 'old'],
                         help='Elite selection mode during evolution. Default = global_k.')
 
     # Use cache for evaluations
