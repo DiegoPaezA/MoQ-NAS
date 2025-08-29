@@ -17,7 +17,7 @@ QNAS:
     patience: 60
     elite_mode: bootstrap_k # "single" | "global_k" | "bootstrap_k" | "old"
     k_elites: 5
-    pool_factor: 2
+    pool_factor: 3
     ema_beta: 0.7
     rank_weighting: True
     initial_prob_distribution: from_config # from_config | uniform
