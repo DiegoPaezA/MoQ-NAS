@@ -33,6 +33,7 @@ class QPopulation(object):
 
         self.chromosome = None
         self.current_pop = None
+        self.current_pop_objs = None
         self.num_ind = num_quantum_ind
 
         self.repetition = repetition
@@ -199,6 +200,19 @@ class QPopulationNetwork(QPopulation):
 
         self.initial_probs = self.chromosome.initialize_qgenes(initial_probs=initial_probs)
         self.crossover_method = crossover_method  # Crossover method selection
+        
+        self.objective_names = None          # p.ej. ["acc","params","lat"]
+        self.objective_sense = None          # p.ej. ["max","min","min"]
+        self.num_objectives  = None
+
+        self.moead_q_low  = 0.30             # cuantiles para filtros (min-ok)
+        self.moead_q_high = 0.90             # opcional (no usado abajo, pero disponible)
+        self.topP_mult    = 5                # Top-P = topP_mult * K para estratificar
+
+        # Direcciones de referencia (simplex) y asignación por individuo
+        self._ref_dirs  = None               # (D, M)
+        self._ind_to_dir = None              # (num_ind,)
+        
         self.initialize_qpop()
         self._init_metrics_min()
 
@@ -382,6 +396,109 @@ class QPopulationNetwork(QPopulation):
                 w.writerow(row)
 
         self._last_dump_idx = total
+    # -------------------------------------------------------------------
+    # 3) Direcciones de referencia (MOEA/D) y asignación persistente
+    # -------------------------------------------------------------------
+    def _das_dennis(self, M: int, H: int):
+        """Genera todas las direcciones lam en el simplex con sum(h)=H; lam=h/H."""
+        import numpy as np
+        from itertools import combinations_with_replacement
+        # "stars and bars": posiciones de M-1 barras en H+M-1
+        dirs = []
+        for bars in combinations_with_replacement(range(H + M - 1), M - 1):
+            h = []
+            last = -1
+            for b in bars + (H + M - 1 - 1,):
+                h.append(b - last - 1)
+                last = b
+            lam = np.array(h, dtype=float) / float(H)
+            dirs.append(lam)
+        return np.array(dirs, dtype=float)  # (#dirs, M)
+
+    def _make_ref_directions(self, M: int, D: int) -> np.ndarray:
+        """Intenta Das–Dennis aumentando H hasta ≥D direcciones; si no, Dirichlet."""
+        import numpy as np, math
+        if D <= 0: D = self.num_ind
+        # intentar H pequeño a grande
+        for H in range(1, 10):  # sube si necesitas más densidad
+            dirs = self._das_dennis(M, H)
+            if dirs.shape[0] >= D:
+                return dirs[:D, :]
+        # fallback: muestreo Dirichlet
+        rng = np.random.default_rng(12345)
+        lam = rng.dirichlet(alpha=np.ones(M), size=D)
+        return lam
+
+    def set_objective_directions(self, names, sense=None, D=None):
+        """Define objetivos y direcciones; asigna a cada individuo una dirección fija."""
+        self.objective_names = list(names)
+        self.num_objectives = len(self.objective_names)
+        self.objective_sense = [("min" if s is None else str(s).lower())
+                                for s in (sense or ["min"] * self.num_objectives)]
+        if D is None:
+            D = self.num_ind
+        self._ref_dirs = self._make_ref_directions(self.num_objectives, D)  # (D,M)
+        self._ind_to_dir = np.array([i % D for i in range(self.num_ind)], dtype=int)
+
+    # ---------- Normalización + puntuación + filtros ----------
+
+    def _normalize_objectives_01(self, objs: np.ndarray) -> np.ndarray:
+        """
+        objs: (E, M) crudos. Devuelve g en [0,1] orientado a MAX (min -> 1 - norm).
+        """
+        import numpy as np
+        E, M = objs.shape
+        g = np.empty_like(objs, dtype=float)
+        for m in range(M):
+            col = objs[:, m].astype(float)
+            lo, hi = np.min(col), np.max(col)
+            if hi - lo < 1e-12:
+                norm = np.zeros_like(col)
+            else:
+                norm = (col - lo) / (hi - lo)
+            g[:, m] = (1.0 - norm) if (self.objective_sense[m] == "min") else norm
+        return g
+
+    def _score_weighted_sum(self, g: np.ndarray, lam: np.ndarray) -> np.ndarray:
+        """g: (E, M) MAX-oriented; lam: (M,). Retorna (E,), mayor=mejor."""
+        return g.dot(lam)
+
+    def _quantile_thresholds(self, g: np.ndarray, q_low=0.3, q_high=0.90):
+        """Umbrales por cuantiles en g (MAX-oriented)."""
+        import numpy as np
+        min_ok = np.quantile(g, q_low, axis=0)
+        max_ok = np.quantile(g, q_high, axis=0)
+        return {"min_ok": min_ok, "max_ok": max_ok}
+
+    def _mask_constraints(self, g: np.ndarray, cons: dict, hard: dict | None = None) -> np.ndarray:
+        """
+        Exige g[:,m] >= min_ok[m] a todos (o a subset en hard['min_idx']) para filtrar basura.
+        """
+        E, M = g.shape
+        mask = np.ones(E, dtype=bool)
+        if cons is not None and ("min_ok" in cons):
+            min_ok = cons["min_ok"]
+            if hard and ("min_idx" in hard):
+                for m in hard["min_idx"]:
+                    mask &= (g[:, m] >= float(min_ok[m]))
+            else:
+                for m in range(M):
+                    mask &= (g[:, m] >= float(min_ok[m]))
+        return mask
+
+    def _select_topk_stratified(self, scores: np.ndarray, K: int, P_mult: int = 5) -> np.ndarray:
+        """
+        Top-K estratificado: toma Top-P (=P_mult*K), divide en K segmentos y elige 1 de cada.
+        """
+        import numpy as np
+        E = scores.shape[0]
+        K = int(min(max(1, K), E))
+        P = int(min(P_mult * K, E))
+        order = np.argsort(-scores)     # desc
+        topP = order[:P]
+        splits = np.array_split(topP, K)
+        picks = [seg[0] for seg in splits if seg.size > 0]
+        return np.array(picks[:K], dtype=int)
 
     def _entropy_rows(self, P, eps=1e-12):
         F = P.shape[-1]
@@ -456,6 +573,44 @@ class QPopulationNetwork(QPopulation):
             s = q_rows[i].sum()
             q_rows[i] = (q_rows[i] / s) if s > 0 else (1.0 / F)
         return q_rows  # (K_sel, F)
+    
+    def _build_q_moead_topk_rows(self,
+                                 pool_choices: np.ndarray,   # (E_pool, L)
+                                 pool_objs: np.ndarray,      # (E_pool, M)
+                                 rows: np.ndarray, cols: np.ndarray,
+                                 F: int, K: int) -> np.ndarray:
+        """
+        Para cada fila (ind i, gen j): normaliza objs->g (MAX), toma lam_i, filtra por cuantiles,
+        puntúa con WS, Top-K estratificado, histograma->q_rows.
+        """
+        import numpy as np
+        assert self._ref_dirs is not None and self._ind_to_dir is not None
+        E_pool, L = pool_choices.shape
+        K_sel = rows.size
+        q_rows = np.zeros((K_sel, F), dtype=float)
+
+        # 1) normaliza objetivos e impone constraints
+        g = self._normalize_objectives_01(pool_objs)  # (E_pool, M)
+        cons = self._quantile_thresholds(g, q_low=self.moead_q_low, q_high=self.moead_q_high)
+
+        for r in range(K_sel):
+            i = int(rows[r]); j = int(cols[r])
+            lam = self._ref_dirs[self._ind_to_dir[i]]  # (M,)
+
+            mask = self._mask_constraints(g, cons, hard=None)
+            idx = np.where(mask)[0]
+            if idx.size < K:
+                idx = np.arange(E_pool)
+
+            s = self._score_weighted_sum(g[idx, :], lam)  # (E_mask,)
+            pick_rel = self._select_topk_stratified(s, K=K, P_mult=self.topP_mult)
+            pick = idx[pick_rel]
+
+            ops = pool_choices[pick, j].astype(int)
+            counts = np.bincount(ops, minlength=F).astype(float)
+            ssum = counts.sum()
+            q_rows[r, :] = counts / ssum if ssum > 0 else (1.0 / F)
+        return q_rows
 
     def _sample_intensity(self, lo=0.5, hi=1.0):
         # Beta(2,5): más masa hacia valores pequeños; reescala a [lo, hi]
@@ -561,23 +716,29 @@ class QPopulationNetwork(QPopulation):
         if U_total is None:
             # fallback si QNAS no llamó set_schedule_total_updates
             U_total = max(1, (current_gen or 0) // 1)
+            
+        legacy = (self.elite_mode == "old")
 
-        # --- Scheduler: prob. de actualizar (exploración alta → baseline)
-        self.update_quantum_rate = self._cosine_schedule(u, U_total, self.rate_boost, self.rate_end)
+        # --- Tasa de actualización efectiva (si legacy, NO usar scheduler)
+        if legacy:
+            self.update_quantum_rate = float(self.update_quantum_rate)  # tal cual estaba
+        else:
+            # --- Scheduler: prob. de actualizar (exploración alta → baseline)
+            self.update_quantum_rate = self._cosine_schedule(u, U_total, self.rate_boost, self.rate_end)
 
         # --- Intensidad estocástica (puedes programarla si quieres)
         if intensity is None:
             intensity = self._sample_intensity(lo=0.5, hi=1.0)  # Beta(2,5) reescalada
 
-        # --- Scheduler: tamaño de paso (fuerte al inicio → suave al final)
-        base = self._suggest_max_update()  # 0.07 (F<=12), 0.05 (<=32), else 0.04
+        if legacy:
+            self.max_update = float(self.max_update)   # respeta el valor fijo que ya tengas
+        else:
+            base = self._suggest_max_update()         # 0.07/0.05/0.04 según F
+            mult = self._cosine_schedule(u, U_total, start=1.5, end=0.8)
+            # e.g., if base=0.05 → starts at 0.08, ends at 0.04
+            # if base=0.07 → starts at ~0.112, ends at ~0.056
+            self.max_update = base * mult
 
-        # cosine multiplier: stronger early, cooler later
-        mult = self._cosine_schedule(u, U_total, start=1.5, end=0.8)
-        # e.g., if base=0.05 → starts at 0.08, ends at 0.04
-        # if base=0.07 → starts at ~0.112, ends at ~0.056
-
-        self.max_update = base * mult
         eta_base = float(intensity) * float(self.max_update)
 
         F = int(self.chromosome.num_functions)
@@ -589,7 +750,7 @@ class QPopulationNetwork(QPopulation):
             return  # nada que hacer
 
         # --- Rama "old": tu baseline aditivo emparejado 1–a–1 (sin q_rows)
-        if self.elite_mode == "old":
+        if legacy:
             E = min(self.num_ind, self.current_pop.shape[0])
             best_classic = self.current_pop[:E]          # (E, L)
             winners = best_classic[rows, cols]           # (K_sel,)
@@ -602,12 +763,16 @@ class QPopulationNetwork(QPopulation):
             self._log_update_metrics_min(epoch_idx=current_gen)
             self.save_metrics_csv(self.metrics_output)
             return
-
+        
+        # --- Construir q_rows según elite_mode (todas terminan con q_rows: (K_sel, F))
+        P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)  # (K_sel, F)
+        
         if self.elite_mode == "single":
             # one-hot por fila a partir de los top N_q clásicos
             E = min(self.num_ind, self.current_pop.shape[0])
             best_classic = self.current_pop[:E]                 # (E, L)
             winners_single = best_classic[rows, cols]           # (K_sel,)
+            q_rows = np.zeros_like(P_sel)
             q_rows[np.arange(rows.size), winners_single] = 1.0  # one-hot por fila
 
         elif self.elite_mode == "global_k":
@@ -623,6 +788,20 @@ class QPopulationNetwork(QPopulation):
             pool    = self.current_pop[:E_pool]           # (E_pool, L)
             weights = self._elite_weights(E_pool)         # (E_pool,)
             q_rows  = self._build_q_bootstrap_rows(pool, rows, cols, F, k=self.k_elites, weights=weights)
+            
+        elif self.elite_mode == "moead_topk":
+            # Pool para MOEA/D: usa top E_pool de la población actual
+            E_pool = self.current_pop.shape[0] # min(self.current_pop.shape[0], max(self.k_elites, self.pool_factor * self.k_elites))
+            pool_choices = self.current_pop[:E_pool]         # (E_pool, L)
+            pool_objs    = self.current_pop_objs[:E_pool, :] # (E_pool, M)  <-- asegúrate de setearla cada gen
+            
+            # Construye q_rows con moead_topk
+            q_rows = self._build_q_moead_topk_rows(
+                pool_choices=pool_choices,
+                pool_objs=pool_objs,
+                rows=rows, cols=cols,
+                F=F, K=self.k_elites
+            )
 
         else:
             raise ValueError(f"elite_mode desconocido: {self.elite_mode}")
