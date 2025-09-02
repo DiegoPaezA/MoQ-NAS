@@ -212,6 +212,7 @@ class QPopulationNetwork(QPopulation):
         # Direcciones de referencia (simplex) y asignación por individuo
         self._ref_dirs  = None               # (D, M)
         self._ind_to_dir = None              # (num_ind,)
+        self.ref_dir_method = "das-dennis"  # 'das-dennis' | 'dirichlet'
         
         self.initialize_qpop()
         self._init_metrics_min()
@@ -400,34 +401,72 @@ class QPopulationNetwork(QPopulation):
     # 3) Direcciones de referencia (MOEA/D) y asignación persistente
     # -------------------------------------------------------------------
     def _das_dennis(self, M: int, H: int):
-        """Genera todas las direcciones lam en el simplex con sum(h)=H; lam=h/H."""
-        import numpy as np
-        from itertools import combinations_with_replacement
-        # "stars and bars": posiciones de M-1 barras en H+M-1
-        dirs = []
-        for bars in combinations_with_replacement(range(H + M - 1), M - 1):
-            h = []
-            last = -1
-            for b in bars + (H + M - 1 - 1,):
-                h.append(b - last - 1)
-                last = b
-            lam = np.array(h, dtype=float) / float(H)
-            dirs.append(lam)
-        return np.array(dirs, dtype=float)  # (#dirs, M)
+            """
+            Genera direcciones de referencia uniformemente espaciadas en un simplex.
+            Versión corregida y robusta.
+            """
+            if H == 0:
+                if M == 1:
+                    return np.array([[1.0]], dtype=float)
+                else:
+                    return np.empty((0, M), dtype=float)
+
+            def gen_partitions(n_remaining, k_remaining):
+                """Generador recursivo para particiones de enteros."""
+                if k_remaining == 1:
+                    yield (n_remaining,)
+                    return
+                for i in range(n_remaining + 1):
+                    for p in gen_partitions(n_remaining - i, k_remaining - 1):
+                        yield (i,) + p
+
+            partitions = list(gen_partitions(H, M))
+            dirs = np.array(partitions, dtype=float) / float(H)
+            return dirs
 
     def _make_ref_directions(self, M: int, D: int) -> np.ndarray:
-        """Intenta Das–Dennis aumentando H hasta ≥D direcciones; si no, Dirichlet."""
-        import numpy as np, math
-        if D <= 0: D = self.num_ind
-        # intentar H pequeño a grande
-        for H in range(1, 10):  # sube si necesitas más densidad
-            dirs = self._das_dennis(M, H)
-            if dirs.shape[0] >= D:
-                return dirs[:D, :]
-        # fallback: muestreo Dirichlet
-        rng = np.random.default_rng(12345)
-        lam = rng.dirichlet(alpha=np.ones(M), size=D)
-        return lam
+            """
+            Genera direcciones de referencia. El método 'dirichlet' ahora está "anclado"
+            con vectores extremos para cada objetivo.
+            """
+            import numpy as np
+            if D <= 0: D = self.num_ind
+            rng = np.random.default_rng(12345)
+
+            # --- Opción 1: Dirichlet Anclado (Híbrido) ---
+            if self.ref_dir_method == 'dirichlet':
+                if M > D:
+                    # Caso extremo: no hay suficientes individuos para anclar cada objetivo.
+                    # Se recurre a Dirichlet estándar.
+                    return rng.dirichlet(alpha=np.ones(M), size=D)
+
+                # 1. Crear los M focos extremos (uno por cada objetivo)
+                extreme_dirs = np.eye(M, dtype=float)
+
+                # 2. Calcular cuántas direcciones aleatorias faltan
+                num_random_dirs = D - M
+
+                # 3. Generar las direcciones aleatorias restantes (si es necesario)
+                if num_random_dirs > 0:
+                    random_dirs = rng.dirichlet(alpha=np.ones(M), size=num_random_dirs)
+                    # 4. Combinar los vectores extremos y los aleatorios
+                    all_dirs = np.vstack((extreme_dirs, random_dirs))
+                else:
+                    # Si D <= M, solo usamos los vectores extremos necesarios
+                    all_dirs = extreme_dirs[:D]
+
+                # 5. Barajar el conjunto final para una asignación imparcial de roles
+                rng.shuffle(all_dirs)
+                return all_dirs
+
+            # --- Opción 2 (default): Intentar Das-Dennis (sistemático) con fallback a Dirichlet ---
+            for H in range(1, 10):
+                dirs = self._das_dennis(M, H)
+                if dirs.shape[0] >= D:
+                    return dirs[:D, :]
+
+            # Fallback a Dirichlet si Das-Dennis falla
+            return rng.dirichlet(alpha=np.ones(M), size=D)
 
     def set_objective_directions(self, names, sense=None, D=None):
         """Define objetivos y direcciones; asigna a cada individuo una dirección fija."""
@@ -446,7 +485,6 @@ class QPopulationNetwork(QPopulation):
         """
         objs: (E, M) crudos. Devuelve g en [0,1] orientado a MAX (min -> 1 - norm).
         """
-        import numpy as np
         E, M = objs.shape
         g = np.empty_like(objs, dtype=float)
         for m in range(M):
@@ -465,7 +503,6 @@ class QPopulationNetwork(QPopulation):
 
     def _quantile_thresholds(self, g: np.ndarray, q_low=0.3, q_high=0.90):
         """Umbrales por cuantiles en g (MAX-oriented)."""
-        import numpy as np
         min_ok = np.quantile(g, q_low, axis=0)
         max_ok = np.quantile(g, q_high, axis=0)
         return {"min_ok": min_ok, "max_ok": max_ok}
@@ -490,7 +527,6 @@ class QPopulationNetwork(QPopulation):
         """
         Top-K estratificado: toma Top-P (=P_mult*K), divide en K segmentos y elige 1 de cada.
         """
-        import numpy as np
         E = scores.shape[0]
         K = int(min(max(1, K), E))
         P = int(min(P_mult * K, E))
@@ -583,7 +619,6 @@ class QPopulationNetwork(QPopulation):
         Para cada fila (ind i, gen j): normaliza objs->g (MAX), toma lam_i, filtra por cuantiles,
         puntúa con WS, Top-K estratificado, histograma->q_rows.
         """
-        import numpy as np
         assert self._ref_dirs is not None and self._ind_to_dir is not None
         E_pool, L = pool_choices.shape
         K_sel = rows.size
