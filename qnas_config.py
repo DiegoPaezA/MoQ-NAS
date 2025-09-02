@@ -166,6 +166,7 @@ class ConfigParameters(object):
         self.QNAS_spec['early_stopping']   = self.args.get('early_stopping')
         self.QNAS_spec['en_pop_crossover'] = self.args.get('en_pop_crossover')
         self.QNAS_spec['elite_mode'] = self.args.get('elite_mode', 'global_k')
+        self.QNAS_spec['ref_dir_method'] = self.args.get('ref_dir_method', 'das-dennis')
         self._get_fn_spec()
 
         # Only override these specific training parameters if provided via args

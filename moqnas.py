@@ -48,7 +48,7 @@ class MOQNAS(QNAS):
                         update_quantum_gen,replace_method,fn_list,initial_probs,update_quantum_rate,
                         max_num_nodes,reducing_fns_list,patience,early_stopping,save_data_freq=0,
                         penalize_number=0,crossover_frequency=5,en_pop_crossover=False,
-                        pop_crossover_rate=0.25,pop_crossover_method="hux",
+                        pop_crossover_rate=0.25,pop_crossover_method="hux", ref_dir_method="das-dennis",
                         elite_mode="global_k",k_elites=5,pool_factor=2,ema_beta=0.7,
                         rank_weighting=True,):
         """
@@ -162,8 +162,19 @@ class MOQNAS(QNAS):
                 print(f"Warning: Could not find a rule for '{active_obj}'")
         
         # moead_topk
+        self.qpop_net.ref_dir_method = ref_dir_method
+        print(f"Reference direction method set to: {self.qpop_net.ref_dir_method}")
         self.qpop_net.set_objective_directions(names=objective_names, sense=objective_senses)
-
+        print(f"Set objective directions: {list(zip(objective_names, objective_senses))}")
+        if self.qpop_net._ref_dirs is not None and self.qpop_net._ind_to_dir is not None:
+            for i in range(self.qpop_net.num_ind):
+                dir_index = self.qpop_net._ind_to_dir[i]
+                direction_vector = self.qpop_net._ref_dirs[dir_index]
+                direction_str = ", ".join([f"{val:.3f}" for val in direction_vector])
+                print(f"Quantum Individual {i}: Direction -> [{direction_str}]")
+        else:
+            print("Quantum directions have not been assigned yet. Please call 'set_objective_directions'.")
+        
     def multiobjective_fitness(self) -> np.ndarray:
         """
         Evaluate the current classical population on all objectives.

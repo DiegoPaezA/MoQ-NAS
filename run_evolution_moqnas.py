@@ -100,7 +100,11 @@ if __name__ == '__main__':
     parser.add_argument('--elite_mode', type=str, default='global_k',
                         choices=['single', 'global_k', 'bootstrap_k', 'old', 'moead_topk'],
                         help='Elite selection mode during evolution. Default = global_k.')
-    
+
+    parser.add_argument('--ref_dir_method', type=str, default='das-dennis',
+                        choices=['das-dennis', 'dirichlet'],
+                        help='Reference direction method for multi-objective optimization. Default = das-dennis.')
+
     parser.add_argument('--multi_objective', action='store_true', default=False,
                         help='Enable multi-objective optimization (NSGA2).')
 
