@@ -536,8 +536,8 @@ class QNAS(object):
         if self.use_cache:
             raw_fits = self._eval_pop_with_cache(decoded_params, decoded_nets, pop_net)
         else:
-            #raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
-            raw_fits = self._eval_pop_with_history(decoded_params, decoded_nets, pop_net)
+            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
+            #raw_fits = self._eval_pop_with_history(decoded_params, decoded_nets, pop_net)
         
         penalized_fits = raw_fits.copy()
         if self.penalize_number and self.reducing_fns_list:
