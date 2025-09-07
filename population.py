@@ -292,37 +292,6 @@ class QPopulationNetwork(QPopulation):
             self.crossover_method = method
         else:
             raise ValueError(f"Unknown crossover method: {method}")
-        
-    def mutate_probabilities(self, fraction: float = 0.2, intensity: float = 0.1):
-        """
-        Perform exploratory mutation on a subset of quantum individuals’ probability distributions.
-
-        This method selects a fraction of the population at random and blends each selected
-        individual’s probability tensor with uniform noise. After mixing, values are clipped
-        to enforce a minimum probability floor and then renormalized so that each distribution
-        still sums to 1.
-
-        Args:
-            fraction (float, optional): Proportion of individuals to mutate, in the range [0.0, 1.0].
-                Defaults to 0.2 (i.e., 20% of the population).
-            intensity (float, optional): Mixing weight for the noise, in the range [0.0, 1.0].
-                A value of 0.0 leaves the original probabilities unchanged; 1.0 replaces them
-                entirely with noise. Defaults to 0.1 (i.e., 10% noise).
-        """
-        if not (0.0 <= fraction <= 1.0):
-            raise ValueError(f"fraction must be between 0.0 and 1.0, got {fraction}")
-        if not (0.0 <= intensity <= 1.0):
-            raise ValueError(f"intensity must be between 0.0 and 1.0, got {intensity}")
-
-        # Determine how many individuals to mutate (at least one)
-        num_mut = max(1, int(self.num_ind * fraction))
-        idx = np.random.choice(self.num_ind, num_mut, replace=False)
-
-        noise = np.random.rand(num_mut,self.chromosome.num_genes,self.chromosome.num_functions)
-        mutated = (1 - intensity) * self.probabilities[idx] + intensity * noise
-        mutated = np.maximum(mutated, self.min_prob)
-        mutated /= mutated.sum(axis=2, keepdims=True)
-        self.probabilities[idx] = mutated
 
     def _init_metrics_min(self):
         self.metrics = {
@@ -611,10 +580,10 @@ class QPopulationNetwork(QPopulation):
         return q_rows  # (K_sel, F)
     
     def _build_q_moead_topk_rows(self,
-                                 pool_choices: np.ndarray,   # (E_pool, L)
-                                 pool_objs: np.ndarray,      # (E_pool, M)
-                                 rows: np.ndarray, cols: np.ndarray,
-                                 F: int, K: int) -> np.ndarray:
+                                pool_choices: np.ndarray,   # (E_pool, L)
+                                pool_objs: np.ndarray,      # (E_pool, M)
+                                rows: np.ndarray, cols: np.ndarray,
+                                F: int, K: int) -> np.ndarray:
         """
         Para cada fila (ind i, gen j): normaliza objs->g (MAX), toma lam_i, filtra por cuantiles,
         puntúa con WS, Top-K estratificado, histograma->q_rows.
@@ -667,41 +636,6 @@ class QPopulationNetwork(QPopulation):
         t = max(0, min(int(t), int(T)))
         w = 0.5 * (1.0 + np.cos(np.pi * t / float(T)))  # 1→0
         return end + (start - end) * w
-
-    def _update_tilt_with_q(self, P_rows: np.ndarray, q_rows: np.ndarray, eta_base: float) -> np.ndarray:
-        """
-        P_rows: (K_sel, F) PMFs a actualizar
-        q_rows: (K_sel, F) objetivos por fila (global_k o bootstrap_k)
-        eta_base: paso base (intensity * max_update)
-        """
-        eps = 1e-12
-
-        # paso adaptativo por fila (consenso^2)
-        consensus = q_rows.max(axis=1, keepdims=True)  # (K_sel,1)
-        eta = eta_base * consensus
-
-        tilt = np.exp(eta * q_rows)                    # (K_sel,F)
-        P_new = P_rows * tilt
-        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
-
-        # piso/techo + renorm
-        P_new = np.clip(P_new, self.min_prob, self.max_prob)
-        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
-        return P_new
-
-    def _update_tilt(self, P_rows, winners, eta):
-        eps = 1e-12
-        K, F = P_rows.shape
-        q = np.zeros_like(P_rows)
-        q[np.arange(K), winners] = 1.0      # objetivo mínimo viable: one-hot
-
-        tilt = np.exp(eta * q)              # solo el ganador sube un poco
-        P_new = P_rows * tilt
-        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
-
-        P_new = np.clip(P_new, self.min_prob, self.max_prob)
-        P_new /= np.maximum(P_new.sum(axis=1, keepdims=True), eps)
-        return P_new
 
     def _update(self, chromosomes, idx, update_value):
         """
