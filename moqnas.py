@@ -8,6 +8,7 @@ hyperparameter distributions.
 """
 import os
 import time
+import json
 import pickle
 import numpy as np
 from qnas2 import QNAS
@@ -47,7 +48,7 @@ class MOQNAS(QNAS):
                         update_quantum_gen,replace_method,fn_list,initial_probs,update_quantum_rate,
                         max_num_nodes,reducing_fns_list,patience,early_stopping,save_data_freq=0,
                         penalize_number=0,crossover_frequency=5,en_pop_crossover=False,
-                        pop_crossover_rate=0.25,pop_crossover_method="hux",
+                        pop_crossover_rate=0.25,pop_crossover_method="hux", ref_dir_method="das-dennis",
                         elite_mode="global_k",k_elites=5,pool_factor=2,ema_beta=0.7,
                         rank_weighting=True,):
         """
@@ -136,8 +137,44 @@ class MOQNAS(QNAS):
         self.pareto_global_params = None
         self.pareto_global_ids = []
         self.fronts_history = {}
+        
+        # load config objective sense
+        try:
+            with open("config_objectives/cfg_obj.json", "r") as f:
+                self.objectives_info = json.load(f)["objectives"]
+        except Exception as e:
+            print(f"Error loading objectives config: {e}")
 
+        objective_names = []
+        objective_senses = []
 
+        # Map the active objectives to their information
+        for active_obj in self.objectives:
+            match_found = False
+            for key, info in self.objectives_info.items():
+                if key in active_obj:
+                    objective_names.append(key)
+                    sense = 'max' if info['goal'] == 'maximize' else 'min'
+                    objective_senses.append(sense)
+                    match_found = True
+                    break # Move to the next active_obj
+            if not match_found:
+                print(f"Warning: Could not find a rule for '{active_obj}'")
+        
+        # moead_topk
+        self.qpop_net.ref_dir_method = ref_dir_method
+        print(f"Reference direction method set to: {self.qpop_net.ref_dir_method}")
+        self.qpop_net.set_objective_directions(names=objective_names, sense=objective_senses)
+        print(f"Set objective directions: {list(zip(objective_names, objective_senses))}")
+        if self.qpop_net._ref_dirs is not None and self.qpop_net._ind_to_dir is not None:
+            for i in range(self.qpop_net.num_ind):
+                dir_index = self.qpop_net._ind_to_dir[i]
+                direction_vector = self.qpop_net._ref_dirs[dir_index]
+                direction_str = ", ".join([f"{val:.3f}" for val in direction_vector])
+                print(f"Quantum Individual {i}: Direction -> [{direction_str}]")
+        else:
+            print("Quantum directions have not been assigned yet. Please call 'set_objective_directions'.")
+        
     def multiobjective_fitness(self) -> np.ndarray:
         """
         Evaluate the current classical population on all objectives.
@@ -472,12 +509,14 @@ class MOQNAS(QNAS):
             # We use the crowding distance that was calculated and stored in the previous step.
             cd = self._last_cd
             sorted_rel = np.argsort(cd)[::-1]
-            pick = sorted_rel[:self.qpop_net.num_ind]
+            # pick = sorted_rel[:self.qpop_net.num_ind]
 
             # 4. Set the chosen individuals as the 'parents' for the quantum update.
-            self.qpop_net.current_pop = self.pareto_global_population[pick]
+            self.qpop_net.current_pop = self.pareto_global_population[sorted_rel]
+            self.qpop_net.current_pop_objs = self.pareto_global_fitnesses[sorted_rel]
+            
             if self.pareto_global_params is not None:
-                self.qpop_params.current_pop = self.pareto_global_params[pick]
+                self.qpop_params.current_pop = self.pareto_global_params[sorted_rel]
 
             # 5. Trigger the quantum population update (the learning step).
             self.update_quantum(self.current_gen)
