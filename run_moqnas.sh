@@ -20,7 +20,8 @@ data_augmentation=false
 early_stopping=false
 en_pop_crossover=true
 multi_objective=true
-elite_mode="bootstrap_k"  # "single" | "global_k" | "bootstrap_k" | "old"
+elite_mode="moead_topk" # "single" | "global_k" | "bootstrap_k" | "old"
+ref_dir_method="das-dennis" # "das-dennis" | "dirichlet"
 
 # —— Network Architecture Rules ——
 # These are enabled by default. Set to "false" to add the corresponding '--no-...' flag.
