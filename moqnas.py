@@ -515,15 +515,32 @@ class MOQNAS(QNAS):
         self.current_gen += 1
 
     def evolve(self) -> tuple[np.ndarray, np.ndarray]:
-        """Runs the main multi-objective evolutionary loop.
+        """
+        Run MoQNAS for max_generations, maintaining a global Pareto archive.
 
-        Returns:
+        Workflow per generation:
+        1. Generation 0:
+                - (p0_params, p0_nets) = self.generate_classical()
+                - f0 = self.multiobjective_fitness()
+                - assign fits, raw_fits; record best_so_far
+                - DO NOT call go_next_gen for gen=0
+        2. For gen in [1..max_generations]:
+                a) self.current_gen = gen
+                b) children_params, children_nets = self.generate_classical()
+                c) child_fits = self.multiobjective_fitness()
+                d) Combine parents + children and run NSGA‐II
+                e) Assign survivors → self.classical_nets, self.fits, self.raw_fits
+                f) Resample hyperparams for next gen: children_params already from generate_classical()
+                h) Call self.go_next_gen()    # handles global Pareto archiving, cleanup, logging, ++gen
+                i) Early stop if check_early_stopping()
+                j) Prepare (p0_params, p0_nets, f0, p0_raws) for next iteration
+        3. Return final global Pareto archive
             tuple[np.ndarray, np.ndarray]: A tuple containing the final Pareto
                 front's network chromosomes and their corresponding fitness values.
         """
         start_time = time.time()
         
-        # --- Generation 0 ---
+        # 1) Generation 0: sample both hyperparams and nets via generate_classical()
         p0_params, p0_nets = self.generate_classical()
         self.classical_params = p0_params
         self.classical_nets = p0_nets
@@ -536,53 +553,76 @@ class MOQNAS(QNAS):
         p0_ids = [f"0_{i}" for i in range(len(p0_nets))]
         self.classical_ids = p0_ids
         self.fits = f0
+        self.raw_fits = self.raw_fits.copy()
+
+        # Record best‐so‐far (by first objective)
+        i0 = int(np.nanargmax(f0[:, 0]))
+        self.best_so_far = float(f0[i0, 0])
+        self.best_so_far_id = [0, i0]
+
+        # Keep copies for parent‐combination in next loop
+        p0_raws = self.raw_fits.copy()
         
-        # --- Main Loop (Generations 1 to N) ---
+        # 2) Main loop: generations 1..max_generations
         for gen in range(1, self.max_generations + 1):
             self.current_gen = gen
 
+            # 2a) Sample children classical population (both params and nets) at once
             children_params, children_nets = self.generate_classical()
             child_ids = [f"{self.current_gen}_{i}" for i in range(len(children_nets))]
 
             children_params = self.random_crossover_hyperparams(children_params)
             children_nets = self.crossover_network(children_nets)
             
+            # 2b) Evaluate children on all objectives
             self.classical_params = children_params
             self.classical_nets = children_nets
             child_fits = self.multiobjective_fitness()
             child_raw = self.raw_fits.copy()
 
+            # 2c) Combine parents + children
             combined_nets = np.vstack([p0_nets, children_nets])
             combined_fits = np.vstack([f0, child_fits])
             combined_raws = np.vstack([p0_raws, child_raw])
             combined_ids = p0_ids + child_ids
             combined_params = np.vstack([p0_params, children_params])
             
+            # 2d) NSGA‐II environmental selection
             next_nets, next_fits, survivor_idx = self.environmental_selection(combined_nets, combined_fits)
-            
+
+            # 2e) Assign survivors
             self.classical_nets = next_nets
             self.fits = next_fits
             self.raw_fits = combined_raws[survivor_idx]
             self.classical_ids = [combined_ids[i] for i in survivor_idx]
             self.classical_params = combined_params[survivor_idx]
 
+            # 2h) Advance generation: update global Pareto, backup, save, log, cleanup, ++gen
             self.go_next_gen()
 
+            # 2i) Early stopping
             if self.early_stopping and self.check_early_stopping():
                 break
 
-            p0_params, p0_nets, f0, p0_raws, p0_ids = (
-                self.classical_params, self.classical_nets, self.fits, 
-                self.raw_fits, self.classical_ids
-            )
+            # 2j) Prepare for next iteration
+            p0_params = self.classical_params
+            p0_nets = self.classical_nets
+            f0 = self.fits
+            p0_raws = self.raw_fits
+            p0_ids = self.classical_ids
             
             if self.current_gen > 0 and (self.current_gen % 5 == 0):
+                curr_time = time.time()
                 h, m, est_h, est_m = calculate_time(
-                    start_time, time.time(), self.current_gen, self.max_generations, end_evol=False)
-                self.logger.info("Gen %d: elapsed %dh %dm; ETA %dh %dm", 
-                                self.current_gen, h, m, est_h, est_m)
-
+                    start_time, curr_time, self.current_gen, self.max_generations, end_evol=False
+                )
+                self.logger.info(
+                    "Gen %d: elapsed %dh %dm; ETA %dh %dm",
+                    self.current_gen, h, m, est_h, est_m,
+                )
+                
         total_h, total_m = calculate_time(start_time, time.time())
         self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
 
+        # 3) Return final global Pareto archive
         return self.pareto_global_population, self.pareto_global_fitnesses
