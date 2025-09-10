@@ -22,6 +22,16 @@ QNAS:
     rank_weighting: True
     initial_prob_distribution: from_config # from_config | uniform
 
+    # --- Network Architecture Rules ---
+    terminal_op_name: "no_op"
+    pool_op_name: "pool"
+    min_active_len: 5
+    truncate_after_noop: true
+    avoid_consecutive_pool: true
+    enforce_noop_in_update: true
+    noop_max_prob: 0.9
+    noop_ramp_cap: true
+
     params_ranges:
         decay: 0.9
         learning_rate: 0.001
@@ -29,7 +39,7 @@ QNAS:
         weight_decay: 1.0e-4
         backbone_percentage: [0.1, 0.999]
 
-    function_dict:  {'conv_1_1_32': {'function': 'ConvBlock','params': {'filters': 32, 'kernel': 1, 'strides': 1},'prob': 0.075},
+    function_dict: {'conv_1_1_32': {'function': 'ConvBlock','params': {'filters': 32, 'kernel': 1, 'strides': 1},'prob': 0.075},
                     'conv_1_1_64': {'function': 'ConvBlock','params': {'filters': 64, 'kernel': 1, 'strides': 1},'prob': 0.075},
                     'conv_3_1_128': {'function': 'ConvBlock','params': {'filters': 128, 'kernel': 3, 'strides': 1},'prob': 0.075},
                     'conv_3_1_256': {'function': 'ConvBlock','params': {'filters': 256, 'kernel': 3, 'strides': 1},'prob': 0.075},
@@ -62,10 +72,10 @@ train:
     limit_data_value: 10000
     num_workers: 4
 
-    # Tensorflow
+    # threads
     save_checkpoints_epochs: 5
     save_summary_epochs: 0.25
-    threads: 6
+    threads: 20         # Parallel threads for evolution
 
     # penalization parameters - scalarized fitness
     max_params: 114090 # 1.9M

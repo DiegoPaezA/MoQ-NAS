@@ -1,9 +1,9 @@
 """ 
-MoQNAS: Multi‐Objective Quantum‐Inspired Neural Architecture Search
+MoQNAS: Multi-Objective Quantum-Inspired Neural Architecture Search
 Based on the refactored QNAS (qnas2.py). 
 
 This implements NSGA-II style Pareto selection over multiple objectives, 
-while still using the quantum‐population machinery from QNAS to evolve 
+while still using the quantum-population machinery from QNAS to evolve 
 hyperparameter distributions. 
 """
 import os
@@ -17,89 +17,129 @@ from util import calculate_time, delete_old_dirs_v2
 
 
 class MOQNAS(QNAS):
-    """ Multi‐Objective QNAS: extends QNAS to optimize multiple objectives via NSGA‐II. """
+    """Multi-Objective QNAS using NSGA-II style selection.
 
-    def __init__(self,eval_func,experiment_path,objectives,log_file,log_level,data_file,):
-        """
-        Initialize MoQNAS.
+    This class extends the single-objective QNAS algorithm to handle multiple
+    competing objectives. It replaces the simple elitist selection with Pareto
+    dominance ranking and crowding distance to maintain a diverse set of
+    optimal trade-off solutions (the Pareto front).
+    """
+
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file):
+        """Initializes the MOQNAS algorithm.
 
         Args:
-            eval_func (callable): 
-                Given lists of decoded_params (dict) and decoded_nets (structures), 
-                returns a list/array of dicts, each dict mapping metric_name→value.
-            experiment_path (str): Path for logs, cache, etc.
-            objectives (list of str): Names of metrics to optimize, e.g. ["accuracy","latency"].
-            log_file (str): Path to logfile.
-            log_level (str): "INFO", "DEBUG", or "NONE".
-            data_file (str): Path to pickle file for saving per‐gen data.
+            eval_func (callable): A function that evaluates a list of individuals.
+                It must return a dictionary mapping each individual's 'candidate_id'
+                to its performance metrics dict (e.g., {'accuracy': 0.9, 'latency': 100}).
+            experiment_path (str): The root directory for saving all experiment artifacts.
+            objectives (list[str]): A list of objective names to optimize.
+            log_file (str): The path to the log file.
+            log_level (str): Logging verbosity level ("INFO", "DEBUG", or "NONE").
+            data_file (str): Path to the .pkl file for saving and resuming evolution.
         """
         super().__init__(eval_func, experiment_path, objectives, log_file, log_level, data_file)
         self.num_objectives = len(objectives)
         self.data_file = data_file
-        # The QNAS base class manages hyperparameter quantum populations (qpop_params)
-        # and network quantum populations (qpop_net). We will perform multiobjective selection
-        # on the *classical* network‐chromosome population; hyperparameters will continue
-        # to be sampled from their quantum PMFs each generation and updated based on
-        # the Pareto‐optimal survivors.
-        self.pop_size = None          # number of classical nets per generation
-        self.max_generations = None   # total generations to run
+        self.pop_size = None
+        self.max_generations = None
 
-    def initialize_moqnas(self,num_quantum_ind,params_ranges,repetition,crossover_rate,max_generations,
-                        update_quantum_gen,replace_method,fn_list,initial_probs,update_quantum_rate,
-                        max_num_nodes,reducing_fns_list,patience,early_stopping,save_data_freq=0,
-                        penalize_number=0,crossover_frequency=5,en_pop_crossover=False,
-                        pop_crossover_rate=0.25,pop_crossover_method="hux", ref_dir_method="das-dennis",
-                        elite_mode="global_k",k_elites=5,pool_factor=2,ema_beta=0.7,
-                        rank_weighting=True,):
-        """
-        Initialize MoQNAS (quantum populations + multiobjective settings).
+    def initialize_moqnas(self,
+                        # Core EA Parameters
+                        num_quantum_ind, repetition, max_generations, update_quantum_gen,
+                        update_quantum_rate,
+                        # Hyperparameter Population
+                        params_ranges, crossover_rate,
+                        # Network Population
+                        fn_list, initial_probs, max_num_nodes, reducing_fns_list,
+                        # Network Crossover
+                        en_pop_crossover=False, pop_crossover_method="hux",
+                        pop_crossover_rate=0.25, crossover_frequency=5,
+                        # Elite Selection & MOEA/D
+                        elite_mode="moead_topk", k_elites=5, pool_factor=2,
+                        ema_beta=0.7, rank_weighting=True, ref_dir_method="das-dennis",
+                        # Network Architecture Rules
+                        terminal_op_name="no_op", pool_op_name="pool", min_active_len=5,
+                        truncate_after_noop=True, avoid_consecutive_pool=True,
+                        # No-Op Probability Management
+                        enforce_noop_in_update=True, noop_max_prob=0.90, noop_ramp_cap=True,
+                        # Stopping & Penalties
+                        early_stopping=True, patience=10, penalize_number=0,
+                        # Misc
+                        save_data_freq=1, replace_method="best"):
+        """Configures the MOQNAS populations and evolutionary hyperparameters.
 
         Args:
             num_quantum_ind (int): Number of quantum individuals.
-            params_ranges (dict): Hyperparameter ranges for QPopulationParams.
-            repetition (int): # classical per quantum = population size multiplier.
-            crossover_rate (float): Probability of applying classical crossover.
-            max_generations (int): Total number of generations (G).
-            update_quantum_gen (int): Frequency (in generations) to update quantum PMFs.
-            replace_method (str): Either "elitism" or "best" (not used in MoQNAS, but inherited).
-            fn_list (list): List of possible layer‐IDs (for QPopulationNetwork).
-            initial_probs (list): Initial probabilities for each layer‐ID.
-            update_quantum_rate (float): Intensity of quantum update each time.
-            max_num_nodes (int): Max nodes in each network chromosome.
-            reducing_fns_list (list): Which layer‐IDs count as "reducing" for penalty.
-            patience (int): Generations to wait without improvement before stopping.
-            early_stopping (bool): If True, enable early stopping.
-            save_data_freq (int, optional): Gen‐frequency to save best‐model stats.
-            penalize_number (int, optional): Max allowed “reducing” layers before penalty.
-            crossover_frequency (int, optional): Gen‐interval to apply network crossover.
-            en_pop_crossover (bool, optional): Whether to enable network crossover.
-            pop_crossover_rate (float, optional): Fraction of offspring to crossover each time.
-            pop_crossover_method (str, optional): “hux” or “uniform” method for network crossover.
-            elite_mode (str, optional): Elite strategy for quantum updates. Options: "single",
-                "global_k", "bootstrap_k". Defaults to "global_k".
-            k_elites (int, optional): Number of elites used when elite_mode requires it.
-                Defaults to 5.
-            pool_factor (int, optional): Multiplier for elite pool when using "bootstrap_k".
-                Defaults to 2.
-            ema_beta (float, optional): EMA smoothing factor for global elites; 0.0 disables.
-                Defaults to 0.7.
-            rank_weighting (bool, optional): Weight elites by inverse rank when building
-                target distributions. Defaults to True.
+            repetition (int): Number of classical individuals per quantum one.
+            max_generations (int): Total number of generations to run.
+            update_quantum_gen (int): Frequency (in generations) for quantum updates.
+            update_quantum_rate (float): Base learning rate for quantum updates.
+            params_ranges (dict): Search space for hyperparameters.
+            crossover_rate (float): Crossover rate for hyperparameter chromosomes.
+            fn_list (list): List of all possible operation names for network nodes.
+            initial_probs (list): Initial probabilities for each operation.
+            max_num_nodes (int): The maximum length of a network chromosome.
+            reducing_fns_list (list): List of operation names that are penalized.
+            en_pop_crossover (bool, optional): If True, enables network crossover.
+                Defaults to False.
+            pop_crossover_method (str, optional): Crossover type for networks
+                ("hux" or "uniform"). Defaults to "hux".
+            pop_crossover_rate (float, optional): Fraction of the population to
+                be replaced by crossover offspring. Defaults to 0.25.
+            crossover_frequency (int, optional): Apply network crossover every N
+                generations. Defaults to 5.
+            elite_mode (str, optional): Strategy for building quantum update targets.
+                Defaults to "moead_topk".
+            k_elites (int, optional): Number of elite individuals to use. Defaults to 5.
+            pool_factor (int, optional): Multiplier for elite pool size. Defaults to 2.
+            ema_beta (float, optional): EMA smoothing factor for global elite
+                distributions. Set to 0.0 to disable. Defaults to 0.7.
+            rank_weighting (bool, optional): If True, weight elite contributions by
+                inverse rank. Defaults to True.
+            ref_dir_method (str, optional): Method for generating reference vectors
+                for MOEA/D-based updates ('das-dennis' or 'dirichlet'). Defaults to "das-dennis".
+            terminal_op_name (str, optional): Name of the terminal operation.
+                Defaults to "no_op".
+            pool_op_name (str | list, optional): Name or pattern(s) to identify
+                pooling layers. Defaults to "pool".
+            min_active_len (int, optional): Minimum network length before a
+                terminal op is allowed. Defaults to 5.
+            truncate_after_noop (bool, optional): If True, forces all subsequent
+                nodes to be terminal ops after the first one appears. Defaults to True.
+            avoid_consecutive_pool (bool, optional): If True, prevents sampling
+                two pooling layers in a row. Defaults to True.
+            enforce_noop_in_update (bool, optional): If True, applies architecture
+                rules during the quantum update. Defaults to True.
+            noop_max_prob (float, optional): The maximum probability for a terminal op.
+                Defaults to 0.90.
+            noop_ramp_cap (bool, optional): If True, linearly increases the
+                terminal op's probability cap over the chromosome length.
+                Defaults to True.
+            early_stopping (bool, optional): If True, enables early stopping.
+                Defaults to True.
+            patience (int, optional): Generations to wait for improvement before
+                stopping. Defaults to 10.
+            penalize_number (int, optional): Max allowed reducing layers before penalty.
+                Defaults to 0.
+            save_data_freq (int, optional): Save best model stats every N generations.
+                Defaults to 1.
+            replace_method (str, optional): Inherited from QNAS, not used in MOQNAS.
+                Defaults to "best".
         """
-        # 1) Store multiobjective sizes
-        self.pop_size = num_quantum_ind*repetition  # Classical population size
+        self.pop_size = num_quantum_ind * repetition
         self.max_generations = max_generations
-        self.hyperparam_crossover_rate = crossover_rate  
+        self.hyperparam_crossover_rate = crossover_rate
 
-        # 2) Initialize QNAS (hyperparams & network quantum populations)
+        # Initialize the base QNAS class, which sets up the quantum populations
         super().initialize_qnas(
             num_quantum_ind=num_quantum_ind,
             params_ranges=params_ranges,
             repetition=repetition,
             max_generations=max_generations,
-            crossover_rate=None,            # we will not use hyperparam classical crossover here
+            crossover_rate=None,  # Not used in MOQNAS's main loop
             update_quantum_gen=update_quantum_gen,
-            replace_method=replace_method,  # not used in MoQNAS; selection is Pareto
+            replace_method=replace_method,
             fn_list=fn_list,
             initial_probs=initial_probs,
             update_quantum_rate=update_quantum_rate,
@@ -118,134 +158,107 @@ class MOQNAS(QNAS):
             pool_factor=pool_factor,
             ema_beta=ema_beta,
             rank_weighting=rank_weighting,
+            # Pass the new network architecture parameters to the QPopulationNetwork
+            terminal_op_name=terminal_op_name,
+            pool_op_name=pool_op_name,
+            min_active_len=min_active_len,
+            truncate_after_noop=truncate_after_noop,
+            avoid_consecutive_pool=avoid_consecutive_pool,
+            enforce_noop_in_update=enforce_noop_in_update,
+            noop_max_prob=noop_max_prob,
+            noop_ramp_cap=noop_ramp_cap,
         )
 
-        # 3) Create the very first classical network population by sampling from quantum
-        #    and store it in self.classical_nets
-        self.classical_nets = self.qpop_net.generate_classical()  # shape = (pop_size, net_dim)
-
-        # 4) Placeholder for hyperparameter classical sampling (unchanged QNAS logic)
-        self.classical_params = self.qpop_params.generate_classical()  # shape = (pop_size, param_dim)
-
-        # 5) Placeholder for current multiobjective fitness arrays
-        self.fits = None     # Will be (pop_size × n_obj)
-        self.raw_fits = None # Will be (pop_size × n_obj)
-        
-        # 4) Initialize global Pareto archive empty
+        self.classical_nets = self.qpop_net.generate_classical()
+        self.classical_params = self.qpop_params.generate_classical()
+        self.fits = None
+        self.raw_fits = None
         self.pareto_global_population = None
         self.pareto_global_fitnesses = None
         self.pareto_global_params = None
         self.pareto_global_ids = []
         self.fronts_history = {}
-        
-        # load config objective sense
+
         try:
             with open("config_objectives/cfg_obj.json", "r") as f:
                 self.objectives_info = json.load(f)["objectives"]
         except Exception as e:
-            print(f"Error loading objectives config: {e}")
+            self.logger.error(f"Could not load objectives config: {e}")
+            self.objectives_info = {}
 
         objective_names = []
         objective_senses = []
-
-        # Map the active objectives to their information
         for active_obj in self.objectives:
-            match_found = False
             for key, info in self.objectives_info.items():
                 if key in active_obj:
                     objective_names.append(key)
                     sense = 'max' if info['goal'] == 'maximize' else 'min'
                     objective_senses.append(sense)
-                    match_found = True
-                    break # Move to the next active_obj
-            if not match_found:
-                print(f"Warning: Could not find a rule for '{active_obj}'")
-        
-        # moead_topk
-        self.qpop_net.ref_dir_method = ref_dir_method
-        print(f"Reference direction method set to: {self.qpop_net.ref_dir_method}")
-        self.qpop_net.set_objective_directions(names=objective_names, sense=objective_senses)
-        print(f"Set objective directions: {list(zip(objective_names, objective_senses))}")
-        if self.qpop_net._ref_dirs is not None and self.qpop_net._ind_to_dir is not None:
-            for i in range(self.qpop_net.num_ind):
-                dir_index = self.qpop_net._ind_to_dir[i]
-                direction_vector = self.qpop_net._ref_dirs[dir_index]
-                direction_str = ", ".join([f"{val:.3f}" for val in direction_vector])
-                print(f"Quantum Individual {i}: Direction -> [{direction_str}]")
-        else:
-            print("Quantum directions have not been assigned yet. Please call 'set_objective_directions'.")
-        
-    def multiobjective_fitness(self) -> np.ndarray:
-        """
-        Evaluate the current classical population on all objectives.
+                    break
 
-        Steps:
-            1. Decode classical_params and classical_nets via QNAS.decode_pop.
-            2. Call self.eval_func(list_of_param_dicts, list_of_net_structures, generation)
-                which returns a list (length=pop_size) of dicts, each mapping metric_name→value.
-            3. Build a (pop_size × n_obj) array, selecting metrics in the order of self.objectives.
-            4. Apply the same “penalty” from QNAS to the first objective column (if penalize_number>0).
-        
+        # Set up reference directions for MOEA/D-based quantum updates
+        self.qpop_net.ref_dir_method = ref_dir_method
+        self.qpop_net.set_objective_directions(names=objective_names, sense=objective_senses)
+        self.logger.info(f"Set objective directions: {list(zip(objective_names, objective_senses))}")
+
+    def multiobjective_fitness(self) -> np.ndarray:
+        """Evaluates the current population across all objectives.
+
+        This method decodes the classical chromosomes, calls the evaluation function,
+        and organizes the results into a fitness matrix. It also applies penalties
+        to the primary objective if configured.
+
         Returns:
-            fits (np.ndarray): shape=(pop_size, n_obj) of penalized objective values.
+            np.ndarray: A fitness matrix of shape (pop_size, num_objectives)
+                        containing penalized objective values.
         """
-        # 1) Decode current classical to human‐readable
         decoded_params, decoded_nets = self.decode_pop(
             self.classical_params, self.classical_nets
         )
 
-        # 2) Evaluate all individuals: eval_func returns list/array of dicts
         raw_results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
-        # raw_results[i] is a dict of metric_name→value for individual i
-
+        
         N = len(decoded_nets)
         fits = np.zeros((N, self.num_objectives), dtype=float)
         raw_fits = np.zeros((N, self.num_objectives), dtype=float)
 
-        # 3) Fill each column j with metric self.objectives[j]
         for i in range(N):
             metrics = raw_results[i]
-            for j, obj_name in enumerate(self.objectives[: self.num_objectives]):
-                val = metrics[obj_name]
+            for j, obj_name in enumerate(self.objectives[:self.num_objectives]):
+                val = metrics.get(obj_name, 0.0)
                 raw_fits[i, j] = val
                 fits[i, j] = val
-
-        # 4) Apply penalty to first objective if needed (QNAS.get_penalties uses network topology)
+        
         if self.penalize_number and self.reducing_fns_list:
             penalties = self.get_penalties(self.classical_nets)
             fits[:, 0] -= penalties
 
-        # 5) Store raw_fits for logging / saving
         self.raw_fits = raw_fits
         self.fits = fits
-
         return fits
+
     @staticmethod
     def compute_hypervolume_mixed(front_raw: np.ndarray, ref_point=None) -> float:
-        """
-        Compute hypervolume for a 3-objective Pareto front where:
-            - front_raw[:, 0] = accuracy (to be maximized)
-            - front_raw[:, 1] = num_parameters (to be minimized)
-            - front_raw[:, 2] = inference_time (to be minimized)
+        """Computes the hypervolume of a Pareto front.
 
-        We first convert everything into minimization form by flipping accuracy → -accuracy,
-        then build a reference point slightly above the “worst” in each dimension,
-        and finally call pymoo’s Hypervolume on that minimization front.
+        This method handles mixed optimization goals (max/min) by converting
+        all objectives to a minimization problem before calculation. The first
+        objective is assumed to be maximization, others minimization.
 
         Args:
-            front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
-            ref_point (np.ndarray): shape=(3,) with the reference point for hypervolume calculation.
+            front_raw (np.ndarray): The raw fitness values of the Pareto front.
+            ref_point (np.ndarray, optional): A reference point for the calculation.
+                If None, a point is inferred from the front. Defaults to None.
 
         Returns:
-            float: the hypervolume (in the original mixed‐obj space).
+            float: The calculated hypervolume.
         """
         if front_raw is None or len(front_raw) == 0:
             return 0.0
 
         f = np.array(front_raw, dtype=float, copy=True)
-        f[:, 0] = -f[:, 0]  # flip accuracy to minimization
+        f[:, 0] = -f[:, 0]  # Flip first objective (e.g., accuracy) to minimization
 
-        # Choose a safe reference point (must be worse than all points for minimization)
         if ref_point is None:
             rp = np.max(f, axis=0) + 1e-6
         else:
@@ -255,34 +268,32 @@ class MOQNAS(QNAS):
     
     @staticmethod
     def dominates(a, b):
-        """
-        Determine Pareto domination between two fitness tuples.
+        """Checks if solution 'a' Pareto-dominates solution 'b'.
 
-        Converts the first objective to minimization by negating it, then checks
-        if `a` is no worse in all objectives and strictly better in at least one.
+        Assumes the first objective is to be maximized and all others minimized.
 
         Args:
-            a (tuple or list): Fitness values for candidate a.
-            b (tuple or list): Fitness values for candidate b.
+            a (np.ndarray): Fitness vector of solution 'a'.
+            b (np.ndarray): Fitness vector of solution 'b'.
 
         Returns:
-            bool: True if a dominates b, False otherwise.
+            bool: True if 'a' dominates 'b', False otherwise.
         """
         obj_a = np.array([-a[0]] + list(a[1:]))
         obj_b = np.array([-b[0]] + list(b[1:]))
         return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
 
-    def fast_nondominated_sort(self, fitnesses: np.ndarray):
-        """
-        Perform the “fast non‐dominated sort” of NSGA‐II on the (2*pop_size × n_obj)
-        fitness‐matrix. Returns a list of fronts, where each front is a list of indices.
+    def fast_nondominated_sort(self, fitnesses: np.ndarray) -> list[list[int]]:
+        """Performs the fast non-dominated sort algorithm from NSGA-II.
+
+        It ranks all individuals in a population into a set of Pareto fronts.
 
         Args:
-            fitnesses (np.ndarray): shape=(N_all, n_obj)
+            fitnesses (np.ndarray): The fitness matrix of the entire population.
 
         Returns:
-            fronts (list of lists): fronts[0] is list of indices of the first Pareto front,
-                                fronts[1] is list of indices of the second front, etc.
+            list[list[int]]: A list of fronts, where each front is a list of
+                            individual indices. `fronts[0]` is the best front.
         """
         N = fitnesses.shape[0]
         dominated_sets = [set() for _ in range(N)]
@@ -291,8 +302,6 @@ class MOQNAS(QNAS):
 
         for p in range(N):
             for q in range(N):
-                # if p == q:
-                #     continue
                 if self.dominates(fitnesses[p], fitnesses[q]):
                     dominated_sets[p].add(q)
                 elif self.dominates(fitnesses[q], fitnesses[p]):
@@ -310,105 +319,102 @@ class MOQNAS(QNAS):
             i += 1
             fronts.append(next_front)
 
-        # The last appended front will be empty; discard it
         return fronts[:-1]
 
-    def crowding_distance(self, fits, front):
-        """
-        Compute the crowding distance for individuals in a given front.
+    def crowding_distance(self, fits: np.ndarray, front: list[int]) -> np.ndarray:
+        """Calculates the crowding distance for each individual in a front.
 
-        Uses a vectorized approach over all objectives to measure solution density,
-        assigning infinite distance to boundary points.
+        This metric is used as a tie-breaker to promote diversity among solutions
+        with the same Pareto rank.
 
         Args:
-            fits (np.ndarray): Fitness array of shape (N, M).
-            front (list[int]): Indices of individuals in the front.
+            fits (np.ndarray): The fitness matrix of the entire population.
+            front (list[int]): A list of indices for individuals in one front.
 
         Returns:
-            np.ndarray: Crowding distances for each index in `front`.
+            np.ndarray: An array of crowding distance values for each individual in the front.
         """
         f = fits[front]
         F, M = f.shape
         dist = np.zeros(F)
         if F <= 2:
-            return np.array([np.inf] * F)
+            return np.full(F, np.inf)
+        
         sorted_idx = np.argsort(f, axis=0)
         dist[sorted_idx[0, :]] = np.inf
         dist[sorted_idx[-1, :]] = np.inf
+        
         min_vals = f[sorted_idx[0, :], np.arange(M)]
         max_vals = f[sorted_idx[-1, :], np.arange(M)]
         denom = max_vals - min_vals
+
         for j in range(M):
-            if denom[j] == 0:
-                continue
-            prev = f[sorted_idx[:-2, j], j]
-            nxt = f[sorted_idx[2:, j], j]
-            dist[sorted_idx[1:-1, j]] += (nxt - prev) / denom[j]
+            if denom[j] > 1e-9:
+                prev = f[sorted_idx[:-2, j], j]
+                nxt = f[sorted_idx[2:, j], j]
+                dist[sorted_idx[1:-1, j]] += (nxt - prev) / denom[j]
         return dist
 
-    def environmental_selection(
-        self, pop: np.ndarray, fits: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Perform NSGA-II selection on a combined population of size (2*pop_size).
-        Ranks by Pareto fronts, then uses crowding distance to fill up to pop_size.
-        Returns (selected_pop, selected_fits, selected_indices), where
-        selected_indices is a 1D int array of length pop_size giving the row-indices
-        in `pop` that were chosen.
+    def environmental_selection(self, pop: np.ndarray, fits: np.ndarray) -> tuple:
+        """Selects the next generation's population using NSGA-II rules.
+
+        It combines parents and offspring, ranks them using non-dominated sorting,
+        and fills the new population front by front. Crowding distance is used
+        to select individuals from the last front that can fit.
+
+        Args:
+            pop (np.ndarray): The combined population's network chromosomes.
+            fits (np.ndarray): The combined population's fitness matrix.
+
+        Returns:
+            tuple: A tuple containing the selected population's networks, fitnesses,
+                and their original indices from the combined input.
         """
         pop_size = self.pop_size
         fronts = self.fast_nondominated_sort(fits)
 
-        new_pop = np.zeros((pop_size, pop.shape[1]), dtype=pop.dtype)
-        new_fits = np.zeros((pop_size, fits.shape[1]), dtype=float)
-        selected_idx = []  # <-- collect indices here
+        selected_idx = []
         count = 0
 
         for front in fronts:
-            # Si ya llenamos la población, salimos inmediatamente.
             if count >= pop_size:
                 break
-
-            front_size = len(front)
-            if count + front_size <= pop_size:
-                # Tomamos todo el frente completo
-                new_pop[count : count + front_size] = pop[front]
-                new_fits[count : count + front_size] = fits[front]
+            
+            if count + len(front) <= pop_size:
                 selected_idx.extend(front)
-                count += front_size
+                count += len(front)
             else:
-                # Quedan pocos huecos (rem) y el frente es más grande
                 rem = pop_size - count
                 if rem > 0:
-                    cd = self.crowding_distance(fits, front)  # (len(front),)
-                    # Seleccionamos los índices con mayor crowding distance
+                    cd = self.crowding_distance(fits, front)
                     top_indices = np.argsort(cd)[-rem:]
-                    # Convertimos esos índices relativos en índices absolutos sobre 'pop'
                     chosen = [front[i] for i in top_indices]
-                    new_pop[count : count + rem] = pop[chosen]
-                    new_fits[count : count + rem] = fits[chosen]
                     selected_idx.extend(chosen)
-                    count = pop_size
-                break  # Después de llenar con 'rem' individuos, rompemos el bucle
+                break
+        
         selected_idx = np.array(selected_idx, dtype=int)
-        return new_pop, new_fits, selected_idx
+        return pop[selected_idx], fits[selected_idx], selected_idx
 
     def random_crossover_hyperparams(self, new_pop: np.ndarray) -> np.ndarray:
-        """
-        Perform a random‐parent “tournament” crossover on hyperparameters.
+        """Applies uniform crossover to hyperparameter chromosomes.
 
-        Each child in new_pop has a chance (hyperparam_crossover_rate) to
-        be crossed with a random parent from self.qpop_params.current_pop.
+        Each individual in the new population has a chance to be crossed over with
+        a randomly selected parent from the previous generation.
+
+        Args:
+            new_pop (np.ndarray): The newly generated hyperparameter population.
+
+        Returns:
+            np.ndarray: The hyperparameter population after crossover.
         """
         old_pop = self.qpop_params.current_pop
-        N_old = 0 if old_pop is None else old_pop.shape[0]
-        if N_old == 0:
+        if old_pop is None or old_pop.shape[0] == 0:
             return new_pop
 
         mixed = new_pop.copy()
         for i in range(new_pop.shape[0]):
             if np.random.rand() < self.hyperparam_crossover_rate:
-                p_idx = np.random.randint(N_old)
+                p_idx = np.random.randint(old_pop.shape[0])
                 parent = old_pop[p_idx]
                 child = new_pop[i]
                 mask = np.random.rand(*child.shape) < 0.5
@@ -416,255 +422,167 @@ class MOQNAS(QNAS):
         return mixed
 
     def record_and_save_history(self):
-            """
-            Records the current global Pareto front, calculates its hypervolume,
-            and saves the entire history to a pickle file.
-            """
-            # 1) Build the record for the current generation from the global archive.
-            gen_record = {1: []} # Storing the front in a key '1'
-            
-            for i in range(len(self.pareto_global_ids)):
-                individual_data = {
-                    "id":              self.pareto_global_ids[i],
-                    "accuracy":        float(self.pareto_global_fitnesses[i][0]),
-                    "params":          float(self.pareto_global_fitnesses[i][1]),
-                    "inference_time":  float(self.pareto_global_fitnesses[i][2])
-                }
-                gen_record[1].append(individual_data)
+        """Records the current global Pareto front and its hypervolume, saving to disk."""
+        gen_record = {1: []}
+        
+        for i in range(len(self.pareto_global_ids)):
+            individual_data = {
+                "id": self.pareto_global_ids[i],
+                "accuracy": float(self.pareto_global_fitnesses[i][0]),
+                "params": float(self.pareto_global_fitnesses[i][1]),
+                "inference_time": float(self.pareto_global_fitnesses[i][2])
+            }
+            gen_record[1].append(individual_data)
 
-            # 2) Calculate the hypervolume of the current global front.
-            hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
-            gen_record["hypervolume"] = float(hv)
-            
-            # 3) Add the record for this generation to the main history dictionary.
-            self.fronts_history[self.current_gen] = gen_record
-            
-            # 4) Persist the entire history to disk.
-            history_path = os.path.join(self.experiment_path, "pareto_history.pkl")
-            with open(history_path, "wb") as f:
-                pickle.dump(self.fronts_history, f)
+        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        gen_record["hypervolume"] = float(hv)
+        
+        self.fronts_history[self.current_gen] = gen_record
+        
+        history_path = os.path.join(self.experiment_path, "pareto_history.pkl")
+        with open(history_path, "wb") as f:
+            pickle.dump(self.fronts_history, f)
 
     def update_global_pareto_front(self):
-        """
-        Update the global Pareto archive by merging it with the current population
-        and finding the new set of non-dominated solutions.
+        """Updates the global Pareto front archive.
 
-        This method relies on `self.classical_ids` containing the correct,
-        persistent IDs for the individuals in the current population.
+        It combines the current population with the existing archive, removes
+        duplicates, and identifies the new non-dominated set.
         """
-        # Use the persistent IDs managed by the `evolve` loop.
         curr_ids = self.classical_ids
 
         if self.pareto_global_population is None:
-            # If the archive is empty, initialize it with the current population.
             all_pop = self.classical_nets.copy()
             all_fits = self.fits.copy()
             all_params = self.classical_params.copy()
             all_ids = curr_ids.copy()
         else:
-            # Otherwise, combine the existing archive with the current population.
             all_pop = np.vstack([self.pareto_global_population, self.classical_nets])
             all_fits = np.vstack([self.pareto_global_fitnesses, self.fits])
             all_params = np.vstack([self.pareto_global_params, self.classical_params])
             all_ids = self.pareto_global_ids + curr_ids
 
         unique_ids, unique_indices = np.unique(all_ids, return_index=True)
-        # Filter the combined populations to keep only the first occurrence of each individual.
         unique_pop = all_pop[unique_indices]
         unique_fits = all_fits[unique_indices]
         unique_params = all_params[unique_indices]
-        unique_ids = list(unique_ids) # Convert back to a list
+        unique_ids = list(unique_ids)
         
-        # 1) Perform a full non-dominated sort on the combined set.
         fronts = self.fast_nondominated_sort(unique_fits)
-        
-        # 2) The new global Pareto front consists of all individuals in the first front.
         idx0 = fronts[0]
         
-        # 3) Update the global archive class attributes.
-        self.pareto_global_population  = unique_pop[idx0]
-        self.pareto_global_fitnesses   = unique_fits[idx0]
-        self.pareto_global_params      = unique_params[idx0]
-        self.pareto_global_ids         = [unique_ids[i] for i in idx0]
+        self.pareto_global_population = unique_pop[idx0]
+        self.pareto_global_fitnesses = unique_fits[idx0]
+        self.pareto_global_params = unique_params[idx0]
+        self.pareto_global_ids = [unique_ids[i] for i in idx0]
         
-        # 4) Compute crowding distance on the final, updated global front.
-        #    This is stored for the quantum update logic in `go_next_gen`.
         self._last_cd = self.crowding_distance(self.pareto_global_fitnesses,
             list(range(len(self.pareto_global_fitnesses))))
     
     def go_next_gen(self):
-            """
-            Orchestrates end-of-generation tasks: updating the global archive,
-            recording history, updating quantum populations, and cleaning up.
-            """
-            # 1. Update the global Pareto archive with the latest population's results.
-            # This method now updates self.pareto_global_* attributes directly and
-            # calculates and stores the crowding distance of the new front in self._last_cd.
-            self.update_global_pareto_front()
+        """Orchestrates all end-of-generation tasks.
 
-            # 2. Record the history of the updated global front and save it to disk.
-            self.record_and_save_history()
+        This includes updating the global archive, recording history, updating
+        the quantum populations based on the archive, logging, and cleanup.
+        """
+        self.update_global_pareto_front()
+        self.record_and_save_history()
 
-            # 3. Select a diverse subset from the global front to update the quantum populations.
-            # We use the crowding distance that was calculated and stored in the previous step.
-            cd = self._last_cd
-            sorted_rel = np.argsort(cd)[::-1]
-            # pick = sorted_rel[:self.qpop_net.num_ind]
+        cd = self._last_cd
+        sorted_rel = np.argsort(cd)[::-1]
+        
+        # The best individuals from the global front guide the quantum update
+        self.qpop_net.current_pop = self.pareto_global_population[sorted_rel]
+        self.qpop_net.current_pop_objs = self.pareto_global_fitnesses[sorted_rel]
+        if self.pareto_global_params is not None:
+            self.qpop_params.current_pop = self.pareto_global_params[sorted_rel]
 
-            # 4. Set the chosen individuals as the 'parents' for the quantum update.
-            self.qpop_net.current_pop = self.pareto_global_population[sorted_rel]
-            self.qpop_net.current_pop_objs = self.pareto_global_fitnesses[sorted_rel]
-            
-            if self.pareto_global_params is not None:
-                self.qpop_params.current_pop = self.pareto_global_params[sorted_rel]
+        self.update_quantum(self.current_gen)
 
-            # 5. Trigger the quantum population update (the learning step).
-            self.update_quantum(self.current_gen)
+        hv = self.fronts_history[self.current_gen]['hypervolume']
+        self.logger.info(
+            "Generation %d: updated global front with %d individuals (HV: %.2f)",
+            self.current_gen, len(self.pareto_global_population), hv
+        )
+        
+        is_snapshot = (self.current_gen % 5 == 0) and (self.current_gen > 0)
+        delete_old_dirs_v2(self.experiment_path, self.current_gen, 
+                        keep_ids=self.pareto_global_ids.copy(), is_snapshot_gen=is_snapshot)
+        if self.current_gen == 1:
+            delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
 
-            # 6. Log a summary of the generation's results.
-            hv = self.fronts_history[self.current_gen]['hypervolume']
-            self.logger.info("Generation %d: updated global Pareto front with %d individuals and hypervolume %.2f",
-                self.current_gen,
-                len(self.pareto_global_population),
-                hv,
-            )
-            display_ids = [str(item) for item in self.pareto_global_ids]
-            self.logger.info("Generation %d: current global Pareto IDs:\n%s",
-                self.current_gen,
-                display_ids,
-            )
-
-            fitness_str = np.array2string(
-                self.pareto_global_fitnesses,
-                separator='  ',
-                formatter={'float_kind': lambda x: f"{x:.2f}"}
-            )
-
-            self.logger.info(
-                "Generation %d global Pareto fitness:\n%s (n=%d)",
-                self.current_gen,
-                fitness_str,
-                len(self.pareto_global_population),
-            )
-            is_snapshot = (self.current_gen % 5 == 0) and (self.current_gen > 0)
-            # 7. Clean up old model directories, keeping only those in the global archive.
-            delete_old_dirs_v2(self.experiment_path, self.current_gen, 
-                            keep_ids=self.pareto_global_ids.copy(), is_snapshot_gen=is_snapshot)
-            if self.current_gen == 1:
-                # On the first run, also clean up directories from generation 0.
-                delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
-
-            # 8. Save other necessary data from the parent class and advance the generation counter.
-            self.save_data()
-            self.current_gen += 1
+        self.save_data()
+        self.current_gen += 1
 
     def evolve(self) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Run MoQNAS for max_generations, maintaining a global Pareto archive.
+        """Runs the main multi-objective evolutionary loop.
 
-        Workflow per generation:
-        1. Generation 0:
-                - (p0_params, p0_nets) = self.generate_classical()
-                - f0 = self.multiobjective_fitness()
-                - assign fits, raw_fits; record best_so_far
-                - DO NOT call go_next_gen for gen=0
-        2. For gen in [1..max_generations]:
-                a) self.current_gen = gen
-                b) children_params, children_nets = self.generate_classical()
-                c) child_fits = self.multiobjective_fitness()
-                d) Combine parents + children and run NSGA‐II
-                e) Assign survivors → self.classical_nets, self.fits, self.raw_fits
-                f) Resample hyperparams for next gen: children_params already from generate_classical()
-                h) Call self.go_next_gen()    # handles global Pareto archiving, cleanup, logging, ++gen
-                i) Early stop if check_early_stopping()
-                j) Prepare (p0_params, p0_nets, f0, p0_raws) for next iteration
-        3. Return final global Pareto archive
+        Returns:
+            tuple[np.ndarray, np.ndarray]: A tuple containing the final Pareto
+                front's network chromosomes and their corresponding fitness values.
         """
-        # 1) Generation 0: sample both hyperparams and nets via generate_classical()
         start_time = time.time()
+        
+        # --- Generation 0 ---
         p0_params, p0_nets = self.generate_classical()
         self.classical_params = p0_params
         self.classical_nets = p0_nets
-        
         self.qpop_params.current_pop = p0_params
-        self.qpop_net.current_pop    = p0_nets
-
-        # Evaluate generation 0
+        self.qpop_net.current_pop = p0_nets
+        
         f0 = self.multiobjective_fitness()
         self.logger.info("Generation 0: fitnesses:\n%s", f0)
         
         p0_ids = [f"0_{i}" for i in range(len(p0_nets))]
-        self.classical_ids = p0_ids # Initialize a new attribute to hold current IDs
-    
+        self.classical_ids = p0_ids
         self.fits = f0
-        self.raw_fits = self.raw_fits.copy()
-
-        # Record best‐so‐far (by first objective)
-        i0 = int(np.nanargmax(f0[:, 0]))
-        self.best_so_far = float(f0[i0, 0])
-        self.best_so_far_id = [0, i0]
-
-        # Keep copies for parent‐combination in next loop
-        p0_raws = self.raw_fits.copy()
-
-        # 2) Main loop: generations 1..max_generations
+        
+        # --- Main Loop (Generations 1 to N) ---
         for gen in range(1, self.max_generations + 1):
             self.current_gen = gen
 
-            # 2a) Sample children classical population (both params and nets) at once
             children_params, children_nets = self.generate_classical()
             child_ids = [f"{self.current_gen}_{i}" for i in range(len(children_nets))]
-
 
             children_params = self.random_crossover_hyperparams(children_params)
             children_nets = self.crossover_network(children_nets)
             
-            # 2b) Evaluate children on all objectives
             self.classical_params = children_params
             self.classical_nets = children_nets
             child_fits = self.multiobjective_fitness()
             child_raw = self.raw_fits.copy()
 
-            # 2c) Combine parents + children
-            combined_nets = np.vstack([p0_nets, children_nets])   # shape = (2*pop_size, net_dim)
-            combined_fits = np.vstack([f0, child_fits])           # shape = (2*pop_size, n_obj)
-            combined_raws = np.vstack([p0_raws, child_raw])       # shape = (2*pop_size, n_obj)
-            combined_ids = p0_ids + child_ids                    # shape = (2*pop_size,)
+            combined_nets = np.vstack([p0_nets, children_nets])
+            combined_fits = np.vstack([f0, child_fits])
+            combined_raws = np.vstack([p0_raws, child_raw])
+            combined_ids = p0_ids + child_ids
             combined_params = np.vstack([p0_params, children_params])
-            # 2d) NSGA‐II environmental selection
+            
             next_nets, next_fits, survivor_idx = self.environmental_selection(combined_nets, combined_fits)
-
-            # 2e) Assign survivors
+            
             self.classical_nets = next_nets
             self.fits = next_fits
             self.raw_fits = combined_raws[survivor_idx]
             self.classical_ids = [combined_ids[i] for i in survivor_idx]
             self.classical_params = combined_params[survivor_idx]
 
-            # 2h) Advance generation: update global Pareto, backup, save, log, cleanup, increment gen
             self.go_next_gen()
 
-            # 2i) Early stopping
             if self.early_stopping and self.check_early_stopping():
                 break
 
-            # 2j) Prepare for next iteration
-            p0_params = self.classical_params
-            p0_nets = self.classical_nets
-            f0 = self.fits
-            p0_raws = self.raw_fits
-            p0_ids = self.classical_ids
+            p0_params, p0_nets, f0, p0_raws, p0_ids = (
+                self.classical_params, self.classical_nets, self.fits, 
+                self.raw_fits, self.classical_ids
+            )
+            
             if self.current_gen > 0 and (self.current_gen % 5 == 0):
-                curr_time = time.time()
                 h, m, est_h, est_m = calculate_time(
-                    start_time, curr_time, self.current_gen, self.max_generations, end_evol=False
-                )
-                self.logger.info(
-                    "Gen %d: elapsed %dh %dm; ETA %dh %dm",
-                    self.current_gen, h, m, est_h, est_m,
-                )
+                    start_time, time.time(), self.current_gen, self.max_generations, end_evol=False)
+                self.logger.info("Gen %d: elapsed %dh %dm; ETA %dh %dm", 
+                                self.current_gen, h, m, est_h, est_m)
+
         total_h, total_m = calculate_time(start_time, time.time())
         self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
 
-        # 3) Return final global Pareto archive
         return self.pareto_global_population, self.pareto_global_fitnesses

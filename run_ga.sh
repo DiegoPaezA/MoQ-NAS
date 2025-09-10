@@ -12,12 +12,13 @@ backbone_name="resnet18" # only used if network_config is  backbone
 
 # —— GA hyperparameters —— 
 population_size=20
-num_generations=300
+num_generations=150
 max_num_nodes=20
 crossover_rate=0.5
 mutation_rate=0.2
 elitism=true
 patience=60
+early_stopping=false
 use_cache=false  # Use cached evaluations to speed up runs
 
 # —— sample size & repeats —— 
@@ -34,7 +35,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
     echo "=== Running ${dataset} / ${configs[$j]} on GPU ${cuda_device} ==="
 
-    for ((i=1; i<=3; i++)); do  # change 1 to your number of repeats
+    for ((i=3; i<=3; i++)); do  # change 1 to your number of repeats
         exp_path="${exp_path_base}/${exp_name}_repeat_${i}"
 
         CUDA_VISIBLE_DEVICES="$cuda_device" python run_ga_evolution.py \
@@ -50,8 +51,9 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --population_size      "$population_size" \
             --num_generations      "$num_generations" \
             --max_num_nodes        "$max_num_nodes" \
-            $( $elitism && echo "--elitism" ) \
-            $($use_cache && echo "--use_cache")\
+            $($elitism && echo "--elitism" ) \
+            $($use_cache && echo "--use_cache") \
+            $($early_stopping && echo "--early_stopping") \
             --network_config       "$network_config" \
             --backbone_name        "$backbone_name" \
             --log_level            "$log_level"

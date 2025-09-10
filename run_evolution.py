@@ -97,6 +97,15 @@ if __name__ == '__main__':
                         choices=['single', 'global_k', 'bootstrap_k', 'old'],
                         help='Elite selection mode during evolution. Default = global_k.')
 
+
+# --- New Network Architecture Rule Flags ---
+    parser.add_argument('--no-truncate-after-noop', action='store_true', dest='truncate_after_noop', default=False,
+                        help='Disable truncating architectures after the first no-op. (Default: Enabled)')
+    parser.add_argument('--no-avoid-consecutive-pool', action='store_true', dest='avoid_consecutive_pool', default=False,
+                        help='Disable the rule preventing consecutive pooling layers. (Default: Enabled)')
+    parser.add_argument('--no-enforce-noop-in-update', action='store_true', dest='enforce_noop_in_update', default=False,
+                        help='Disable enforcing no-op rules during the quantum update. (Default: Enabled)')
+
     # Use cache for evaluations
     parser.add_argument('--use_cache', action='store_true', default=False,
                         help='Use cached evaluations to speed up runs. Default = False.')
