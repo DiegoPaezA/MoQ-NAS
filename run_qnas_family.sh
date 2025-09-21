@@ -17,6 +17,9 @@ network_config="default"
 backbone_name="resnet18"           # used only if network_config="backbone"
 fitness_metric="best_accuracy"
 
+# NEW: dataset YAML path derived from dataset name
+config_path_dataset="configs/${dataset}.yaml"
+
 # —— Common toggles (kept from your scripts) ——
 use_cache=false                     # :contentReference[oaicite:14]{index=14}
 early_stopping=false                # :contentReference[oaicite:15]{index=15}
@@ -64,6 +67,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
         --config_file          "${cfg}"
         --data_path            "${data_path}"
         --dataset              "${dataset}"
+        --config_path_dataset  "${config_path_dataset}"
         --limit_data_value     "${dataset_sample_size}"
         --fitness_metric       "${fitness_metric}"
         --network_config       "${network_config}"

@@ -7,6 +7,7 @@
 # —— Which algorithms to run (choose any of: ga, nsga2, nsga3) ——
 #algos=("ga" "nsga2" "nsga3")
 algos=("nsga3")
+
 # —— Experiment settings ——
 dataset="cifar10"
 data_path="${dataset}_data"
@@ -17,22 +18,25 @@ network_config="default"
 backbone_name="resnet18"   # used only if network_config="backbone"
 fitness_metric="best_accuracy"
 
+# NEW: dataset YAML path derived from dataset name
+config_path_dataset="configs/${dataset}.yaml"
+
 # —— GA/NSGA hyperparameters (from your GA/NSGA scripts) ——
-population_size=20         
-num_generations=150        
-max_num_nodes=20           
-crossover_rate=0.5         
-mutation_rate=0.2          
-elitism=true               
-early_stopping=false       
-use_cache=false            
-patience=60                
+population_size=20
+num_generations=150
+max_num_nodes=20
+crossover_rate=0.5
+mutation_rate=0.2
+elitism=true
+early_stopping=false
+use_cache=false
+patience=60
 
 # —— NSGA-III specific ——
 ref_divisions=12           # set "" for auto
 
 # —— dataset size & repeats ——
-dataset_sample_size=10000 
+dataset_sample_size=10000
 configs=("config0.txt")    # same shape as your originals
 exps=("exp_1")
 cuda_devices=("0")
@@ -56,6 +60,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
         --config_file          "${cfg}"
         --data_path            "${data_path}"
         --dataset              "${dataset}"
+        --config_path_dataset  "${config_path_dataset}"
         --limit_data_value     "${dataset_sample_size}"
         --fitness_metric       "${fitness_metric}"
         --patience             "${patience}"
