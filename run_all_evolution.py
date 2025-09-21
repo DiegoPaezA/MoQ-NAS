@@ -1,37 +1,27 @@
-# run_all_evolution.py
-import argparse
+import sys
 import os
+
+import argparse
 from typing import Tuple, Optional
 
-import qnas_config as cfg
-import evaluation
-from util import check_files, init_log, download_dataset
+from core import config as cfg
+from core import evaluation
+from utils.helpers import check_files, init_log, download_dataset
 
-# Optional / guarded imports for each engine
+# Imports actualizados para los motores de algoritmos
 try:
-    import ga
+    from algorithms.ga import base_ga as ga
+    from algorithms.ga import nsga2, nsga3
 except Exception:
     ga = None
-
-try:
-    import nsga2
-except Exception:
     nsga2 = None
-
-try:
-    import nsga3  # your NSGA-III (place nsga3.py next to nsga2.py)
-except Exception:
     nsga3 = None
 
-# If you have stand-alone QNAS / MOQNAS runners, import them guarded too
 try:
-    import qnas2 as qnas  # or whatever your QNAS entry class/module is named
+    from algorithms.qnas import qnas2 as qnas
+    from algorithms.qnas.moqnas import MOQNAS
 except Exception:
     qnas = None
-
-try:
-    from moqnas import MOQNAS
-except Exception:
     MOQNAS = None
 
 

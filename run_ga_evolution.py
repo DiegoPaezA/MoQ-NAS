@@ -1,10 +1,11 @@
 import argparse
+import sys
 import os
 
-import ga
-import qnas_config as cfg
-import evaluation
-from util import check_files, init_log, download_dataset
+from algorithms.ga import base_ga as ga
+from core import config as cfg
+from core import evaluation
+from utils.helpers import check_files, init_log, download_dataset
 
 def main(**args):
     

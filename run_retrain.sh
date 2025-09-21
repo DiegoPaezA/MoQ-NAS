@@ -4,10 +4,10 @@
 dataset="cifar10"
 network_config="default"
 
-exp="exp5"
+exp="exp16"
 
 # Loop para repetir tres veces
-for repeat in 1 2 3; do
+for repeat in 2; do
     echo "Starting $exp F13 repeat $repeat"
     exp_path="experiment_v3_${dataset}/${exp}_repeat_${repeat}"
 

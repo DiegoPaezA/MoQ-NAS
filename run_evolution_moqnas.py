@@ -1,10 +1,11 @@
-import argparse
+import sys
 import os
 
-from moqnas import MOQNAS
-import qnas_config as cfg
-import evaluation
-from util import check_files, init_log, download_dataset
+import argparse
+from algorithms.qnas.moqnas import MOQNAS
+from core import config as cfg
+from core import evaluation
+from utils.helpers import check_files, init_log, download_dataset
 
 def main(**args):
     logger = init_log(args['log_level'], name=__name__)
