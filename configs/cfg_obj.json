@@ -1,0 +1,22 @@
+{
+    "objectives": {
+        "accuracy": {
+            "goal": "maximize"
+        },
+        "inference": {
+            "goal": "minimize"
+        },
+        "flops": {
+            "goal": "minimize"
+        },
+        "params": {
+            "goal": "minimize"
+        },
+        "energy": {
+            "goal": "minimize"
+        },
+        "fairness": {
+            "goal": "maximize"
+        }
+    }
+}
