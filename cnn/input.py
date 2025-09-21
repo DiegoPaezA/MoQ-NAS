@@ -1,352 +1,257 @@
-""" Copyright (c) 2023, Diego Páez
-* Licensed under the MIT license
-
-- Input module - Generic data loader for PyTorch, supporting various datasets and data augmentation.
-
+# input.py
 """
-import torch
-import random
-import util
+Generic data loader for PyTorch, supporting various datasets and data augmentation.
+
+THIS VERSION RELIES **ONLY** ON YAML CONFIGS.
+- Expects params["config_path_dataset"] to point to a YAML file in configs/.
+- Uses dataset_utils modules for transforms and dataset construction.
+"""
+
 import os
-import numpy as np
+import random
 from time import time
-import torchvision.datasets
-from torch.utils.data import DataLoader, Subset, Dataset
-from torchvision.transforms import ToTensor, Resize, Compose, Normalize, TrivialAugmentWide
-from sklearn.model_selection import StratifiedShuffleSplit
+from typing import Optional, Tuple
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+from torchvision.transforms import ToTensor
+
+import util
 import medmnist
 from medmnist import INFO
+import torchvision.datasets  # imported to ensure availability for factory
 
-cifar10_info = {
-  'dataset': 'CIFAR10',
-  'mean': [0.491400808095932, 0.48215898871421814, 0.44653093814849854],
-  'std': [0.24703224003314972, 0.24348513782024384, 0.26158785820007324],
-  'shape': [3, 32, 32], 
-  'num_classes': 10,
-  'task': 'classification',
-  'balanced_train': True
-}
+# Local helpers you created
+from dataset_utils.configs import DatasetSpec, load_dataset_spec
+from dataset_utils.transformations import build_transforms
+from dataset_utils.factory import build_datasets
 
-cifar100_info = {
-  'dataset': 'CIFAR100',
-  'mean': [0.5070757865905762, 0.48655030131340027, 0.4409191310405731],
-  'std': [0.2673342823982239, 0.2564384639263153, 0.2761504650115967],
-  'shape': [3, 32, 32],
-  'num_classes': 100,
-  'task': 'classification',
-  'balanced_train': True
-}
 
-atletasaxial_info = {
-  'dataset': 'ATLETA_AXIAL',
-  'mean': [0.485, 0.456, 0.406],
-  'std': [0.229, 0.224, 0.225],
-  'shape': [3, 128, 128],
-  'num_classes': 3,
-  'task': 'classification',
-  'balanced_train': False
-}
+# -------------------------
+# Utilities
+# -------------------------
+def _make_gen(seed: int) -> torch.Generator:
+    g = torch.Generator()
+    g.manual_seed(int(seed))
+    return g
 
-atletascoronal_info = {
-  'dataset': 'ATLETA_CORONAL',
-  'mean': [0.485, 0.456, 0.406],
-  'std': [0.229, 0.224, 0.225],
-  'shape': [3, 128, 128],
-  'num_classes': 3,
-  'task': 'classification',
-  'balanced_train': False
-}
 
-available_datasets = {
-  'cifar10': cifar10_info,
-  'cifar100': cifar100_info,
-  'atleta_axial': atletasaxial_info,
-  'atleta_coronal': atletascoronal_info
-}
+def _supports_pin_memory_device() -> bool:
+    try:
+        from inspect import signature
+        return "pin_memory_device" in signature(DataLoader).parameters
+    except Exception:
+        return False
 
-class MyDataset(Dataset):
-    def __init__(self, subset, transform=None):
-        self.subset = subset
-        self.transform = transform
-        
-    def __getitem__(self, index):
-        x, y = self.subset[index]
-        if self.transform:
-          x = self.transform(x)
-        return x, y
-        
-    def __len__(self):
-        return len(self.subset)
-        
+
+def _coerce_bool(x):
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, str):
+        xl = x.strip().lower()
+        if xl in ("true", "1", "yes", "y", "t"):
+            return True
+        if xl in ("false", "0", "no", "n", "f"):
+            return False
+    return bool(x)
+
+
+def _compute_sampled_mean_std(dataset, max_batches: int = 10, batch_size: int = 256) -> Tuple[list, list]:
+    """
+    Compute mean/std over a capped number of batches (memory/time safe).
+    Assumes dataset returns (C,H,W) tensors, or PIL with ToTensor() applied by caller.
+    """
+    from torch.utils.data import DataLoader as _DL
+    loader = _DL(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    n_seen = 0
+    mean = None
+    M2 = None
+    batches = 0
+    for x, _ in loader:
+        x = x.float()
+        b, c, h, w = x.shape
+        x = x.view(b, c, -1)  # (b, c, hw)
+        batch_mean = x.mean(dim=(0, 2))  # (c,)
+        batch_var = x.var(dim=(0, 2), unbiased=False)  # (c,)
+
+        if mean is None:
+            mean = batch_mean
+            M2 = batch_var
+            n_seen = 1
+        else:
+            n_seen += 1
+            mean = mean + (batch_mean - mean) / n_seen
+            M2 = M2 + (batch_var - M2) / n_seen
+
+        batches += 1
+        if batches >= max_batches:
+            break
+
+    if mean is None:
+        raise RuntimeError("Unable to compute sampled mean/std: dataset appears empty.")
+    std = torch.sqrt(M2 + 1e-8)
+    return mean.tolist(), std.tolist()
+
+
+# -------------------------
+# Main loader (YAML-only)
+# -------------------------
 class GenericDataLoader:
-  """A generic data loader for PyTorch, supporting various datasets and data augmentation."""
-  def __init__(self, params: dict, train_split=0.9, seed=None, info: dict = {}):
-    """
-    Initialize the GenericDataLoader.
-    
-    Parameters:
-      params (dict): Dictionary containing parameters.
-      train_split (float): Split ratio for training data.
-      seed (int): Seed for randomization.
-      info (dict): Additional information about the dataset.
-      
-    Returns:
-      None
-    """
-    self.params = params
-    self.train_split = train_split
-    error_msg = "[!] train_split should be in the range [0, 1]."
-    assert 0 <= self.train_split <= 1, error_msg    
-    if seed is None:
-        seed = int(time())
+    """A generic data loader for PyTorch, supporting various datasets and data augmentation."""
+
+    def __init__(self, params: dict, train_split=0.9, seed: Optional[int] = None, info: dict = {}):
+        """
+        Initialize the GenericDataLoader.
+
+        Parameters:
+          params (dict): must include:
+            - dataset: dataset name (e.g., "cifar10", "cifar100", "atleta_axial", "pathmnist", ...)
+            - data_path: root data folder
+            - config_path_dataset: path to YAML config describing this dataset
+          train_split (float): Split ratio for training data (torchvision family).
+          seed (int): Seed for randomization (defaults to time()).
+          info (dict): Unused (kept for API compatibility).
+        """
+        self.params = params
+        self.train_split = float(train_split)
+        assert 0.0 <= self.train_split <= 1.0, "[!] train_split should be in the range [0, 1]."
+
+        # Enforce YAML-only workflow
+        if "config_path_dataset" not in self.params or not os.path.isfile(self.params["config_path_dataset"]):
+            raise FileNotFoundError(
+                "config_path_dataset is required and must point to a valid YAML file. "
+                "Place your file under configs/ and set params['config_path_dataset'] accordingly."
+            )
+
+        # Seed RNGs
+        if seed is None:
+            seed = int(time())
         random.seed(seed)
         torch.manual_seed(seed)
-    self.info_dict = {'dataset': f'{self.params["dataset"]}'}
-    self.info_dict['seed'] = seed
-    self.download_status = not os.path.exists(self.params['data_path'])
-    
-    if self.download_status:
-      os.makedirs(self.params['data_path'])
+        self.seed = seed
 
-    if not info:
-        # Check if the dataset is available in the available_datasets dict
-        if self.params['dataset'].lower() in available_datasets.keys():
-          dataset_family = "local"
-          dataset_info = available_datasets[self.params['dataset'].lower()]
-          mean = dataset_info['mean']
-          std = dataset_info['std']
-          channels, height, width = dataset_info['shape']
-          self.num_classes = dataset_info['num_classes']
-          self.task = dataset_info['task']
-          
-        # check if the dataset is in the torchvision datasets and compute the parameters
-        elif hasattr(torchvision.datasets, self.params['dataset'].upper()):
-          dataset_family = "pytorch"
-          if util.check_file_exists(os.path.join(self.params['data_path'], 'data_info.txt')):
-            info_dataset = util.load_yaml(os.path.join(self.params['data_path'], 'data_info.txt'))
-            mean = info_dataset['mean']
-            std = info_dataset['std']
-            channels, height, width = info_dataset['shape']
-            self.num_classes = info_dataset['num_classes']
-            self.task = info_dataset['task']
-          else:
-            dataset_class = getattr(torchvision.datasets, self.params['dataset'].upper())
-            dataset_ = dataset_class(self.params['data_path'], download=self.download_status, transform=ToTensor())
-            loader = DataLoader(dataset_, batch_size=len(dataset_), num_workers=0, shuffle=False)
-            data = next(iter(loader))
-            mean = data[0].mean(dim=(0, 2, 3)).tolist()
-            std = data[0].std(dim=(0, 2, 3)).tolist()
-            channels, height, width = dataset_[0][0].shape
-            self.num_classes = len(dataset_.classes)
-            self.task = 'classification'
-          
-        elif self.params['dataset'].lower() in INFO and hasattr(medmnist, INFO[self.params['dataset'].lower()]['python_class']):
-          dataset_family = "medmnist"
-          general_info = INFO[self.params['dataset'].lower()]
-          if util.check_file_exists(os.path.join(self.params['data_path'], 'data_info.txt')):
-            info_dataset = util.load_yaml(os.path.join(self.params['data_path'], 'data_info.txt'))
-            mean = info_dataset['mean']
-            std = info_dataset['std']
-            channels, height, width = info_dataset['shape']
-            self.num_classes = info_dataset['num_classes']
-            self.task = info_dataset['task']
-          else:
-            dataset_class = getattr(medmnist, general_info['python_class'])
-            dataset_ = dataset_class(root=self.params['data_path'], split='train', download=self.download_status, transform=ToTensor(), as_rgb=True)
-            loader = DataLoader(dataset_, batch_size=len(dataset_), num_workers=0, shuffle=False)
-            data = next(iter(loader))
-            mean = data[0].mean(dim=(0, 2, 3)).tolist()
-            std = data[0].std(dim=(0, 2, 3)).tolist()
-            channels, height, width = dataset_[0][0].shape
-            self.num_classes = len(general_info['label'])
-            self.task = general_info['task']
-        else:
-          raise ValueError(f"Dataset class {self.params['dataset']} not found in torchvision.datasets or available_datasets.")
-        
-    else:
-      raise NotImplementedError('Custom dataset is not implemented yet.')             
-    
-    self.info_dict['shape'] = [channels, height, width]  
-    self.info_dict['mean'] = mean
-    self.info_dict['std'] = std
-    self.info_dict['num_classes'] = self.num_classes
-    self.info_dict['task'] = self.task
-    
-    if not util.check_file_exists(os.path.join(self.params['data_path'], 'data_info.txt')):
-      util.create_info_file(out_path=self.params['data_path'], info_dict=self.info_dict)
-    
-    
-    # Define common transformations
-    basic_transform = [ToTensor(), Normalize(mean=mean, std=std)]
-    resize_transform = [Resize((height, width))] + basic_transform
+        # Paths & policy
+        self.data_path = self.params["data_path"]
+        os.makedirs(self.data_path, exist_ok=True)
+        self.download = _coerce_bool(self.params.get("download", True))
 
-    # Set the self.transform
-    self.transform = Compose(resize_transform if 'atleta' in self.params['dataset'].lower() else basic_transform)
+        # Load DatasetSpec strictly from YAML
+        spec_from_yaml = load_dataset_spec(self.params)
+        if spec_from_yaml is None:
+            # load_dataset_spec should not return None given the check above,
+            # but keep a defensive error in case someone overrides it.
+            raise RuntimeError("Failed to load dataset spec from YAML; check your config file.")
 
-    # Check for data augmentation
-    if self.params['data_augmentation']:
-        augmentation_transform = [TrivialAugmentWide(num_magnitude_bins=31)] + basic_transform
+        self.ds_name = spec_from_yaml.name.lower()
 
-        if dataset_family == "medmnist":
-            self.train_transform = Compose(augmentation_transform)
-        else:
-            # Optionally resize for 'atleta' datasets or other datasets
-            if 'atleta' in self.params['dataset'].lower():
-                self.train_transform = Compose([Resize((height, width))] + augmentation_transform)
+        # If stats missing and YAML indicates sampling, compute sampled stats (cap batches)
+        mean, std = spec_from_yaml.mean, spec_from_yaml.std
+        if (mean is None or std is None) and spec_from_yaml.stats_mode == "sample":
+            if spec_from_yaml.family == "torchvision":
+                ds_cls = getattr(torchvision.datasets, self.params["dataset"].upper())
+                tmp_ds = ds_cls(self.data_path, train=True, download=self.download, transform=ToTensor())
+            elif spec_from_yaml.family == "medmnist":
+                if self.ds_name not in INFO or not hasattr(medmnist, INFO[self.ds_name]["python_class"]):
+                    raise ValueError(f"MedMNIST config refers to unknown dataset: {self.ds_name}")
+                med_cls = getattr(medmnist, INFO[self.ds_name]["python_class"])
+                tmp_ds = med_cls(root=self.data_path, split="train", download=self.download, transform=ToTensor(), as_rgb=True)
             else:
-                self.train_transform = Compose(augmentation_transform)
-    else:
-        # Use self.transform if no data augmentation
-        self.train_transform = self.transform
-    
-      
-  def get_loader(self, for_train=True, pin_memory_device="cuda"):
-    """
-    Get data loader for training or validation/testing.
+                raise RuntimeError(f"No mean/std for {spec_from_yaml.name} and stats_mode={spec_from_yaml.stats_mode}")
+            mean, std = _compute_sampled_mean_std(tmp_ds, max_batches=int(self.params.get("stats_max_batches", 10)))
 
-    Parameters:
-      for_train (bool): If True, returns the training and val loader; otherwise, returns the testing loader.
+        # Finalize spec
+        self.num_classes = int(spec_from_yaml.num_classes)
+        channels, height, width = spec_from_yaml.shape
+        self.spec = DatasetSpec(
+            name=spec_from_yaml.name,
+            family=spec_from_yaml.family,
+            shape=(int(channels), int(height), int(width)),
+            num_classes=self.num_classes,
+            mean=mean,
+            std=std,
+            task=spec_from_yaml.task,
+            stats_mode="known",  # finalized now
+        )
 
-    Returns:
-      DataLoader: PyTorch DataLoader.
-    """
-    # create the dataset
-    if hasattr(torchvision.datasets, self.params['dataset'].upper()):
-      dataset_class = getattr(torchvision.datasets, self.params['dataset'].upper())
-      full_dataset = dataset_class(self.params['data_path'], train=True, download=self.download_status)
-      test_dataset = dataset_class(self.params['data_path'], train=False, download=self.download_status,transform=self.transform)
-      self.download_status = not os.path.exists(self.params['data_path'])
-      
-    elif self.params['dataset'].lower() in INFO and hasattr(medmnist, INFO[self.params['dataset'].lower()]['python_class']):
-      dataset_class = getattr(medmnist, INFO[self.params['dataset'].lower()]['python_class'])
-      train_dataset = dataset_class(root=self.params['data_path'], split='train', download=self.download_status, transform=self.train_transform, as_rgb=True)
-      valid_dataset = dataset_class(root=self.params['data_path'], split='val', download=self.download_status, transform=self.transform, as_rgb=True)
-      test_dataset = dataset_class(root=self.params['data_path'], split='test', download=self.download_status, transform=self.transform, as_rgb=True)
-      self.download_status = not os.path.exists(self.params['data_path'])
-    elif self.params['dataset'].lower() == 'atleta_axial' or self.params['dataset'].lower() == 'atleta_coronal':
-      try:
-        train_dataset =torchvision.datasets.ImageFolder(root=f"{self.params['data_path']}/train", transform=self.train_transform)
-        valid_dataset = torchvision.datasets.ImageFolder(root=f"{self.params['data_path']}/val", transform=self.transform)
-        test_dataset = torchvision.datasets.ImageFolder(root=f"{self.params['data_path']}/test", transform=self.transform)
-      except:
-        raise ValueError(f"Dataset is not available in the path {self.params['data_path']}")
-    else:
-      raise NotImplementedError('Custom dataset is not implemented yet.')
-    
-    drop_last = True if self.params['dataset'].lower() == 'organamnist' else False
-        
-    if not for_train:
-      test_loader = DataLoader(
-        test_dataset,
-        batch_size=self.params['eval_batch_size'],
-        num_workers=self.params['num_workers'],
-        shuffle=False,
-        pin_memory=True,
-        pin_memory_device=pin_memory_device)
-      return test_loader
-    
-    if hasattr(torchvision.datasets, self.params['dataset'].upper()):
-      val_split = 1 - self.train_split
-      # Get the labels and create StratifiedShuffleSplit
-      labels = full_dataset.targets
-      stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=val_split)
+        # Transforms (centralized)
+        self.train_transform, self.eval_transform = build_transforms(
+            self.spec, _coerce_bool(self.params.get("data_augmentation", False))
+        )
 
-      # Get the training and validation indices
-      train_idx, val_idx = next(stratified_split.split(labels, labels))
-      
-      num_train = len(full_dataset)
-      
-      # check if limit_data is boolean, if is str convert to boolean
-      if isinstance(self.params['limit_data'], str):
-        if self.params['limit_data'].lower() == 'true':
-          self.params['limit_data'] = True
-        elif self.params['limit_data'].lower() == 'false':
-          self.params['limit_data'] = False
-        else:
-          raise ValueError(f"Invalid value for limit_data: {self.params['limit_data']}. It should be either 'true' or 'false'.")
+        # Persist info once
+        self.info_dict = {
+            "dataset": self.params["dataset"],
+            "seed": self.seed,
+            "shape": [channels, height, width],
+            "mean": mean,
+            "std": std,
+            "num_classes": self.num_classes,
+            "task": self.spec.task,
+        }
+        info_path = os.path.join(self.data_path, "data_info.txt")
+        if not util.check_file_exists(info_path):
+            util.create_info_file(out_path=self.data_path, info_dict=self.info_dict)
 
-      if self.params['limit_data'] and self.params['limit_data_value'] < num_train:
-        train_samples = (int(self.train_split * self.params['limit_data_value'])) 
-        val_samples = (int(self.params['limit_data_value'] - train_samples))
-        
-        train_count_per_class = train_samples // self.num_classes
-        val_count_per_class = val_samples // self.num_classes
-        
-        train_indices = []
-        val_indices = []
-        for label in set(labels):
-          label_indices = [i for i in train_idx if labels[i] == label]
-          train_indices.extend(label_indices[:train_count_per_class])
+        # Build datasets ONCE via factory (split + optional limit are handled inside)
+        self.train_dataset, self.val_dataset, self.test_dataset, self._train_labels, self._val_labels = build_datasets(
+            spec=self.spec,
+            params=self.params,
+            train_transform=self.train_transform,
+            eval_transform=self.eval_transform,
+            data_path=self.data_path,
+            download=self.download,
+            train_split=float(self.params.get("train_split", self.train_split)),
+            split_seed=int(self.params.get("split_seed", self.seed)),
+        )
 
-          label_indices = [i for i in val_idx if labels[i] == label]
-          val_indices.extend(label_indices[:val_count_per_class])
-        
-        train_subset = Subset(full_dataset, train_indices)
-        valid_subset = Subset(full_dataset, val_indices)
+    def get_loader(self, for_train: bool = True, pin_memory_device: Optional[str] = "cuda"):
+        """
+        Get data loader for training or validation/testing.
 
-      else:
-        train_subset = Subset(full_dataset, train_idx)
-        valid_subset = Subset(full_dataset, val_idx)
-      
-      # Apply transformations to the datasets
-      train_dataset = MyDataset(train_subset, transform=self.train_transform)
-      valid_dataset = MyDataset(valid_subset, transform=self.transform)
-      
-    elif self.params['dataset'].lower() in INFO and hasattr(medmnist, INFO[self.params['dataset'].lower()]['python_class']):
-      
-      num_train = len(train_dataset)
-      num_val = len(valid_dataset)
-      train_labels = train_dataset.labels.squeeze().tolist()
-      val_labels = valid_dataset.labels.squeeze().tolist()
-      
-      train_samples = (int(self.train_split * self.params['limit_data_value'])) 
-      val_samples = (int(self.params['limit_data_value'] - train_samples))
-      
-      # split the dataset into train and validation
-      if self.params['limit_data'] and train_samples < num_train and val_samples < num_val:
-        
-        train_count_per_class = train_samples // self.num_classes
-        val_count_per_class = val_samples // self.num_classes
-        train_indices = []
-        val_indices = []
+        Parameters:
+          for_train (bool): If True, returns (train_loader, val_loader); otherwise, returns test_loader.
+        """
+        # Deterministic DataLoader shuffling
+        g = _make_gen(int(self.params.get("loader_seed", self.seed)))
+        common = dict(num_workers=int(self.params.get("num_workers", 4)), pin_memory=True, generator=g)
+        if _supports_pin_memory_device() and pin_memory_device:
+            common["pin_memory_device"] = pin_memory_device
 
-        # Iterate through each class and pick 1000 samples
-        for label in set(train_labels):
-            label_indices = [i for i, l in enumerate(train_labels) if l == label]
-            train_indices.extend(label_indices[:train_count_per_class])
+        drop_last = True if self.params["dataset"].lower() == "organamnist" else False
 
-        for label in set(val_labels):
-            label_indices = [i for i, l in enumerate(val_labels) if l == label]
-            val_indices.extend(label_indices[:val_count_per_class])
-      
-        train_dataset = Subset(train_dataset, train_indices)
-        valid_dataset = Subset(valid_dataset, val_indices)
-    elif 'atleta' in self.params['dataset'].lower():
-      pass
-    else:
-      raise NotImplementedError('Custom dataset is not implemented yet.')
+        if not for_train:
+            test_loader = DataLoader(
+                self.test_dataset,
+                batch_size=int(self.params["eval_batch_size"]),
+                shuffle=False,
+                drop_last=False,
+                **common,
+            )
+            self.info_dict["test_records"] = len(self.test_dataset)
+            util.create_info_file(out_path=self.data_path, info_dict=self.info_dict)
+            return test_loader
 
-    train_loader = DataLoader(
-      train_dataset,
-      batch_size=self.params['batch_size'],
-      num_workers=self.params['num_workers'],
-      shuffle=True,
-      drop_last=drop_last,
-      pin_memory=True, 
-      pin_memory_device=pin_memory_device)
+        train_loader = DataLoader(
+            self.train_dataset,
+            batch_size=int(self.params["batch_size"]),
+            shuffle=True,
+            drop_last=drop_last,
+            **common,
+        )
 
-    val_loader = DataLoader(
-      valid_dataset,
-      batch_size=self.params['eval_batch_size'],
-      num_workers=self.params['num_workers'],
-      shuffle=False,
-      pin_memory=True, 
-      pin_memory_device=pin_memory_device)
-  
-    self.info_dict['train_records'] = len(train_dataset)
-    self.info_dict['valid_records'] = len(valid_dataset)
-    self.info_dict['test_records'] = len(test_dataset)
-            
-    util.create_info_file(out_path=self.params['data_path'], info_dict=self.info_dict)
-    
-    return train_loader, val_loader
+        val_loader = DataLoader(
+            self.val_dataset,
+            batch_size=int(self.params["eval_batch_size"]),
+            shuffle=False,
+            drop_last=False,
+            **common,
+        )
+
+        # Update counts & persist
+        self.info_dict["train_records"] = len(self.train_dataset)
+        self.info_dict["valid_records"] = len(self.val_dataset)
+        self.info_dict["test_records"] = len(self.test_dataset)
+        util.create_info_file(out_path=self.data_path, info_dict=self.info_dict)
+
+        return train_loader, val_loader
