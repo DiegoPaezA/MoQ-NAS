@@ -66,16 +66,24 @@ train:
 
     # Dataset
     dataset: Cifar10
-    data_augmentation: False
-    subtract_mean: True
-    limit_data: True
+    config_path_dataset: configs/cifar10.yaml   # <— updated key (points to your YAML)
+    data_path: /path/to/datasets/cifar10        # set this to your local path
+    train_split: 0.9
+    split_seed: 2025                             # controls split & balanced limiting
+    loader_seed: 777                             # controls DataLoader shuffling
+    download: true                               # safe even if files already exist
+    stats_max_batches: 10                        # used only if YAML sets stats_mode: sample
+
+    data_augmentation: false
+    subtract_mean: true
+    limit_data: true
     limit_data_value: 10000
     num_workers: 4
 
-    # threads
+    # Tensorflow
     save_checkpoints_epochs: 5
     save_summary_epochs: 0.25
-    threads: 20         # Parallel threads for evolution
+    threads: 20
 
     # penalization parameters - scalarized fitness
     max_params: 114090 # 1.9M
