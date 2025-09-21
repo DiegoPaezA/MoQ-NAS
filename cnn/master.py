@@ -25,25 +25,75 @@ LOGGER = init_log("INFO", name=__name__, file_path=log_file)
 
 def create_optimizer(net, params):
     """
-    Select and create an optimizer based on the configuration options in params.
-
-    Args:
-        net (nn.Module): The neural network model.
-        params (Dict[str, Any]): Configuration dictionary containing keys such as 'optimizer' 
-            and 'learning_rate'.
-
-    Returns:
-        torch.optim.Optimizer: An instance of the selected optimizer.
+    Backbone-aware optimizer creator with sensible defaults.
+    - Works even if params lacks 'learning_rate' and 'weight_decay'
+    - Uses discriminative LRs (smaller for backbone, larger for head) when network_config == 'backbone'
     """
-    if params['optimizer'] == 'RMSProp':
-        optimizer = torch.optim.RMSprop(net.parameters())
-    elif params['optimizer'] == 'Adam':
-        optimizer = torch.optim.Adam(net.parameters())
-    elif params['optimizer'] == 'AdamW':
-        optimizer = torch.optim.AdamW(net.parameters())
+    # Normalize optimizer name and provide defaults per optimizer
+    opt_name = str(params.get('optimizer', 'AdamW')).lower()
+    default_lrs = {
+        'adamw':  1e-3,
+        'adam':   1e-3,
+        'sgd':    1e-2,
+        'rmsprop':1e-2,
+    }
+    base_lr      = float(params.get('learning_rate', default_lrs.get(opt_name, 1e-3)))
+    weight_decay = float(params.get('weight_decay', 0.0))
+
+    # Detect backbone config
+    is_backbone_cfg = (
+        str(params.get('network_config', '')).lower() == 'backbone'
+        and hasattr(net, 'backbone') and (net.backbone is not None)
+    )
+
+    if is_backbone_cfg:
+        # Split parameter groups; respect requires_grad (frozen backbone -> empty group)
+        backbone_params = [p for p in net.backbone.parameters() if p.requires_grad]
+        head_params     = [p for n, p in net.named_parameters()
+                        if not n.startswith('backbone') and p.requires_grad]
+
+        # Discriminative learning rates with safe defaults
+        bb_lr   = float(params.get('backbone_lr', max(1e-5, base_lr / 3.0)))
+        head_lr = float(params.get('head_lr', base_lr))
+
+        param_groups = []
+        if backbone_params:
+            param_groups.append({"params": backbone_params, "lr": bb_lr})
+        if head_params:
+            param_groups.append({"params": head_params, "lr": head_lr})
+
+        # If somehow everything is frozen, fall back to any trainable params
+        if not param_groups:
+            param_groups = [{"params": [p for p in net.parameters() if p.requires_grad], "lr": base_lr}]
+
+        # Build optimizer
+        if opt_name == 'adamw':
+            return torch.optim.AdamW(param_groups, weight_decay=weight_decay)
+        elif opt_name == 'adam':
+            return torch.optim.Adam(param_groups, weight_decay=weight_decay)
+        elif opt_name == 'sgd':
+            momentum = float(params.get('momentum', 0.9))
+            nesterov = bool(params.get('nesterov', True))
+            return torch.optim.SGD(param_groups, momentum=momentum, nesterov=nesterov, weight_decay=weight_decay)
+        elif opt_name == 'rmsprop':
+            return torch.optim.RMSprop(param_groups, weight_decay=weight_decay)
+        else:
+            raise ValueError(f"Unsupported optimizer: {params.get('optimizer')}")
+
+    # ---- Non-backbone fallback: single param group, safe defaults ----
+    if opt_name == 'adamw':
+        return torch.optim.AdamW(net.parameters(), lr=base_lr, weight_decay=weight_decay)
+    elif opt_name == 'adam':
+        return torch.optim.Adam(net.parameters(), lr=base_lr, weight_decay=weight_decay)
+    elif opt_name == 'sgd':
+        momentum = float(params.get('momentum', 0.9))
+        nesterov = bool(params.get('nesterov', True))
+        return torch.optim.SGD(net.parameters(), lr=base_lr, momentum=momentum, nesterov=nesterov, weight_decay=weight_decay)
+    elif opt_name == 'rmsprop':
+        return torch.optim.RMSprop(net.parameters(), lr=base_lr, weight_decay=weight_decay)
     else:
-        optimizer = torch.optim.SGD(net.parameters(), lr=params['learning_rate'])
-    return optimizer
+        raise ValueError(f"Unsupported optimizer: {params.get('optimizer')}")
+
 
 def ensure_model_path(params):
     """
@@ -126,11 +176,17 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
                                         train_loader, val_loader, test_loader, params)
     else:
         # For evolution or retrain phases, use the generic BaseTrainer
+        backbone_trainable = True if params.get('phase') == 'retrain' else False
         net = model.NetworkGraph(num_classes=params['num_classes'],
                                 input_shape=params['input_shape'],
                                 network_config=params['network_config'],
                                 backbone_name=params['backbone_name'],
-                                backbone_percentage=params['backbone_percentage'])
+                                backbone_percentage=params['backbone_percentage'],
+                                backbone_trainable=backbone_trainable)
+        
+        if params.get('network_config') == 'backbone':
+            net.auto_resize_backbone = False  # disable auto upscaling for ablations/strict 32x32
+
         # Create functions using fn_dict and net_list from params
         filtered_dict = {key: val for key, val in params['fn_dict'].items() if key in params['net_list']}
         has_cbam_key = any(key.startswith('cbam') for key in filtered_dict)
