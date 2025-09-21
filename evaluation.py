@@ -1,9 +1,11 @@
+# -*- coding: utf-8 -*-
 """ Copyright (c) 2023, Diego Páez
     * Licensed under The MIT License [see LICENSE for details]
 
     - Distribute and Evaluate the population using multiple processes.
 """
 
+import os
 import torch
 import time
 import numpy as np
@@ -11,6 +13,7 @@ from cnn import input, master
 from typing import Dict, Any, List
 import torch.multiprocessing as mp
 from util import init_log, setup_dataset_info
+
 
 class EvalPopulation(object):
     """
@@ -61,7 +64,6 @@ class EvalPopulation(object):
         log_level : str, optional
             The logging level for the internal logger (default is 'INFO').
         """
-        
         self.fn_dict = fn_dict
         self.logger = init_log(log_level, name=__name__)
         self.gpus = [f'cuda:{i}' for i in range(torch.cuda.device_count())]
@@ -86,7 +88,7 @@ class EvalPopulation(object):
             self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
         self.metric_names = self.train_params['objectives']
         
-        #mp.set_start_method('spawn') # This is necessary for the multiprocessing to work on Windows
+        # mp.set_start_method('spawn')  # <- Mantener comentado en Linux para alto rendimiento con 'fork'
         self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
         
     def __call__(self, decoded_params: list, decoded_nets: list, generation: int):
@@ -130,9 +132,11 @@ class EvalPopulation(object):
         self.logger.info(f"Starting the Generation {generation} with {pop_size} individuals")
         evol_time_start = time.perf_counter()
 
-        # Create a process for each thread           
+        # Create a process for each thread
         for thread_id in range(self.train_params['threads']):
             batch_thread = [x for x in individual_per_thread if x[1] == thread_id]
+            if not batch_thread:
+                continue
             gpu_device = self.gpus[thread_id % len(self.gpus)]
             p = mp.Process(
                 target=self.run_individuals,
@@ -157,10 +161,22 @@ class EvalPopulation(object):
 
         return results
             
-            
     def run_individuals(self, generation, train_params, fn_dict, individuals_thread, gpu_device, queue: mp.Queue):
+        # --- Cambios mínimos para rendimiento y correctitud por proceso ---
+        # 1) Fijar dispositivo CUDA explícito por proceso (evita 'current_device' heredado)
+        if isinstance(gpu_device, str) and gpu_device.startswith("cuda"):
+            torch.cuda.set_device(int(gpu_device.split(":")[1]))
+            torch.backends.cudnn.benchmark = True  # acelera convs con tamaños fijos
+
+        # 2) Evitar sobre-suscripción de hilos BLAS/CPU dentro de cada proceso
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("MKL_NUM_THREADS", "1")
+        torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
+
+        # 3) Reutilizar DataLoaders por proceso (ya lo hacías) — una sola construcción
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
-        for original_idx, thread_id, decoded_net, decoded_params  in individuals_thread:
+
+        for original_idx, thread_id, decoded_net, decoded_params in individuals_thread:
             id_str = f"{generation}_{decoded_params.get('candidate_id', original_idx)}"
             try:
                 results_dict = master.fitness(id_str,
@@ -186,5 +202,5 @@ class EvalPopulation(object):
                 self.logger.warning(f"Thread {thread_id} – candidate {original_idx}: No results returned.")
                 continue
             else:
-                metrics_log = ", ".join(f"{k}={results_dict.get(k, None):.2f}" for k in self.metric_names)
+                metrics_log = ", ".join(f"{k}={results_dict.get(k, 0.0):.2f}" for k in self.metric_names)
                 self.logger.info(f"Thread {thread_id} – candidate {original_idx}: {metrics_log}")
