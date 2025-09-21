@@ -188,7 +188,7 @@ class MOQNAS(QNAS):
 
          # load config objective sense
         try:
-            with open("config_objectives/cfg_obj.json", "r") as f:
+            with open("configs/cfg_obj.json", "r") as f:
                 self.objectives_info = json.load(f)["objectives"]
         except Exception as e:
             print(f"Error loading objectives config: {e}")
