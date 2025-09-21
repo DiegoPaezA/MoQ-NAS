@@ -110,13 +110,13 @@ class QNAS(object):
             self.evaluated = {}
             self.eval_history = defaultdict(list)
 
-        self.history_database_path = os.path.join('network_history', "history_db.json")
-        os.makedirs(os.path.dirname(self.history_database_path), exist_ok=True)
-        try:
-            self.history_database = load_history_from_json(self.history_database_path)
-        except Exception:
-            self.logger.info("Could not load history database, creating a new one.")
-            self.history_database = {}
+        # self.history_database_path = os.path.join('network_history', "history_db.json")
+        # os.makedirs(os.path.dirname(self.history_database_path), exist_ok=True)
+        # try:
+        #     self.history_database = load_history_from_json(self.history_database_path)
+        # except Exception:
+        #     self.logger.info("Could not load history database, creating a new one.")
+        #     self.history_database = {}
 
     def initialize_qnas(self, num_quantum_ind, repetition, max_generations, update_quantum_gen,
                         update_quantum_rate, replace_method, params_ranges, crossover_rate,
