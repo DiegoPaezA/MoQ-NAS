@@ -585,49 +585,66 @@ def download_dataset(params: dict):
 
 dataset_cache = {}
 
+def _validate_dataset_info(dataset_info: dict, dataset_name: str):
+    if not isinstance(dataset_info, dict):
+        raise ValueError(f"Dataset info for '{dataset_name}' must be a dict, got {type(dataset_info)}")
+    missing = [k for k in ("num_classes", "task", "shape") if k not in dataset_info]
+    if missing:
+        raise KeyError(f"Dataset info for '{dataset_name}' missing keys: {missing}")
+    shape = dataset_info["shape"]
+    if not (isinstance(shape, (list, tuple)) and len(shape) == 3):
+        raise ValueError(f"'shape' must be [C, H, W] for '{dataset_name}', got: {shape}")
+
 def setup_dataset_info(params):
     """
-    Update the configuration parameters with dataset-specific information.
-    If the dataset is available in input.available_datasets, use that information;
-    otherwise, load the dataset info from a YAML file.
+    Update 'params' with dataset-specific information, prioritizing YAML configs.
 
-    Args:
-        params (Dict[str, Any]): Configuration dictionary containing keys 'dataset', 
-            'data_path', and 'batch_size'.
+    Expects in params:
+      - 'dataset' (str)
+      - 'batch_size' (int)
+      - 'config_path_dataset' (str) -> preferred YAML path, e.g. 'configs/cifar10.yaml'
+        OR
+      - 'data_path' (str) with an existing 'data_info.txt' (written by the loader)
 
-    Returns:
-        Dict[str, Any]: Updated configuration dictionary with 'num_classes', 'task',
-                        and 'input_shape' set.
+    Sets:
+      - 'num_classes' (int)
+      - 'task' (str)
+      - 'input_shape' ([B, C, H, W])
     """
-    dataset_name = params['dataset'].lower()
-    
-    if dataset_name in input.available_datasets:
-        dataset_info = input.available_datasets[dataset_name]
+    if "dataset" not in params:
+        raise KeyError("params['dataset'] is required")
+    if "batch_size" not in params:
+        raise KeyError("params['batch_size'] is required")
+
+    dataset_name = str(params["dataset"]).lower()
+
+    # Use cache unless the caller explicitly asks to refresh
+    if dataset_name in dataset_cache and not params.get("force_reload_dataset_info", False):
+        dataset_info = dataset_cache[dataset_name]
     else:
-        # Check if the dataset info is already cached
-        if dataset_name in dataset_cache:
-            print(f"Loading dataset info for {dataset_name} from cache.")
-            dataset_info = dataset_cache[dataset_name]
+        # Prefer YAML config
+        cfg_path = params.get("config_path_dataset")
+        if cfg_path and os.path.isfile(cfg_path):
+            dataset_info = load_yaml(cfg_path)
         else:
-            print(f"Loading dataset info for {dataset_name} from YAML...")
-            # Load the dataset info from the YAML file
-            dataset_info = load_yaml(os.path.join(params['data_path'], 'data_info.txt'))
+            # Fallback to info file written by the loader
+            data_info_path = os.path.join(params.get("data_path", ""), "data_info.txt")
+            if not os.path.isfile(data_info_path):
+                raise FileNotFoundError(
+                    "Could not find dataset YAML at params['config_path_dataset'] "
+                    "and fallback 'data_info.txt' does not exist at: "
+                    f"{data_info_path}"
+                )
+            dataset_info = load_yaml(data_info_path)
 
-            # If the dataset info is valid, cache it
-            if dataset_info:
-                dataset_cache[dataset_name] = dataset_info
-            else:
-                # Handle the case where loading the dataset info failed
-                raise ValueError(f"Failed to load dataset info for {dataset_name}. Make sure the dataset exists or the YAML file is correct.")
-    
+        _validate_dataset_info(dataset_info, dataset_name)
+        dataset_cache[dataset_name] = dataset_info
 
-    # Check if dataset_info is None
-    if dataset_info is None:
-        raise ValueError(f"Failed to load dataset info for {dataset_name}. Make sure the dataset exists or the YAML file is correct.")
-    
-    params['num_classes'] = dataset_info['num_classes']
-    params['task'] = dataset_info['task']
-    params['input_shape'] = [params['batch_size']] + dataset_info['shape']
+    # Populate params
+    params["num_classes"] = int(dataset_info["num_classes"])
+    params["task"] = str(dataset_info["task"])
+    c, h, w = [int(x) for x in dataset_info["shape"]]
+    params["input_shape"] = [int(params["batch_size"]), c, h, w]
     return params
 
 def get_gpu_memory():
