@@ -7,16 +7,24 @@ data_path="${dataset}_data"
 log_level="INFO"
 network_config="default"
 backbone_name="resnet18"
-use_cache=false  # Use cached evaluations to speed up runs
-early_stopping=false
-en_pop_crossover=true
-elite_mode="bootstrap_k" # "single" | "global_k" | "bootstrap_k" | "old"
-
 dataset_sample_size=10000
 
-configs=("config5.txt")
-exps=("exp12")
-cuda_devices=("0")
+# --- Evolution Toggles ---
+use_cache=false          # Use cached evaluations to speed up runs
+early_stopping=false
+en_pop_crossover=true
+elite_mode="global_k"    # "single" | "global_k" | "bootstrap_k" | "old"
+
+# --- New Network Architecture Rule Toggles ---
+# These are enabled by default. Set to 'false' to add the corresponding '--no-...' flag.
+truncate_after_noop=false
+avoid_consecutive_pool=true
+enforce_noop_in_update=true # avoid no-op in the min_active_len (default 5) update
+
+# --- Experiment Setup ---
+configs=("config6.txt")
+exps=("exp18")
+cuda_devices=("0,1")
 
 # Loop over the length of the configs array
 for ((j=0; j<${#configs[@]}; j++)); do
@@ -26,7 +34,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
     echo "Running evolution experiment with $config"
 
-    for ((i=1; i<=1; i++)); do # Change the range to the number of repeats
+    for ((i=1; i<=3; i++)); do # Change the range to the number of repeats
         exp_path="${exp_path_base}/${exp}_repeat_$i"
 
         CUDA_VISIBLE_DEVICES="$cuda_device" python run_evolution.py \
@@ -36,12 +44,15 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --dataset "$dataset" \
             --limit_data_value "$dataset_sample_size" \
             --fitness_metric "$fitness_metric" \
-            $($early_stopping && echo "--early_stopping")\
             --network_config "$network_config" \
             --backbone_name "$backbone_name" \
-            $($en_pop_crossover && echo "--en_pop_crossover")\
-            $($use_cache && echo "--use_cache")\
             --elite_mode "$elite_mode" \
+            $($early_stopping && echo "--early_stopping") \
+            $($en_pop_crossover && echo "--en_pop_crossover") \
+            $($use_cache && echo "--use_cache") \
+            $($truncate_after_noop && echo "--no-truncate-after-noop") \
+            $($avoid_consecutive_pool && echo "--no-avoid-consecutive-pool") \
+            $($enforce_noop_in_update && echo "--no-enforce-noop-in-update") \
             --log_level "$log_level"
     done
 done
