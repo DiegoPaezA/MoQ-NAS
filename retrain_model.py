@@ -6,10 +6,11 @@
 
 import argparse
 import os
-import qnas_config as cfg
-from util import check_files, init_log, save_results_file
-from cnn import input, master
 import time
+
+from core import config as cfg
+from utils.helpers import check_files, init_log, save_results_file
+from core.cnn import input, master
 
 def main(**args):
 

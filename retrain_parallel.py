@@ -7,8 +7,8 @@ import torch
 import traceback
 from concurrent.futures import ProcessPoolExecutor
 
-from cnn import input, master
-from util import load_log_params_evolution, init_log, save_results_file
+from core.cnn import input, master
+from utils.helpers import load_log_params_evolution, init_log, save_results_file
 
 
 def parse_pareto_ids(exp_path: str, top_n: int | None = None, sort_by: str | None = None):

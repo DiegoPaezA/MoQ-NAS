@@ -1,16 +1,11 @@
-import argparse
+import sys
 import os
+import argparse
 
-import nsga2
-import qnas_config as cfg
-import evaluation
-from util import check_files, init_log, download_dataset
-
-# Try to import NSGA-III (optional). If missing and user requests it, we raise later.
-try:
-    import nsga3  # make sure nsga3.py is placed next to nsga2.py
-except Exception:
-    nsga3 = None
+from algorithms.ga import nsga2, nsga3
+from core import config as cfg
+from core import evaluation
+from utils.helpers import check_files, init_log, download_dataset
 
 
 def main(**args):
