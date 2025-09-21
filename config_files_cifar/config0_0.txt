@@ -22,6 +22,16 @@ QNAS:
     rank_weighting: True
     initial_prob_distribution: from_config # from_config | uniform
 
+    # --- Network Architecture Rules ---
+    terminal_op_name: "no_op"
+    pool_op_name: "pool"
+    min_active_len: 5
+    truncate_after_noop: true
+    avoid_consecutive_pool: true
+    enforce_noop_in_update: true
+    noop_max_prob: 0.9
+    noop_ramp_cap: true
+
     params_ranges:
         decay: 0.9
         learning_rate: 0.001

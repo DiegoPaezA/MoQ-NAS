@@ -9,12 +9,28 @@ QNAS:
     repetition: 4
     replace_method: best
     update_quantum_gen: 5
-    update_quantum_rate: 0.1
+    update_quantum_rate: 0.2
     save_data_freq: 10
     crossover_frequency: 5
     pop_crossover_rate: 0.4 # offspring replacement proportion in the population
     pop_crossover_method: hux # hux, uniform
     patience: 60
+    elite_mode: bootstrap_k # "single" | "global_k" | "bootstrap_k" | "old"
+    k_elites: 5
+    pool_factor: 3
+    ema_beta: 0.7
+    rank_weighting: True
+    initial_prob_distribution: from_config # from_config | uniform
+
+    # --- Network Architecture Rules ---
+    terminal_op_name: "no_op"
+    pool_op_name: "pool"
+    min_active_len: 5
+    truncate_after_noop: true
+    avoid_consecutive_pool: true
+    enforce_noop_in_update: true
+    noop_max_prob: 0.9
+    noop_ramp_cap: true
 
     params_ranges:
         decay: 0.9
