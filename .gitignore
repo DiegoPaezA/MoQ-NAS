@@ -176,6 +176,7 @@ cython_debug/
 
 
 # Dataset files
+datasets/*
 cifar10_data/
 cifar100_data/
 octmnist_data/
