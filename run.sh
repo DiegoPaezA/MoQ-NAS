@@ -1,5 +1,5 @@
 #!/bin/bash
-dataset="cifar10" # Change this to the dataset you want to run: "pathmnist", "octmnist", "tissuemnist", "organamnist"
+dataset="cifar10" # Change to: "pathmnist", "octmnist", "tissuemnist", "organamnist", etc.
 exp_path_base="experiment_v3_${dataset}"
 config_file="config_files_cifar"
 fitness_metric="best_accuracy"
@@ -9,6 +9,9 @@ network_config="default"
 backbone_name="resnet18"
 dataset_sample_size=10000
 
+# NEW: dataset YAML path (uses the dataset name above)
+config_path_dataset="configs/${dataset}.yaml"
+
 # --- Evolution Toggles ---
 use_cache=false          # Use cached evaluations to speed up runs
 early_stopping=false
@@ -16,15 +19,15 @@ en_pop_crossover=true
 elite_mode="global_k"    # "single" | "global_k" | "bootstrap_k" | "old"
 
 # --- New Network Architecture Rule Toggles ---
-# These are enabled by default. Set to 'false' to add the corresponding '--no-...' flag.
+# Enabled by default. Set to 'false' to add the corresponding '--no-...' flag.
 truncate_after_noop=false
 avoid_consecutive_pool=true
 enforce_noop_in_update=true # avoid no-op in the min_active_len (default 5) update
 
 # --- Experiment Setup ---
-configs=("config6.txt")
-exps=("exp18")
-cuda_devices=("0,1")
+configs=("config5.txt")
+exps=("exp19")
+cuda_devices=("0")
 
 # Loop over the length of the configs array
 for ((j=0; j<${#configs[@]}; j++)); do
@@ -42,6 +45,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
             --config_file "${config_file}/${config}" \
             --data_path "$data_path" \
             --dataset "$dataset" \
+            --config_path_dataset "$config_path_dataset" \
             --limit_data_value "$dataset_sample_size" \
             --fitness_metric "$fitness_metric" \
             --network_config "$network_config" \

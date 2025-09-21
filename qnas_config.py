@@ -110,7 +110,14 @@ class ConfigParameters(object):
                     ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
                     ('network_config', str), ('save_checkpoints_epochs', int),
                     ('save_summary_epochs', float), ('multi_objective', bool),
-                    ('objectives', list), ('threads', int)]
+                    ('objectives', list), ('threads', int),
+                    ('train_split', float),         # e.g., 0.9
+                    ('split_seed', int),            # e.g., 2025
+                    ('loader_seed', int),           # e.g., 777
+                    ('download', bool),             # allow dataset download
+                    ('stats_max_batches', int),     # for stats_mode: sample
+                    ('num_workers', int),           # DataLoader workers
+                    ]
         }
 
         for config, items in vars_dict.items():
@@ -151,7 +158,7 @@ class ConfigParameters(object):
         train_override_keys = [
             'fitness_metric', 'optimizer', 'data_augmentation', 'network_config',
             'backbone_name', 'save_checkpoints_epochs', 'dataset', 'data_path',
-            'limit_data_value', 'multi_objective', 'objectives'
+            'limit_data_value', 'multi_objective', 'objectives', 'config_path_dataset'
         ]
         for key in train_override_keys:
             val = self.args.get(key)

@@ -62,6 +62,8 @@ if __name__ == '__main__':
     parser.add_argument('--experiment_path', type=str, required=True,
                         help='Directory where to write logs and model files.')
     parser.add_argument('--data_path', type=str, required=True, help='Path to input data.')
+    parser.add_argument('--config_path_dataset', type=str, required=True,
+                        help='Path to dataset config file (YAML).')
     parser.add_argument('--dataset', type=str, required=True,  help='Dataset name.', 
                         choices=['cifar10', 'cifar100', 'pathmnist', 'octmnist', 'tissuemnist', 'organamnist', 'organcmnist', 'atleta_axial', 'atleta_coronal'])
     parser.add_argument('--config_file', type=str, required=True,
