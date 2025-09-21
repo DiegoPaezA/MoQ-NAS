@@ -314,11 +314,16 @@ class BaseTrainer:
             torch.nn.Module: The reinitialized model with weights loaded from the checkpoint.
         """
         # Reinitialize the model and load weights from the best model checkpoint.
+        backbone_trainable = True if self.params.get('phase') == 'retrain' else False
         best_model = model.NetworkGraph(num_classes=self.params["num_classes"],
                                         input_shape=self.params['input_shape'],
                                         network_config=self.params['network_config'],
                                         backbone_name=self.params['backbone_name'],
-                                        backbone_percentage=self.params['backbone_percentage'])
+                                        backbone_percentage=self.params['backbone_percentage'],
+                                        backbone_trainable=backbone_trainable)
+
+        if self.params.get('network_config') == 'backbone':
+                best_model.auto_resize_backbone = False  # disable auto upscaling for ablations/strict 32x32
         
         filtered_dict = {key: item for key, item in self.params['fn_dict'].items() if key in self.params['net_list']}
         best_model.create_functions(fn_dict=filtered_dict, net_list=self.params['net_list'])
@@ -327,6 +332,7 @@ class BaseTrainer:
             _ = best_model(input_random)
         best_model.load_state_dict(torch.load(best_model_path, weights_only=True))
         best_model.to(self.params['device'])
+        best_model.eval()
         return best_model
 
     def _initialize_scheduler(self, max_epochs):

@@ -1017,7 +1017,8 @@ functions_dict = {
 
 class NetworkGraph(nn.Module):
     def __init__(self, num_classes, in_channels=3, input_shape = (1, 3, 32, 32),
-                network_config='default', backbone_name='mobilenet_v3_small', backbone_percentage=0.7, backbone_trainable=False):
+                network_config='default', backbone_name='mobilenet_v3_small', 
+                backbone_percentage=0.7, backbone_trainable=False):
         """
         Initialize NetworkGraph.
         
@@ -1042,6 +1043,14 @@ class NetworkGraph(nn.Module):
         self.fc = None
         self.model = None  # Used in sequential configurations
         self.backbone = None  # For the 'backbone' configuration
+        
+        self.auto_resize_backbone = True
+        _default_backbone_input = {
+            'resnet18': 224,
+            'mobilenet_v3_small': 224,
+            'mobilenet_v3_large': 224,
+        }
+        self.backbone_expected_size = _default_backbone_input.get(self.backbone_name, None)
 
     def create_functions(self, net_list, fn_dict, cbam=False):
         # Define sets for blocks that need special handling.
@@ -1128,8 +1137,16 @@ class NetworkGraph(nn.Module):
                 for param in self.backbone.parameters():
                     param.requires_grad = self.backbone_trainable
                     
+                    if not self.backbone_trainable:
+                        self.backbone.eval()  # no BN running-stat drift during evolution
+                    
                 # Forward a dummy input to determine output channels.
-                dummy_input = torch.zeros(self.input_shape)
+                if self.backbone_expected_size:
+                    b = self.backbone_expected_size
+                    dummy_shape = (1, self.input_shape[1], b, b)
+                else:
+                    dummy_shape = self.input_shape
+                dummy_input = torch.zeros(dummy_shape)
                 with torch.no_grad():
                     backbone_out = self.backbone(dummy_input)
                 self.backbone_out_channels = backbone_out.shape[1]
@@ -1180,8 +1197,15 @@ class NetworkGraph(nn.Module):
             adjusted_features = [F.interpolate(feat, size=(common_h, common_w), mode='bilinear', align_corners=False) for feat in features]
             inputs = torch.cat(adjusted_features, dim=1)
         elif self.network_config == 'backbone':
+            if self.auto_resize_backbone and self.backbone_expected_size is not None:
+                h, w = inputs.shape[-2], inputs.shape[-1]
+                bsz = self.backbone_expected_size
+                if (h != bsz) or (w != bsz):
+                    inputs = F.interpolate(inputs, size=(bsz, bsz), mode='bilinear', align_corners=False)
+
             x = self.backbone(inputs)
-            x = self.model(x)
+            x = self.model(x)                     # your evolved blocks after the backbone
+            x = F.adaptive_avg_pool2d(x, 1)       # decouple head from H×W
             inputs = x
         else:
             raise ValueError(f"Invalid network configuration: {self.network_config}")
