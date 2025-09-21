@@ -8,7 +8,6 @@ from core import config as cfg
 from core import evaluation
 from utils.helpers import check_files, init_log, download_dataset
 
-# Imports actualizados para los motores de algoritmos
 try:
     from algorithms.ga import base_ga as ga
     from algorithms.ga import nsga2, nsga3
@@ -26,16 +25,13 @@ except Exception:
 
 
 def _bootstrap(logger, args) -> Tuple[object, object, str]:
-    """Shared setup for all algorithms: config, dataset, and EvalPopulation wrapper."""
+    """Shared setup for all algorithms: config, dataset, EvalPopulation."""
     if not os.path.exists(args['experiment_path']):
         logger.info(f"Creating {args['experiment_path']} ...")
         os.makedirs(args['experiment_path'])
 
-    # Evolution or continue previous evolution
-    if not args['continue_path']:
-        phase = 'evolution'
-    else:
-        phase = 'continue_evolution'
+    phase = 'evolution' if not args['continue_path'] else 'continue_evolution'
+    if phase == 'continue_evolution':
         logger.info(f"Continue evolution from: {args['continue_path']}. Checking files ...")
         check_files(args['continue_path'])
 
@@ -54,7 +50,6 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     if config.train_spec.get('mixed_precision', False):
         logger.info("Using mixed precision training ...")
 
-    # Download dataset (no-op if already present)
     dataset_status = download_dataset(params=config.train_spec)
     logger.info("Dataset is already downloaded." if dataset_status else "Dataset downloaded successfully.")
 
@@ -68,22 +63,22 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
 
 def main(**args):
     logger = init_log(args['log_level'], name=__name__)
-    config, eval_pop, phase = _bootstrap(logger, args)
+    config, eval_pop, _ = _bootstrap(logger, args)
 
     algo = args.get('algo', 'nsga2').lower()
     logger.info(f"Selected algorithm: {algo}")
 
-    # Fallback fn_list from config when omitted in CLI
+    # If fn_list wasn’t set via CLI, fall back to config
     if args.get('fn_list') is None:
         args['fn_list'] = config.QNAS_spec.get('fn_list')
 
-    engine = None
-    evolve_returns_four: bool = False  # GA returns 4 values; NSGA returns 2
+    evolve_returns_four = False  # GA returns 4 values; others return 2
 
+    # -------- Instantiate the engine --------
     if algo == 'ga':
         if ga is None:
-            raise ImportError("ga.py not found or failed to import.")
-        logger.info("Using plain GA (single-objective).")
+            raise ImportError("algorithms.ga.base_ga not found.")
+        logger.info("Using GA (single-objective).")
         engine = ga.GA(
             eval_pop,
             config.train_spec['experiment_path'],
@@ -93,12 +88,12 @@ def main(**args):
             data_file=config.files_spec['data_file'],
             use_cache=args['use_cache'],
         )
-        evolve_returns_four = True  # (population, fitnesses, best_fitness, best_id)
+        evolve_returns_four = True
 
     elif algo == 'nsga3':
         if nsga3 is None:
-            raise ImportError("nsga3.py not found or failed to import. Place nsga3.py next to nsga2.py.")
-        logger.info("Using NSGA-III (many-objective).")
+            raise ImportError("algorithms.ga.nsga3 not found.")
+        logger.info("Using NSGA-III.")
         engine = nsga3.NSGA3(
             eval_pop,
             config.train_spec['experiment_path'],
@@ -112,8 +107,8 @@ def main(**args):
 
     elif algo == 'nsga2':
         if nsga2 is None:
-            raise ImportError("nsga2.py not found or failed to import.")
-        logger.info("Using NSGA-II (multi-objective).")
+            raise ImportError("algorithms.ga.nsga2 not found.")
+        logger.info("Using NSGA-II.")
         engine = nsga2.NSGA2(
             eval_func=eval_pop,
             experiment_path=config.train_spec['experiment_path'],
@@ -126,7 +121,7 @@ def main(**args):
 
     elif algo == 'qnas':
         if qnas is None:
-            raise ImportError("QNAS (qnas2.py) not found or failed to import.")
+            raise ImportError("algorithms.qnas.qnas2 not found.")
         logger.info("Using QNAS.")
         engine = qnas.QNAS(
             eval_pop,
@@ -137,10 +132,16 @@ def main(**args):
             data_file=config.files_spec['data_file'],
             use_cache=args['use_cache'],
         )
+        # Special initializer for QNAS
+        engine.initialize_qnas(**config.QNAS_spec)
+        logger.info("Starting QNAS evolution ...")
+        engine.evolve()
+        logger.info("QNAS evolution finished.")
+        return  # QNAS doesn’t return (pop, fits)
 
     elif algo == 'moqnas':
         if MOQNAS is None:
-            raise ImportError("MOQNAS not found or failed to import.")
+            raise ImportError("algorithms.qnas.moqnas.MOQNAS not found.")
         logger.info("Using MO-QNAS.")
         engine = MOQNAS(
             eval_func=eval_pop,
@@ -150,11 +151,17 @@ def main(**args):
             log_level=config.train_spec['log_level'],
             data_file=config.files_spec['data_file'],
         )
+        # Special initializer for MO-QNAS
+        engine.initialize_moqnas(**config.QNAS_spec)
+        logger.info("Starting MO-QNAS evolution ...")
+        engine.evolve()
+        logger.info("MO-QNAS evolution finished.")
+        return
 
     else:
-        raise ValueError(f"Unknown --algo '{algo}'. Choose from: ga, nsga2, nsga3, qnas, moqnas.")
+        raise ValueError("Unknown --algo. Choose from: ga, nsga2, nsga3, qnas, moqnas.")
 
-    # Initialize (shared GA-style initializer across engines)
+    # -------- Shared GA-style init (GA / NSGA-II / NSGA-III) --------
     engine.initialize_ga(
         population_size=args['population_size'],
         num_generations=args['num_generations'],
@@ -168,7 +175,7 @@ def main(**args):
         params_ranges=config.QNAS_spec['params_ranges'],
     )
 
-    # Run
+    # -------- Run evolution --------
     logger.info("Starting evolution ...")
     if evolve_returns_four:
         population, fitnesses, best_fitness, best_id = engine.evolve()
@@ -188,7 +195,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--experiment_path', type=str, required=True,
                         help='Directory where to write logs and model files.')
-    parser.add_argument('--data_path', type=str, required=True, help='Path to input data.')
+    parser.add_argument('--data_path', type=str, required=True,
+                        help='Path to input data.')
     parser.add_argument('--config_path_dataset', type=str, required=True,
                         help='Path to dataset config file (YAML).')
     parser.add_argument('--dataset', type=str, required=True,
@@ -223,13 +231,12 @@ if __name__ == '__main__':
                         choices=['ga', 'nsga2', 'nsga3', 'qnas', 'moqnas'],
                         help='Which evolutionary algorithm to run.')
 
-    # GA-style parameters shared by GA / NSGA-II / NSGA-III
+    # GA/NSGA params
     parser.add_argument('--population_size', type=int, default=20)
     parser.add_argument('--num_generations', type=int, default=50)
     parser.add_argument('--max_num_nodes', type=int, default=20)
     parser.add_argument('--fn_list', nargs='+', type=str, default=None,
-                        help='Function (layer/op) names used to decode chromosomes. '
-                            'If omitted, falls back to config.QNAS_spec["fn_list"].')
+                        help='Layer/op names used to decode chromosomes (fallback to config).')
     parser.add_argument('--crossover_rate', type=float, default=0.9)
     parser.add_argument('--mutation_rate', type=float, default=0.05)
     parser.add_argument('--elitism', action='store_true')
@@ -239,7 +246,7 @@ if __name__ == '__main__':
     parser.add_argument('--ref_divisions', type=int, default=None,
                         help='NSGA-III lattice divisions p (auto if None).')
 
-    # QNAS / MOQNAS extras you might rely on elsewhere (leave present for compatibility)
+    # QNAS/MO-QNAS extras (kept for compatibility)
     parser.add_argument('--elite_mode', type=str, default='global_k',
                         choices=['single', 'global_k', 'bootstrap_k', 'old', 'moead_topk'])
     parser.add_argument('--ref_dir_method', type=str, default='das-dennis',
