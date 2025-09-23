@@ -92,6 +92,7 @@ train:
       - name: Accuracy
       - name: ConfusionMatrix
       - name: HardwareMetrics
+      - name: ValidationLossFitness
       - name: ScalarizedFitness
         params:
           metric_type: loss

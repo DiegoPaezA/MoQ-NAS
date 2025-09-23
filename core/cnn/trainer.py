@@ -313,7 +313,7 @@ class BaseTrainer:
             'cuda_inference_time':   0.0,
             'model_memory_usage':    0.0,
             'total_flops':           0,
-            'fitness_val_loss':      final_output.get('loss', None),
+            'fitness_val_loss':      0.0,
             'scalar_multi_objective': 0.0,
         }
 

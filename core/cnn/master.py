@@ -16,7 +16,7 @@ from . import model, trainer, model_resnet
 from utils.helpers import init_log, setup_dataset_info
 
 from .metrics import Accuracy, ConfusionMatrix, HardwareMetrics, MedMNIST_Metrics
-from .metrics.fitness import ScalarizedFitness
+from .metrics.fitness import ScalarizedFitness, ValidationLossFitness
 # from .metrics.fairness import FairFaceMetrics, FacetMetrics
 
 # Initialize a logger (assumed to be defined in init_log)
@@ -53,6 +53,7 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
         "ConfusionMatrix": ConfusionMatrix,
         "HardwareMetrics": HardwareMetrics,
         "ScalarizedFitness": ScalarizedFitness,
+        "ValidationLossFitness": ValidationLossFitness,
     }
 
     for metric_config in config['metrics']:
