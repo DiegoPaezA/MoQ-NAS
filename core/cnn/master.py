@@ -2,6 +2,8 @@
 * Licensed under the MIT license
 
 - Master module for training and evaluating CNN models.
+- Updated to support the pluggable metrics system by dynamically
+      creating metric objects from the configuration.
 
 """
 import os
@@ -13,14 +15,73 @@ from typing import Dict, List, Union, Any
 from . import model, trainer, model_resnet
 from utils.helpers import init_log, setup_dataset_info
 
+from .metrics import Accuracy, ConfusionMatrix, HardwareMetrics, MedMNIST_Metrics
+from .metrics.fitness import ScalarizedFitness
+# from .metrics.fairness import FairFaceMetrics, FacetMetrics
+
 # Initialize a logger (assumed to be defined in init_log)
-current_directory = os.path.dirname(os.path.dirname(__file__))
-log_directory = os.path.join(current_directory, 'logs')
+project_root = os.getcwd() 
+log_directory = os.path.join(project_root, 'logs')
 if not os.path.exists(log_directory):
     os.makedirs(log_directory)
 
 log_file = os.path.join(log_directory, 'master.log')
 LOGGER = init_log("INFO", name=__name__, file_path=log_file)
+
+
+def create_metrics_from_config(config: dict, model_instance, device, input_shape) -> list:
+    """
+    Reads the 'metrics' section from the configuration and creates the
+    corresponding metric class instances.
+
+    Args:
+        config (dict): The 'train_spec' dictionary from the configuration.
+        model_instance (torch.nn.Module): The instantiated model.
+        device (str): The device for computation ('cuda' or 'cpu').
+        input_shape (tuple): The shape of the input tensor (B, C, H, W).
+
+    Returns:
+        list: A list of instantiated metric objects to be passed to the Trainer.
+    """
+    metric_instances = []
+    if 'metrics' not in config:
+        return []
+
+    # Maps metric names from the YAML file to their corresponding Python classes
+    metric_map = {
+        "Accuracy": Accuracy,
+        "ConfusionMatrix": ConfusionMatrix,
+        "HardwareMetrics": HardwareMetrics,
+        "ScalarizedFitness": ScalarizedFitness,
+    }
+
+    for metric_config in config['metrics']:
+        metric_name = metric_config['name']
+        if metric_name in metric_map:
+            MetricClass = metric_map[metric_name]
+            params = metric_config.get('params', {})
+
+            # Automatically inject runtime parameters needed by certain metrics
+            if metric_name == "HardwareMetrics":
+                params['model'] = model_instance
+                params['device'] = device
+                params['input_shape'] = input_shape[1:]  # Pass (C, H, W)
+
+            # (Aquí añadirías la lógica para otras métricas complejas como Fairness)
+            # if metric_name == "FairFaceMetrics":
+            #     params['model'] = model_instance
+            #     params['device'] = device
+            #     # ... y otros params como transforms, csv_path, etc.
+
+            metric_instances.append(MetricClass(**params))
+    
+    # Conditionally add MedMNIST metrics if the dataset requires it
+    if "mnist" in config.get('dataset', '').lower():
+        metric_instances.append(
+            MedMNIST_Metrics(dataset_name=config['dataset'], data_path=config['data_path'])
+        )
+
+    return metric_instances
 
 
 def create_optimizer(net, params):
@@ -197,8 +258,15 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
             _ = net(dummy_input)
         optimizer = create_optimizer(net, params)
         criterion = nn.CrossEntropyLoss()
+        
+        metrics = create_metrics_from_config(
+        config=params,
+        model_instance=net,
+        device=params['device'],
+        input_shape=params['input_shape'])
+
         trainer_instance = trainer.BaseTrainer(net, criterion, optimizer,
-                                    train_loader, val_loader, test_loader, params)
+                                    train_loader, val_loader, test_loader, params, metrics)
     return trainer_instance
 
 def run_training_phase(params: Dict[str, Any],
@@ -251,6 +319,7 @@ def run_training_phase(params: Dict[str, Any],
         
     return results_dict
 
+# --- Entry-point functions ---
 def fitness(id_num: str, params: Dict[str, Any], 
             fn_dict: Dict[str, Any], net_list: List[str],
             decoded_params: Dict[str, Any],

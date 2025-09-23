@@ -17,7 +17,8 @@ class HardwareMetrics(BaseMetric):
             device (str): The device ('cuda' or 'cpu') to run on.
             input_shape (tuple): The shape of a single input sample.
         """
-        # La lógica interna no cambia, solo la importación.
+        self._init_args = locals()
+        del self._init_args['self']
         self.model_metrics = ModelMetrics(model, device)
         self.input_shape = input_shape
         self._results = {}
