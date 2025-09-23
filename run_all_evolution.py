@@ -1,27 +1,15 @@
-import sys
 import os
-
 import argparse
-from typing import Tuple, Optional
+from typing import Tuple
 
 from core import config as cfg
 from core import evaluation
 from utils.helpers import check_files, init_log, download_dataset
 
-try:
-    from algorithms.ga import base_ga as ga
-    from algorithms.ga import nsga2, nsga3
-except Exception:
-    ga = None
-    nsga2 = None
-    nsga3 = None
-
-try:
-    from algorithms.qnas import qnas2 as qnas
-    from algorithms.qnas.moqnas import MOQNAS
-except Exception:
-    qnas = None
-    MOQNAS = None
+from algorithms.qnas.moqnas import MOQNAS
+from algorithms.qnas import qnas2 as qnas
+from algorithms.ga import base_ga as ga
+from algorithms.ga import nsga2, nsga3
 
 
 def _bootstrap(logger, args) -> Tuple[object, object, str]:

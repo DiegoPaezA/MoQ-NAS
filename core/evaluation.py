@@ -73,18 +73,18 @@ class EvalPopulation(object):
             raise KeyError("train_params must contain 'objectives' for evaluation.")
         
         multi_obj    = self.train_params.get('multi_objective', False)
-        main_metric  = self.train_params.get('fitness_metric')
         objectives   = self.train_params.get('objectives', [])
-
-        if not multi_obj:
-            # Reemplaza únicamente el primer objetivo por la métrica principal
-            if isinstance(objectives, list) and objectives:
-                objectives[0] = main_metric
-            else:
-                # Si no había lista o estaba vacía, inicializa con la principal
-                objectives = [main_metric]
-            self.train_params['objectives'] = objectives
-            self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
+        self.train_params['fitness_metric'] = objectives[0] if isinstance(objectives, list) and objectives else 'best_accuracy'
+        
+        # if not multi_obj:
+        #     # Reemplaza únicamente el primer objetivo por la métrica principal
+        #     if isinstance(objectives, list) and objectives:
+        #         objectives[0] = main_metric
+        #     else:
+        #         # Si no había lista o estaba vacía, inicializa con la principal
+        #         objectives = [main_metric]
+        #     self.train_params['objectives'] = objectives
+        #     self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
         self.metric_names = self.train_params['objectives']
         
         # mp.set_start_method('spawn')  # <- Mantener comentado en Linux para alto rendimiento con 'fork'

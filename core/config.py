@@ -93,31 +93,27 @@ class ConfigParameters(object):
 
         vars_dict = {
             'QNAS': [('crossover_rate', float), ('max_generations', int), ('max_num_nodes', int),
-                    ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
-                    ('replace_method', str), ('update_quantum_rate', float), ('update_quantum_gen', int),
-                    ('save_data_freq', int), ('params_ranges', dict), ('patience', int),
-                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', str),
-                    ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
-                    ('ema_beta', float), ('rank_weighting', bool),
-                    ('initial_prob_distribution', str), ('function_dict', dict),
-                    ('terminal_op_name', str), ('pool_op_name', str), ('min_active_len', int),
-                    ('truncate_after_noop', bool), ('avoid_consecutive_pool', bool), ('enforce_noop_in_update', bool),
-                    ('noop_max_prob', float), ('noop_ramp_cap', bool)],
+                     ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
+                     ('replace_method', str), ('update_quantum_rate', float), ('update_quantum_gen', int),
+                     ('save_data_freq', int), ('params_ranges', dict), ('patience', int),
+                     ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', str),
+                     ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
+                     ('ema_beta', float), ('rank_weighting', bool),
+                     ('initial_prob_distribution', str), ('function_dict', dict),
+                     ('terminal_op_name', str), ('pool_op_name', str), ('min_active_len', int),
+                     ('truncate_after_noop', bool), ('avoid_consecutive_pool', bool), ('enforce_noop_in_update', bool),
+                     ('noop_max_prob', float), ('noop_ramp_cap', bool)],
+            
             'train': [('batch_size', int), ('eval_batch_size', int), ('max_epochs', int),
-                    ('epochs_to_eval', int), ('optimizer', str), ('device', str),
-                    ('dataset', str), ('mixed_precision', bool), ('fitness_metric', str),
-                    ('mo_metric_base', str), ('data_augmentation', bool), ('subtract_mean', bool),
-                    ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
-                    ('network_config', str), ('save_checkpoints_epochs', int),
-                    ('save_summary_epochs', float), ('multi_objective', bool),
-                    ('objectives', list), ('threads', int),
-                    ('train_split', float),         # e.g., 0.9
-                    ('split_seed', int),            # e.g., 2025
-                    ('loader_seed', int),           # e.g., 777
-                    ('download', bool),             # allow dataset download
-                    ('stats_max_batches', int),     # for stats_mode: sample
-                    ('num_workers', int),           # DataLoader workers
-                    ]
+                      ('epochs_to_eval', int), ('optimizer', str), ('device', str),
+                      ('dataset', str), ('mixed_precision', bool),
+                      ('objectives', list), ('multi_objective', bool), ('metrics', list), 
+                      ('data_augmentation', bool), ('subtract_mean', bool),
+                      ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
+                      ('network_config', str), ('threads', int),
+                      ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),             
+                      ('stats_max_batches', int), ('num_workers', int),           
+                      ]
         }
 
         for config, items in vars_dict.items():
@@ -156,9 +152,9 @@ class ConfigParameters(object):
         self._get_fn_spec()
 
         train_override_keys = [
-            'fitness_metric', 'optimizer', 'data_augmentation', 'network_config',
-            'backbone_name', 'save_checkpoints_epochs', 'dataset', 'data_path',
-            'limit_data_value', 'multi_objective', 'objectives', 'config_path_dataset'
+            'optimizer', 'data_augmentation', 'network_config',
+            'backbone_name', 'dataset', 'data_path', 'limit_data_value',
+            'multi_objective', 'objectives', 'config_path_dataset'
         ]
         for key in train_override_keys:
             val = self.args.get(key)
