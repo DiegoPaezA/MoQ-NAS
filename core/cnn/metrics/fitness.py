@@ -88,3 +88,49 @@ class ScalarizedFitness(BaseMetric):
         
         fitness_value = primary_fitness * params_factor * inference_time_factor
         return fitness_value * 100.0
+    
+class ValidationLossFitness(BaseMetric):
+    """
+    Computes a fitness value directly from the validation loss.
+
+    This metric transforms the validation loss into a fitness score,
+    where a lower loss results in a higher fitness value.
+    The result is scaled to a range of 0-100.
+    """
+    name = "fitness_val_loss"
+
+    def __init__(self):
+        """Initializes the validation loss fitness calculator."""
+        self._init_args = locals()
+        del self._init_args['self']
+
+    def reset(self):
+        """This metric is stateless across batches, so reset does nothing."""
+        pass
+
+    def update(self, outputs: torch.Tensor, labels: torch.Tensor):
+        """This metric is stateless across batches, so update does nothing."""
+        pass
+
+    def compute(self, epoch_results: Dict) -> Dict:
+        """
+        Calculates the fitness value from the validation loss.
+
+        Args:
+            epoch_results (Dict): A dictionary containing the computed values
+                                  from all other metrics for the current epoch.
+
+        Returns:
+            Dict: A dictionary containing the 'fitness_val_loss' score.
+        """
+        validation_loss = epoch_results.get('loss', float('inf'))
+
+        if validation_loss == float('inf'):
+            fitness_value = 0.0
+        else:
+            # Transform loss to a fitness value (lower loss = higher fitness)
+            fitness_value = (1 / (1 + validation_loss)) * 100.0
+
+        return {
+            self.name: fitness_value
+        }
