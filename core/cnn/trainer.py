@@ -13,7 +13,7 @@
 
 import os
 import time
-
+import traceback
 import torch
 from medmnist import Evaluator
 from sklearn.metrics import confusion_matrix
@@ -105,13 +105,9 @@ class BaseTrainer:
         self.device = torch.device(params['device'])
 
         self.scaler = GradScaler(self.device.type, enabled=self.params.get('mixed_precision', False))
-# --- Pluggable Metrics System ---
+        # --- Pluggable Metrics System ---
         self.primary_metrics = [m for m in metrics if 'epoch_results' not in m.compute.__code__.co_varnames]
         self.post_processing_metrics = [m for m in metrics if m not in self.primary_metrics]
-
-        # En lugar de usar __dict__, recreamos las instancias.
-        # Esto funciona porque las clases de métricas (como Accuracy) no tienen
-        # parámetros complejos en su constructor.
         self.val_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
         self.test_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
 
@@ -165,6 +161,7 @@ class BaseTrainer:
             metric.reset()
         
         total_loss = 0.0
+        total_examples = 0
         
         context = torch.enable_grad() if is_training else torch.no_grad()
         with context:
@@ -184,7 +181,9 @@ class BaseTrainer:
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
 
-                total_loss += loss.item()
+                bs = inputs.size(0) if hasattr(inputs, "size") else 1
+                total_loss += loss.item() * bs
+                total_examples += bs
 
                 for metric in metric_set:
                     if 'groups' in metric.update.__code__.co_varnames:
@@ -196,7 +195,7 @@ class BaseTrainer:
         for metric in metric_set:
             epoch_results.update(metric.compute())
         
-        epoch_results['loss'] = total_loss / len(loader)
+        epoch_results['loss'] = total_loss / max(1, total_examples)
         
         for metric in self.post_processing_metrics:
             epoch_results.update(metric.compute(epoch_results))
@@ -212,6 +211,8 @@ class BaseTrainer:
         patience_max = self.params.get('patience_retrain', max_epochs)
         base_fraction = self.params.get('delta_fraction', 0.005)
         start_eval_epoch = max_epochs - epochs_to_eval
+        val_results = {}   
+        test_results = {}  
         t0 = time.time()
         
         training_losses, training_accuracies = [], []
@@ -247,7 +248,7 @@ class BaseTrainer:
 
                 if self.best_validation_loss == float('inf'):
                     self.best_validation_loss = current_loss
-                    no_improve_count = 0
+                    self.no_improve_count = 0
                     continue
                 min_delta = self.best_validation_loss * base_fraction
                 if (self.best_validation_loss - current_loss) > min_delta:
@@ -307,7 +308,26 @@ class BaseTrainer:
         final_output.update(test_results)
         final_output.update(combined_final_results)
         
-        create_info_file(self.params['model_path'], {k: v for k, v in final_output.items() if not isinstance(v, (list, dict))}, 'training_params.txt')
+        pack = {
+            'total_params':          0,
+            'cuda_inference_time':   0.0,
+            'model_memory_usage':    0.0,
+            'total_flops':           0,
+            'fitness_val_loss':      final_output.get('loss', None),
+            'scalar_multi_objective': 0.0,
+        }
+
+        # Un solo update a self.params:
+        self.params.update({
+            **{k: final_output.get(k, v) for k, v in pack.items()},
+            'best_accuracy':         self.best_accuracy,
+            'best_validation_loss':  self.best_validation_loss,
+            'test_accuracy':         test_results.get('accuracy', None),
+            'test_loss':             test_results.get('loss', None),
+        })
+        
+        # Escritura única del archivo
+        create_info_file(self.params['model_path'], self.params, 'training_params.txt')
         self.release_gpu_memory()
 
         return final_output
