@@ -15,7 +15,8 @@ from typing import Dict, List, Union, Any
 from . import model, trainer, model_resnet
 from utils.helpers import init_log, setup_dataset_info
 
-from .metrics import Accuracy, ConfusionMatrix, HardwareMetrics, MedMNIST_Metrics
+from .artifacts import ConfusionMatrix
+from .metrics import Accuracy, HardwareMetrics, MedMNIST_Metrics
 from .metrics.fitness import ScalarizedFitness, ValidationLossFitness
 # from .metrics.fairness import FairFaceMetrics, FacetMetrics
 
@@ -84,6 +85,30 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
 
     return metric_instances
 
+def create_artifacts_from_config(config: dict) -> list:
+    """
+    Reads the 'artifacts' section from the configuration and creates the
+    corresponding artifact class instances.
+    """
+    artifact_instances = []
+    artifacts_config = config.get('artifacts', [])
+    if not artifacts_config:
+        return []
+
+    # Maps artifact names from the YAML file to their corresponding Python classes
+    artifact_map = {
+        "ConfusionMatrix": ConfusionMatrix,
+        # Aquí añadirías futuros artefactos, ej: "ROCAUCPlot": ROCAUCPlot
+    }
+
+    for artifact_cfg in artifacts_config:
+        artifact_name = artifact_cfg['name']
+        if artifact_name in artifact_map:
+            ArtifactClass = artifact_map[artifact_name]
+            params = artifact_cfg.get('params', {})
+            artifact_instances.append(ArtifactClass(**params))
+            
+    return artifact_instances
 
 def create_optimizer(net, params):
     """
@@ -265,9 +290,10 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
         model_instance=net,
         device=params['device'],
         input_shape=params['input_shape'])
+        artifacts = create_artifacts_from_config(config=params)
 
         trainer_instance = trainer.BaseTrainer(net, criterion, optimizer,
-                                    train_loader, val_loader, test_loader, params, metrics)
+                                    train_loader, val_loader, test_loader, params, metrics, artifacts)
     return trainer_instance
 
 def run_training_phase(params: Dict[str, Any],

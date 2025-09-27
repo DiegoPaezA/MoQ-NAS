@@ -13,15 +13,13 @@
 
 import os
 import time
-import traceback
 import torch
-from medmnist import Evaluator
-from sklearn.metrics import confusion_matrix
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import (CosineAnnealingLR, ExponentialLR,
                                     MultiStepLR, ReduceLROnPlateau)
 
 from . import model, model_resnet
+from .artifacts import BaseArtifact
 from .metrics.base import BaseMetric
 from utils.helpers import create_info_file, init_log
 
@@ -94,7 +92,7 @@ class BaseTrainer:
         - Designed for extensibility and integration with neural architecture search workflows.
     """
     def __init__(self, model_instance, criterion, optimizer, train_loader, val_loader, test_loader,
-                params: dict, metrics: list[BaseMetric]):
+                params: dict, metrics: list[BaseMetric], artifacts: list[BaseArtifact]):
         self.model = model_instance.to(params['device'])
         self.criterion = criterion
         self.optimizer = optimizer
@@ -110,6 +108,9 @@ class BaseTrainer:
         self.post_processing_metrics = [m for m in metrics if m not in self.primary_metrics]
         self.val_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
         self.test_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
+        
+        self.artifacts = artifacts # List of artifact instances to compute after training
+
 
         # --- State Tracking & Checkpointing ---
         self.best_accuracy = 0.0
@@ -202,6 +203,51 @@ class BaseTrainer:
             
         return epoch_results
 
+    def _run_test_phase(self):
+        """
+        Runs the final test phase, computing both test metrics and all artifacts.
+        This method is called only once at the end of the 'retrain' or 'resnet' phase.
+        
+        Returns:
+            dict: A dictionary containing results from both test metrics and artifacts.
+        """
+        if self.test_loader is None:
+            return {}
+
+        self.logger.info("Running final test phase and generating artifacts...")
+        self.model = self.reset_and_load_best_model(self.best_model_path)
+        
+        # 1. Combina métricas de test y artefactos para procesarlos juntos
+        all_final_processors = self.test_primary_metrics + self.artifacts
+        
+        # 2. Resetea todos los procesadores
+        for processor in all_final_processors:
+            processor.reset()
+        
+        # 3. Itera sobre el test_loader y actualiza
+        self.model.eval()
+        with torch.no_grad():
+            for batch in self.test_loader:
+                if len(batch) == 2:
+                    inputs, labels = batch
+                else:
+                    inputs, labels, _ = batch # Ignora grupos si existen
+                
+                outputs, _, labels = self._forward_pass(inputs, labels)
+                
+                for processor in all_final_processors:
+                    processor.update(outputs.detach(), labels.detach())
+
+        # 4. Computa los resultados finales
+        final_results = {}
+        for processor in all_final_processors:
+            final_results.update(processor.compute())
+                
+        self.logger.info("Experiment: %s - Test loss: %.2f - Test accuracy: %.2f%%",
+                         self.params['experiment_path'], final_results.get('loss', 0), final_results.get('accuracy', 0))
+
+        return final_results
+    
     def train(self, debug=False):
         """
         The main training loop, orchestrating epochs, evaluation, and final result aggregation.
@@ -280,10 +326,7 @@ class BaseTrainer:
         
         test_results = {}
         if (phase == 'retrain' or phase == 'resnet') and self.test_loader is not None:
-            self.model = self.reset_and_load_best_model(self.best_model_path)
-            test_results = self._run_epoch(self.test_loader, is_training=False, metric_set=self.test_primary_metrics)
-            self.logger.info("Experiment: %s - Test loss: %.2f - Test accuracy: %.2f%%",
-                             self.params['experiment_path'], test_results.get('loss', 0), test_results.get('accuracy', 0))
+            test_results = self._run_test_phase()
 
         # Combine all available results for post-processing metrics
         # This includes the final validation results and test results
