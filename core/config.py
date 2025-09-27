@@ -108,7 +108,7 @@ class ConfigParameters(object):
                       ('epochs_to_eval', int), ('optimizer', str), ('device', str),
                       ('dataset', str), ('mixed_precision', bool),
                       ('objectives', list), ('multi_objective', bool), ('metrics', list), 
-                      ('data_augmentation', bool), ('subtract_mean', bool),
+                      ('data_augmentation', bool), ('subtract_mean', bool), ('artifacts', list),
                       ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
                       ('network_config', str), ('threads', int),
                       ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),             
