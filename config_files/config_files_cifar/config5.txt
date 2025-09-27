@@ -2,11 +2,11 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 150
+    max_generations: 300
     max_num_nodes: 20
-    num_quantum_ind: 10
+    num_quantum_ind: 5
     penalize_number: 3
-    repetition: 2
+    repetition: 4
     replace_method: best
     update_quantum_gen: 5
     update_quantum_rate: 0.2
@@ -90,7 +90,6 @@ train:
     objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
     metrics:
       - name: Accuracy
-      - name: ConfusionMatrix
       - name: HardwareMetrics
       - name: ValidationLossFitness
       - name: ScalarizedFitness
@@ -98,3 +97,5 @@ train:
           metric_type: loss
           max_params: 114090
           max_inference_time: 1000
+    artifacts:
+      - name: ConfusionMatrix
