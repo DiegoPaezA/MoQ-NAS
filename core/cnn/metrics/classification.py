@@ -30,34 +30,6 @@ class Accuracy(BaseMetric):
             return {self.name: 0.0}
         return {self.name: 100 * self.correct / self.total}
 
-class ConfusionMatrix(BaseMetric):
-    """
-    Generates the confusion matrix for classification tasks.
-    """
-    name = "confusion_matrix"
-
-    def __init__(self):
-        self.all_labels = []
-        self.all_predictions = []
-
-    def reset(self):
-        """Clears the stored labels and predictions."""
-        self.all_labels = []
-        self.all_predictions = []
-
-    def update(self, outputs: torch.Tensor, labels: torch.Tensor):
-        """Stores the labels and predictions from a batch."""
-        _, predicted = torch.max(outputs, 1)
-        self.all_labels.extend(labels.cpu().numpy())
-        self.all_predictions.extend(predicted.cpu().numpy())
-
-    def compute(self) -> dict:
-        """Computes and returns the confusion matrix as a list of lists."""
-        if not self.all_labels:
-            return {self.name: None}
-        cm = confusion_matrix(self.all_labels, self.all_predictions)
-        return {self.name: cm.tolist()}
-
 class MedMNIST_Metrics(BaseMetric):
     """
     Computes dataset-specific metrics (AUC and Accuracy) for MedMNIST datasets.
