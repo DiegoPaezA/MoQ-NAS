@@ -214,7 +214,6 @@ class BaseTrainer:
         if self.test_loader is None:
             return {}
 
-        self.logger.info("Running final test phase and generating artifacts...")
         self.model = self.reset_and_load_best_model(self.best_model_path)
         
         # 1. Combina métricas de test y artefactos para procesarlos juntos
