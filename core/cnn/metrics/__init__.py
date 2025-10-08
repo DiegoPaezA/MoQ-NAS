@@ -3,7 +3,7 @@
 from .base import BaseMetric
 from .classification import Accuracy, MedMNIST_Metrics
 from .hardware import HardwareMetrics
-from .fairness import FairFaceMetrics, FacetMetrics
+from .fairness import FairnessMetric
 
 #  This allows to import metrics like:
 #  from core.cnn.metrics import Accuracy, HardwareMetrics

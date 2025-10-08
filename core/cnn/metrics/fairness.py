@@ -1,6 +1,7 @@
 # moq-nas/core/cnn/metrics/fairness.py
 
 from typing import Dict
+from unittest import loader
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -31,12 +32,13 @@ class FairnessMetric(BaseMetric):
         Args:
             cfg: The global configuration object (yacs).
         """
-        super().__init__(cfg, **kwargs)
+        super().__init__()
         # Read parameters from the FAIRNESS section of the .yaml file
         self.eval_dataset_name = cfg.FAIRNESS.EVAL_DATASET
         self.eval_dataset_path = cfg.FAIRNESS.EVAL_DATASET_PATH
         self.beta = cfg.FAIRNESS.BETA
         self.batch_size = cfg.TRAIN.BATCH_SIZE
+        self.cache_dir = getattr(cfg.FAIRNESS, 'CACHE_DIR', None)
         # The primary objective this metric will return for optimization
         self.optimization_objective = cfg.FAIRNESS.OBJECTIVE.lower() # e.g., 'spd_sum' or 'fairness_score'
         self._results = {}
@@ -60,7 +62,7 @@ class FairnessMetric(BaseMetric):
         
         Returns:
             float: The value of the fairness metric to be optimized (e.g., spd_sum).
-                   For spd_sum, a lower value is better.
+                For spd_sum, a lower value is better.
         """
         if self._results:
             return self._results['metrics'][self.optimization_objective]
@@ -71,60 +73,111 @@ class FairnessMetric(BaseMetric):
         dataloader = create_eval_loader(
             dataset_name=self.eval_dataset_name,
             csv_path=self.eval_dataset_path,
-            batch_size=self.batch_size
+            batch_size=self.batch_size,
+            cache_dir=self.cache_dir
         )
         
-        # 2. Run the appropriate evaluation loop based on the dataset name
         if self.eval_dataset_name.lower() == 'facet':
-            per_group_tpr = self._evaluate_on_facet(model, dataloader, device)
-        # Add FairFace evaluation logic here if needed in the future
-        elif self.eval_dataset_name.lower() == 'fairface':
-            per_group_tpr = self._evaluate_on_fairface(model, dataloader, device)
-        else:
-            raise NotImplementedError(f"Fairness evaluation for '{self.eval_dataset_name}' is not implemented.")
+            # Calculate both soft and hard metrics
+            soft_tpr = self._compute_tpr_per_skintone_soft(model, dataloader, device)
+            hard_tpr = self._compute_tpr_per_skintone_hard(model, dataloader, device)
             
-        # 3. Calculate summary metrics from the per-group results
-        metrics = self._compute_summary_metrics(per_group_tpr)
+            soft_metrics = self._compute_summary_metrics(soft_tpr)
+            hard_metrics = self._compute_summary_metrics(hard_tpr)
+            results = {
+                "soft_results": {"per_group_tpr": soft_tpr, "metrics": soft_metrics},
+                "hard_results": {"per_group_tpr": hard_tpr, "metrics": hard_metrics},
+                "fairness_core_soft": soft_metrics.get(self.optimization_objective, 0.0),
+                "fairness_core_hard": hard_metrics.get(self.optimization_objective, 0.0)
+            }
 
-        self._results = {
-            "per_group_tpr": per_group_tpr,
-            "metrics": metrics
-        }
-        
-        # Log the full dictionary of results for detailed analysis
-        self.log(self._results)
-        
-        # Return the single objective value for the NAS to optimize.
-        # Note: NSGA-II minimizes objectives by default. `spd_sum` is ideal
-        # because a lower value means a fairer model.
-        return self._results['metrics'][self.optimization_objective]
+        elif self.eval_dataset_name.lower() == 'fairface':
+            per_group_tpr = self._compute_tpr_per_group(model, dataloader, device)
+            summary_metrics = self._compute_summary_metrics(per_group_tpr)
+            results = {
+                "per_group_tpr": per_group_tpr,
+                "metrics": summary_metrics,
+                "fairness_core": summary_metrics.get(self.optimization_objective, 0.0)
+            }
 
-    def _evaluate_on_facet(self, model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, device: torch.device) -> Dict[str, float]:
-        """Runs the soft-label evaluation loop for the FACET dataset."""
-        model.eval()
-        numerator = defaultdict(float)
-        denominator = defaultdict(float)
+        return results
+
+
+    def _compute_tpr_per_group(self, model, loader, device) -> Dict[str, float]:
+        """Computes True Positive Rate (TPR) for each demographic group in FairFace."""
+        group_tpr = defaultdict(float)
+        group_counts = defaultdict(int)
+        label_map = {v: k for k, v in loader.dataset.race_to_idx.items()}
 
         with torch.no_grad():
-            for images, soft_labels in tqdm(dataloader, desc=f"Evaluating Fairness on {self.eval_dataset_name}"):
-                images = images.to(device, non_blocking=True)
-                soft_labels = soft_labels.cpu().numpy()
+            for inputs, labels in tqdm(loader, desc=f"Evaluating [{self.eval_dataset_name}]"):
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+                preds = outputs.argmax(dim=1)
                 
-                logits = model(images)
-                preds = logits.argmax(dim=1).cpu().numpy()
+                for i in range(len(labels)):
+                    label_idx = labels[i].item()
+                    group_name = label_map[label_idx]
+                    if preds[i] == 1:
+                        group_tpr[group_name] += 1
+                    group_counts[group_name] += 1
+            
+        final_tpr = {}
+        for group_name, total in group_counts.items():
+            if total > 0:
+                final_tpr[group_name] = float(group_tpr[group_name] / total)
+        
+        return dict(sorted(final_tpr.items()))
 
-                for i in range(images.size(0)):
-                    pred = preds[i] # 0 or 1
-                    # Iterate through the 10 skin tones
+    def _compute_tpr_per_skintone_hard(self, model, loader, device) -> Dict[str, float]:
+            """Computes TPR for FACET using 'hard' labels (argmax of probabilities)."""
+            group_correct = defaultdict(int)
+            group_total = defaultdict(int)
+
+            with torch.no_grad():
+                for inputs, soft_labels in tqdm(loader, desc=f"Evaluating [FACET - Hard]"):
+                    inputs = inputs.to(device)
+                    outputs = model(inputs)
+                    preds = outputs.argmax(dim=1).cpu()
+                    
+                    # Convert soft labels to hard labels
+                    hard_labels = soft_labels.argmax(dim=1)
+
+                    for i in range(len(preds)):
+                        # Skin tones are 1-10, so we add 1 to the index
+                        group_idx = hard_labels[i].item() + 1
+                        group_total[group_idx] += 1
+                        if preds[i] == 1: # Correctly predicted "face"
+                            group_correct[group_idx] += 1
+            
+            per_tone_tpr = {
+                str(tone): float(group_correct[tone] / group_total[tone]) if group_total[tone] > 0 else 0.0
+                for tone in sorted(group_total.keys())
+            }
+            return per_tone_tpr
+
+    def _compute_tpr_per_skintone_soft(self, model, loader, device) -> Dict[str, float]:
+        """Computes TPR for FACET using 'soft' probability-weighted labels."""
+        denominator = defaultdict(float)
+        numerator = defaultdict(float)
+
+        with torch.no_grad():
+            for inputs, soft_labels in tqdm(loader, desc=f"Evaluating [FACET - Soft]"):
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+                preds = outputs.argmax(dim=1).cpu()
+
+                for i in range(len(preds)):
+                    pred = preds[i]
                     for tone_idx in range(soft_labels.shape[1]):
-                        prob = soft_labels[i, tone_idx]
+                        prob = soft_labels[i, tone_idx].item()
                         if prob > 0:
                             denominator[tone_idx + 1] += prob
-                            if pred == 1: # Positive prediction
+                            if pred == 1:
                                 numerator[tone_idx + 1] += prob
         
         per_tone_tpr = {
-            str(tone): numerator[tone] / denominator[tone] if denominator[tone] > 0 else 0.0
+            str(tone): float(numerator[tone] / denominator[tone]) if denominator[tone] > 0 else 0.0
             for tone in sorted(denominator.keys())
         }
         return per_tone_tpr
@@ -136,16 +189,15 @@ class FairnessMetric(BaseMetric):
 
         tprs = np.array(list(per_group_tpr.values()))
         min_tpr = np.min(tprs)
+        max_tpr = np.max(tprs)
         
-        # Sum of Pairwise Differences (SPD) from the worst-performing group
         spd_sum = np.sum(tprs - min_tpr)
-        
-        # fairness_score (higher is better)
         fairness_score = max(0.0, (self.beta - spd_sum) / self.beta)
-        
+        max_min_gap = max_tpr - min_tpr
+
         return {
             "min_group_tpr": float(min_tpr),
-            "max_min_gap": float(np.max(tprs) - min_tpr),
+            "max_min_gap": float(max_min_gap),
             "spd_sum": float(spd_sum),
             "fairness_score": float(fairness_score),
         }
