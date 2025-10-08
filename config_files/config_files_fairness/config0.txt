@@ -84,16 +84,16 @@ train:
 
     # Multi-objective parameters
     multi_objective: False
-    num_objectives: 3
-    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
+    num_objectives: 2
+    objectives: ['best_accuracy', 'spd_sum'] #
     metrics:
       - name: Accuracy
       - name: HardwareMetrics
-      - name: ValidationLossFitness
-      - name: ScalarizedFitness
+      - name: FairnessMetric
         params:
-          metric_type: loss
-          max_params: 114090
-          max_inference_time: 1000
+          eval_dataset_name: 'facet'
+          eval_dataset_path: 'data/facet_eval.csv'
+          optimization_objective: 'spd_sum'
+          beta: 0.2
     artifacts:
       - name: ConfusionMatrix
