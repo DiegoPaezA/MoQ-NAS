@@ -65,13 +65,9 @@ class FacetEvalDataset(Dataset):
     def __init__(self, csv_path: str, tfm: Optional[transforms.Compose] = None, cache_dir: Optional[str] = None):
         self.df = pd.read_csv(csv_path)
         self.tfm = tfm
-        # ===================================================================
-        # CACHING LOGIC ADDED
-        # ===================================================================
         self.cache_dir = Path(cache_dir) if cache_dir else None
         if self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-        # ===================================================================
 
         required_cols = {"image_path", "x", "y", "width", "height", "skin_tone_probs"}
         if not required_cols.issubset(self.df.columns):
