@@ -171,5 +171,49 @@ def build_datasets(
         )
         return train_dataset, val_dataset, test_dataset, train_labels, val_labels
 
+    # ---- Person/Face Binary Datasets (ImageFolder layout with missing test set handling)
+    if "person" in ds_name or "face" in ds_name:
+        train_path = os.path.join(data_path, "train")
+        val_path = os.path.join(data_path, "val")
+        
+        # 1. Use the validation set as the test set
+        test_dataset = tvd.ImageFolder(root=val_path, transform=eval_transform)
+        
+        # 2. Load the original training data to prepare for splitting
+        trainval_raw = tvd.ImageFolder(root=train_path, transform=None)
+        labels_full = np.asarray([y for _, y in trainval_raw.samples], dtype=int)
+        
+        # 3. Create new train/val split from the original training data
+        train_idx, val_idx = deterministic_stratified_indices(labels_full, train_split, split_seed)
+        train_subset = Subset(trainval_raw, train_idx)
+        val_subset   = Subset(trainval_raw, val_idx)
+        
+        train_labels = labels_full[train_idx]
+        val_labels   = labels_full[val_idx]
+
+        # 4. Apply data limiting (if configured)
+        limit_flag  = _coerce_bool(params.get("limit_data", False))
+        limit_value = int(params.get("limit_data_value", 0) or 0)
+        train_subset, val_subset = _maybe_apply_limit_balanced(
+            train_subset, val_subset, train_labels, val_labels,
+            spec.num_classes, train_split, split_seed,
+            limit_data=limit_flag,
+            limit_value=limit_value,
+        )
+        
+        # 5. Wrap subsets with the appropriate transforms
+        class _Wrap(Dataset):
+            def __init__(self, subset, tfm):
+                self.subset = subset; self.tfm = tfm
+            def __len__(self): return len(self.subset)
+            def __getitem__(self, i):
+                x, y = self.subset[i]
+                return (self.tfm(x) if self.tfm else x), y
+        
+        train_dataset = _Wrap(train_subset, train_transform)
+        val_dataset   = _Wrap(val_subset,   eval_transform)
+
+        return train_dataset, val_dataset, test_dataset, train_labels, val_labels
+
     # ---- Unknown family
     raise NotImplementedError(f"Unknown dataset family for {spec.name}.")
