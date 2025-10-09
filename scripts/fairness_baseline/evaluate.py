@@ -12,6 +12,55 @@ sys.path.append(str(project_root))
 from core.cnn.metrics.fairness import FairnessMetric
 from core.fairness.models import make_baseline_model
 
+def print_detailed_results(arch, data):
+    """
+    Prints a formatted summary of model performance.
+    This function is robust and can handle two types of dictionary structures:
+    1. A nested structure with 'soft_results' and/or 'hard_results'.
+    2. A single, flat structure with 'per_group_tpr' and 'metrics' at the top level.
+    """
+    print(f"\n{'='*15} Results for [{arch}] {'='*15}")
+
+    # --- Helper function to print a specific set of results (no changes needed here) ---
+    def display_metrics(result_type, results):
+        print(f"\n--- {result_type} Results ---")
+        if 'per_group_tpr' in results:
+            for group, tpr in results['per_group_tpr'].items():
+                print(f"  - Group: {group:<20} | TPR: {tpr:.4f}")
+        
+        if 'metrics' in results:
+            metrics = results['metrics']
+            print(f"\n  Summary Metrics:")
+            min_tpr = metrics.get('min_group_tpr', 'N/A')
+            max_gap = metrics.get('max_min_gap', 'N/A')
+            spd_sum = metrics.get('spd_sum', 'N/A')
+            fairness = metrics.get('fairness_score', 'N/A')
+            
+            print(f"  - Min Group TPR : {min_tpr:.4f}" if isinstance(min_tpr, float) else f"  - Min Group TPR : {min_tpr}")
+            print(f"  - Max-Min Gap   : {max_gap:.4f}" if isinstance(max_gap, float) else f"  - Max-Min Gap   : {max_gap}")
+            print(f"  - SPD Sum       : {spd_sum:.4f}" if isinstance(spd_sum, float) else f"  - SPD Sum       : {spd_sum}")
+            print(f"  - Fairness Score: {fairness:.4f}" if isinstance(fairness, float) else f"  - Fairness Score: {fairness}")
+
+    # --- Main logic to determine the dictionary structure ---
+
+    # Case 1: Check for the nested structure ('soft'/'hard' results)
+    if 'soft_results' in data or 'hard_results' in data:
+        if 'soft_results' in data:
+            display_metrics("Soft", data['soft_results'])
+        if 'hard_results' in data:
+            display_metrics("Hard", data['hard_results'])
+    
+    # Case 2: Check for the flat structure ('per_group_tpr' at the top level)
+    elif 'per_group_tpr' in data:
+        display_metrics("Overall", data) # The data itself is the results dictionary
+    
+    # Fallback if no recognizable structure is found
+    else:
+        print("  No recognizable result structure found.")
+    
+    print(f"{'='*50}\n")
+
+
 def evaluate_one_model(arch: str, ckpt_path: str, device: torch.device, args: argparse.Namespace):
     """
     Evaluates a single model checkpoint using the centralized FairnessMetric class.
@@ -24,7 +73,7 @@ def evaluate_one_model(arch: str, ckpt_path: str, device: torch.device, args: ar
     # Using weights_only=True is recommended for safety
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
     model.to(device)
-
+    model.eval()
     # --- Step 2: Create a Self-Contained Config Object ---
     cfg = SimpleNamespace()
     cfg.FAIRNESS = SimpleNamespace()
@@ -44,16 +93,7 @@ def evaluate_one_model(arch: str, ckpt_path: str, device: torch.device, args: ar
     
     # --- Step 4: Print the Key Results ---
     print(f"\n--- Results for [{arch}] on [{args.dataset_name}] ---")
-    if 'per_group_tpr' in results:
-        for group, tpr in results['per_group_tpr'].items():
-            print(f"  - Group: {group:<20} | TPR: {tpr:.4f}")
-    
-    if 'metrics' in results:
-        metrics = results['metrics']
-        print(f"\n  Summary Metrics:")
-        print(f"  - Min Group TPR : {metrics.get('min_group_tpr', 'N/A'):.4f}")
-        print(f"  - Max-Min Gap   : {metrics.get('max_min_gap', 'N/A'):.4f}")
-        print(f"  - Fairness Score: {metrics.get('fairness_score', 'N/A'):.4f}")
+    print_detailed_results(arch, results)
         
     return results
 
