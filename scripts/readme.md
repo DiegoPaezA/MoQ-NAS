@@ -63,11 +63,34 @@ python scripts/fairness_baseline/train.py \
 
 ```bash
 
-# Example: Train ResNet18 on the 'facebin_data' dataset, training only the head
+# Example: Train ResNet18 on the 'facebin_data' dataset
 python scripts/fairness_baseline/train.py \
     --data_root datasets/facebin_data \
     --archs resnet18,resnet50,efficientnet_v2_s,convnext_tiny,mobilenet_v3_large,mnasnet1_0 \
     --epochs 10
+```
+
+Example commands with additional options: To freeze the backbone during training and specify an output directory for checkpoints.
+
+```bash
+# Example: Train ResNet18 and ResNet50 on the 'personbin_data' dataset
+python scripts/fairness_baseline/train.py \
+    --data_root datasets/personbin_data \
+    --archs resnet18,resnet50,efficientnet_v2_s,convnext_tiny,mobilenet_v3_large,mnasnet1_0 \
+    --epochs 10 \
+    --freeze_backbone \
+    --out_dir checkpoints/baselines_head_only
+```
+
+```bash
+
+# Example: Train ResNet18 on the 'facebin_data' dataset
+python scripts/fairness_baseline/train.py \
+    --data_root datasets/facebin_data \
+    --archs resnet18,resnet50,efficientnet_v2_s,convnext_tiny,mobilenet_v3_large,mnasnet1_0 \
+    --epochs 10 \
+    --freeze_backbone \
+    --out_dir checkpoints/baselines_head_only
 ```
 
 ---
