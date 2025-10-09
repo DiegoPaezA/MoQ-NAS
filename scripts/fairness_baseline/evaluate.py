@@ -133,7 +133,7 @@ def main():
             continue
 
         try:
-            arch = ckpt_path.stem.split('_')[-1]
+            arch = ckpt_path.stem.split('_data_')[1]
             results = evaluate_one_model(arch, str(ckpt_path), device, args)
             all_results[str(ckpt_path.name)] = results
         except Exception as e:
