@@ -102,9 +102,62 @@ class FairnessMetric(BaseMetric):
 
         return results
 
+    def _compute_tpr_per_skintone_hard(self, model, loader, device) -> Dict[str, float]:
+            """Computes TPR for FACET by deriving 'hard' labels via argmax."""
+            group_correct = defaultdict(int)
+            group_total = defaultdict(int)
+
+            with torch.no_grad():
+                # The loader now correctly yields only two items: img, soft_labels
+                for inputs, soft_labels in tqdm(loader, desc=f"Evaluating [FACET - Hard]"):
+                    inputs = inputs.to(device)
+                    outputs = model(inputs)
+                    preds = outputs.argmax(dim=1).cpu()
+
+                    # Derive hard labels from soft probabilities
+                    hard_labels = soft_labels.argmax(dim=1)
+
+                    for i in range(len(preds)):
+                        # Skin tones are 1-10, so add 1 to the index
+                        group_idx = hard_labels[i].item() + 1
+                        group_total[group_idx] += 1
+                        if preds[i] == 1: # Correctly predicted "face"
+                            group_correct[group_idx] += 1
+            
+            per_tone_tpr = {
+                str(tone): float(group_correct[tone] / group_total[tone]) if group_total[tone] > 0 else 0.0
+                for tone in sorted(group_total.keys())
+            }
+            return per_tone_tpr
+
+    def _compute_tpr_per_skintone_soft(self, model, loader, device) -> Dict[str, float]:
+            """Computes TPR for FACET using 'soft' probability-weighted labels."""
+            denominator = defaultdict(float)
+            numerator = defaultdict(float)
+
+            with torch.no_grad():
+                for inputs, soft_labels in tqdm(loader, desc=f"Evaluating [FACET - Soft]"):
+                    inputs = inputs.to(device)
+                    outputs = model(inputs)
+                    preds = outputs.argmax(dim=1).cpu()
+
+                    for i in range(len(preds)):
+                        pred = preds[i]
+                        for tone_idx in range(soft_labels.shape[1]):
+                            prob = soft_labels[i, tone_idx].item()
+                            if prob > 0:
+                                denominator[tone_idx + 1] += prob
+                                if pred == 1:
+                                    numerator[tone_idx + 1] += prob
+            
+            per_tone_tpr = {
+                str(tone): float(numerator[tone] / denominator[tone]) if denominator[tone] > 0 else 0.0
+                for tone in sorted(denominator.keys())
+            }
+            return per_tone_tpr
 
     def _compute_tpr_per_group(self, model, loader, device) -> Dict[str, float]:
-        """Computes True Positive Rate (TPR) for each demographic group in FairFace."""
+        """Computes TPR for each demographic group in FairFace."""
         group_tpr = defaultdict(float)
         group_counts = defaultdict(int)
         label_map = {v: k for k, v in loader.dataset.race_to_idx.items()}
@@ -113,7 +166,7 @@ class FairnessMetric(BaseMetric):
             for inputs, labels in tqdm(loader, desc=f"Evaluating [{self.eval_dataset_name}]"):
                 inputs = inputs.to(device)
                 outputs = model(inputs)
-                preds = outputs.argmax(dim=1)
+                preds = outputs.argmax(dim=1).cpu()
                 
                 for i in range(len(labels)):
                     label_idx = labels[i].item()
@@ -128,60 +181,7 @@ class FairnessMetric(BaseMetric):
                 final_tpr[group_name] = float(group_tpr[group_name] / total)
         
         return dict(sorted(final_tpr.items()))
-
-    def _compute_tpr_per_skintone_hard(self, model, loader, device) -> Dict[str, float]:
-            """Computes TPR for FACET using 'hard' labels (argmax of probabilities)."""
-            group_correct = defaultdict(int)
-            group_total = defaultdict(int)
-
-            with torch.no_grad():
-                for inputs, soft_labels in tqdm(loader, desc=f"Evaluating [FACET - Hard]"):
-                    inputs = inputs.to(device)
-                    outputs = model(inputs)
-                    preds = outputs.argmax(dim=1).cpu()
-                    
-                    # Convert soft labels to hard labels
-                    hard_labels = soft_labels.argmax(dim=1)
-
-                    for i in range(len(preds)):
-                        # Skin tones are 1-10, so we add 1 to the index
-                        group_idx = hard_labels[i].item() + 1
-                        group_total[group_idx] += 1
-                        if preds[i] == 1: # Correctly predicted "face"
-                            group_correct[group_idx] += 1
-            
-            per_tone_tpr = {
-                str(tone): float(group_correct[tone] / group_total[tone]) if group_total[tone] > 0 else 0.0
-                for tone in sorted(group_total.keys())
-            }
-            return per_tone_tpr
-
-    def _compute_tpr_per_skintone_soft(self, model, loader, device) -> Dict[str, float]:
-        """Computes TPR for FACET using 'soft' probability-weighted labels."""
-        denominator = defaultdict(float)
-        numerator = defaultdict(float)
-
-        with torch.no_grad():
-            for inputs, soft_labels in tqdm(loader, desc=f"Evaluating [FACET - Soft]"):
-                inputs = inputs.to(device)
-                outputs = model(inputs)
-                preds = outputs.argmax(dim=1).cpu()
-
-                for i in range(len(preds)):
-                    pred = preds[i]
-                    for tone_idx in range(soft_labels.shape[1]):
-                        prob = soft_labels[i, tone_idx].item()
-                        if prob > 0:
-                            denominator[tone_idx + 1] += prob
-                            if pred == 1:
-                                numerator[tone_idx + 1] += prob
         
-        per_tone_tpr = {
-            str(tone): float(numerator[tone] / denominator[tone]) if denominator[tone] > 0 else 0.0
-            for tone in sorted(denominator.keys())
-        }
-        return per_tone_tpr
-
     def _compute_summary_metrics(self, per_group_tpr: Dict[str, float]) -> Dict[str, float]:
         """Calculates spd_sum, gap, and the final fairness_score from TPRs."""
         if not per_group_tpr:

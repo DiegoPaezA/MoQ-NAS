@@ -5,7 +5,6 @@ from torchvision import models
 from typing import Callable, Dict, Tuple
 
 # --- Helper functions to modify model heads ---
-# These functions are specific to the model architectures and belong here.
 
 def _set_fc(m, nc):
     """Replaces the 'fc' layer of a model like ResNet."""
@@ -24,6 +23,11 @@ def _replace_last_linear_in_sequential(seq: nn.Sequential, nc: int):
     in_features = seq[idx].in_features
     seq[idx] = nn.Linear(in_features, nc)
 
+def _set_cls(model, nc):
+    """Replaces the head of models with a '.classifier' sequential attribute."""
+    _replace_last_linear_in_sequential(model.classifier, nc)
+
+
 def _set_convnext_head(m, nc):
     """Replaces the head of a ConvNeXt model."""
     lin = m.classifier[-1]
@@ -39,9 +43,9 @@ try: REGISTRY["resnet18"] = (models.resnet18, models.ResNet18_Weights.IMAGENET1K
 except Exception: pass
 try: REGISTRY["resnet50"] = (models.resnet50, models.ResNet50_Weights.IMAGENET1K_V2, _set_fc)
 except Exception: pass
-try: REGISTRY["mobilenet_v3_large"] = (models.mobilenet_v3_large, models.MobileNet_V3_Large_Weights.IMAGENET1K_V1, _replace_last_linear_in_sequential)
+try: REGISTRY["mobilenet_v3_large"] = (models.mobilenet_v3_large, models.MobileNet_V3_Large_Weights.IMAGENET1K_V1, _set_cls)
 except Exception: pass
-try: REGISTRY["efficientnet_v2_s"] = (models.efficientnet_v2_s, models.EfficientNet_V2_S_Weights.IMAGENET1K_V1, _replace_last_linear_in_sequential)
+try: REGISTRY["efficientnet_v2_s"] = (models.efficientnet_v2_s, models.EfficientNet_V2_S_Weights.IMAGENET1K_V1, _set_cls)
 except Exception: pass
 try: REGISTRY["convnext_tiny"] = (models.convnext_tiny, models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1, _set_convnext_head)
 except Exception: pass
