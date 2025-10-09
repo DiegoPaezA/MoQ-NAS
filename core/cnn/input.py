@@ -104,13 +104,13 @@ class GenericDataLoader:
         Initialize the GenericDataLoader.
 
         Parameters:
-          params (dict): must include:
-            - dataset: dataset name (e.g., "cifar10", "cifar100", "atleta_axial", "pathmnist", ...)
-            - data_path: root data folder
-            - config_path_dataset: path to YAML config describing this dataset
-          train_split (float): Split ratio for training data (torchvision family).
-          seed (int): Seed for randomization (defaults to time()).
-          info (dict): Unused (kept for API compatibility).
+            params (dict): must include:
+                - dataset: dataset name (e.g., "cifar10", "cifar100", "atleta_axial", "pathmnist", ...)
+                - data_path: root data folder
+                - config_path_dataset: path to YAML config describing this dataset
+            train_split (float): Split ratio for training data (torchvision family).
+            seed (int): Seed for randomization (defaults to time()).
+            info (dict): Unused (kept for API compatibility).
         """
         self.params = params
         self.train_split = float(train_split)
@@ -209,7 +209,7 @@ class GenericDataLoader:
         Get data loader for training or validation/testing.
 
         Parameters:
-          for_train (bool): If True, returns (train_loader, val_loader); otherwise, returns test_loader.
+            for_train (bool): If True, returns (train_loader, val_loader); otherwise, returns test_loader.
         """
         # Deterministic DataLoader shuffling
         g = _make_gen(int(self.params.get("loader_seed", self.seed)))

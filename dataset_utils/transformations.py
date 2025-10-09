@@ -1,40 +1,58 @@
 # dataset_utils/transformations.py
-from torchvision.transforms import TrivialAugmentWide
-from torchvision.transforms import Compose, ToTensor, Normalize, Resize
-
+from torchvision.transforms import (
+    Compose, ToTensor, Normalize, Resize,
+    TrivialAugmentWide, RandomResizedCrop, RandomHorizontalFlip, CenterCrop
+)
 
 def build_transforms(spec, data_augmentation: bool):
     """
-    spec: DatasetSpec or a simple object with .name .shape .mean .std
-    Return: train_transform, eval_transform
+    spec: DatasetSpec or object with .name .shape .mean .std
+    Return: (train_transform, eval_transform)
     """
-    # Start with transforms that expect a PIL image
-    train_transforms_list = []
-    eval_transforms_list = []
+    ds_name = (spec.name or "").lower()
 
-    # 1. Handle resizing first for both pipelines
-    if "atleta" in spec.name.lower():
+    # --- Heads (PIL-space ops) ---
+    train_head, eval_head = [], []
+
+    if "atleta" in ds_name:
+        # spec.shape expected as (C, H, W)
         _, h, w = spec.shape
-        resize_transform = Resize((h, w))
-        train_transforms_list.append(resize_transform)
-        eval_transforms_list.append(resize_transform)
+        resize = Resize((h, w))
+        train_head.append(resize)
+        eval_head.append(resize)
 
-    # 2. Add data augmentation ONLY to the training pipeline
-    if data_augmentation:
-        # TrivialAugmentWide operates on PIL images
-        train_transforms_list.append(TrivialAugmentWide(num_magnitude_bins=31))
+        if data_augmentation:
+            train_head.append(TrivialAugmentWide(num_magnitude_bins=31))
 
-    # 3. Add ToTensor and Normalize to BOTH pipelines at the end
-    train_transforms_list.append(ToTensor())
-    eval_transforms_list.append(ToTensor())
+    elif "person" in ds_name or "face" in ds_name:
+        t = getattr(spec, "transform", None)
+        img_size = int(t.get("img_size", spec.shape[1])) if isinstance(t, dict) else int(spec.shape[1])
 
-    if spec.mean is not None and spec.std is not None:
-        normalize_transform = Normalize(mean=spec.mean, std=spec.std)
-        train_transforms_list.append(normalize_transform)
-        eval_transforms_list.append(normalize_transform)
+        # Eval (and non-aug train) use standard resize + center crop
+        eval_head.extend([Resize(int(img_size * 256 / 224)), CenterCrop(img_size)])
 
-    # 4. Compose the final pipelines
-    train_tf = Compose(train_transforms_list)
-    eval_tf = Compose(eval_transforms_list)
+        if data_augmentation:
+            # Stronger train-time aug for face/person
+            train_head.extend([
+                RandomResizedCrop(img_size, scale=(0.08, 1.0)),
+                RandomHorizontalFlip(),
+                TrivialAugmentWide(num_magnitude_bins=31),
+            ])
+        else:
+            # Mirror eval geometry if no aug
+            train_head.extend(eval_head)
 
+    else:
+        # Generic datasets: optionally add light augmentation to train
+        if data_augmentation:
+            train_head.append(TrivialAugmentWide(num_magnitude_bins=31))
+        # eval_head stays empty (identity) unless you add dataset-specific geometry
+
+    # --- Shared tail (tensor-space ops) ---
+    tail = [ToTensor()]
+    if getattr(spec, "mean", None) is not None and getattr(spec, "std", None) is not None:
+        tail.append(Normalize(mean=spec.mean, std=spec.std))
+
+    train_tf = Compose([*train_head, *tail])
+    eval_tf  = Compose([*eval_head,  *tail])
     return train_tf, eval_tf
