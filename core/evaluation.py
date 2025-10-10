@@ -116,6 +116,24 @@ class EvalPopulation(object):
         """
         pop_size = len(decoded_nets)
         result_queue: mp.Queue = mp.Queue()
+        
+        # --- THIS IS THE FINAL LOGIC ---
+        gpu_semaphores = None
+        # Check if FairnessMetric is in the user's configuration
+        is_fairness_enabled = any(
+            metric.get('name') == 'FairnessMetric' for metric in self.train_params.get('metrics', [])
+        )
+
+        if is_fairness_enabled:
+            manager = mp.Manager()
+            if self.gpus:
+                # Create a semaphore for each specific GPU
+                gpu_semaphores = {gpu: manager.Semaphore(1) for gpu in self.gpus}
+                self.logger.info(f"FairnessMetric enabled. Creating a dedicated semaphore for each of {len(self.gpus)} GPUs.")
+            else: # Fallback for CPU
+                gpu_semaphores = {"cpu": manager.Semaphore(1)}
+        else:
+            self.logger.info("FairnessMetric not found in config. Semaphore locking is disabled.")
 
         # Temporal solution to distribute the individuals in the threads
         selected_thread = 0
@@ -139,7 +157,7 @@ class EvalPopulation(object):
             gpu_device = self.gpus[thread_id % len(self.gpus)]
             p = mp.Process(
                 target=self.run_individuals,
-                args=(generation, self.train_params, self.fn_dict, batch_thread, gpu_device, result_queue)
+                args=(generation, self.train_params, self.fn_dict, batch_thread, gpu_device, result_queue, gpu_semaphores)
             )
             p.start()
             processes.append(p)
@@ -159,8 +177,8 @@ class EvalPopulation(object):
         self.logger.info(f"Time elapsed for {pop_size} individuals: {int(mins)}m {int(secs)}s")
 
         return results
-            
-    def run_individuals(self, generation, train_params, fn_dict, individuals_thread, gpu_device, queue: mp.Queue):
+
+    def run_individuals(self, generation, train_params, fn_dict, individuals_thread, gpu_device, queue: mp.Queue, gpu_semaphores=None):
         # --- Cambios mínimos para rendimiento y correctitud por proceso ---
         # 1) Fijar dispositivo CUDA explícito por proceso (evita 'current_device' heredado)
         if isinstance(gpu_device, str) and gpu_device.startswith("cuda"):
@@ -184,7 +202,8 @@ class EvalPopulation(object):
                             decoded_net,
                             decoded_params,
                             train_loader,
-                            val_loader)
+                            val_loader,
+                            gpu_semaphores=gpu_semaphores)
             except RuntimeError as e:
                 # Manejo específico de OOM u otros errores de runtime
                 self.logger.error(f"RuntimeError training model {id_str}: {e}")
