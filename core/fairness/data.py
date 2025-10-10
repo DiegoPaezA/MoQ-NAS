@@ -193,11 +193,10 @@ def create_binary_loaders(data_root: str, batch_size: int, num_workers: int,
     return train_loader, val_loader
 
 
-def create_eval_loader(dataset_name: str, csv_path: str, batch_size: int, 
-                    num_workers: int = 4, img_size: int = 224, cache_dir: Optional[str] = ".cache/facet_crops"
-                    ) -> DataLoader:
-    """Creates a DataLoader for a fairness evaluation dataset (FACET or FairFace)."""
-    # ... (This function remains exactly the same) ...
+def create_eval_loader(dataset_name: str, csv_path: str, batch_size: int, img_size: int = 224, 
+                    cache_dir: Optional[str] = ".cache/facet_crops", phase: Optional[str] = None) -> DataLoader:
+    """Creates a DataLoader for a fairness evaluation dataset, optimizing for the execution phase."""
+    
     val_transforms = get_default_transforms(img_size)['val']
 
     if dataset_name.lower() == 'facet':
@@ -206,8 +205,16 @@ def create_eval_loader(dataset_name: str, csv_path: str, batch_size: int,
         dataset = FairFaceEvalDataset(csv_path, tfm=val_transforms)
     else:
         raise ValueError(f"Evaluation dataset '{dataset_name}' is not supported. Use 'facet' or 'fairface'.")
-        
+
+    is_evolution = (phase == 'evolution')
+
+    num_workers = 0 if is_evolution else 4
+    pin_memory = False if is_evolution else True
+
     return DataLoader(
-        dataset, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=False,
+        num_workers=num_workers, 
+        pin_memory=pin_memory
     )

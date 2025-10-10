@@ -14,7 +14,7 @@ class ScalarizedFitness(BaseMetric):
     """
     name = "scalarized_fitness"
 
-    def __init__(self, metric_type: str, max_params: float, max_inference_time: float):
+    def __init__(self, metric_type: str, max_params: float, max_inference_time: float, **kwargs):
         """
         Initializes the scalarized fitness calculator.
 
@@ -23,8 +23,7 @@ class ScalarizedFitness(BaseMetric):
             max_params (float): The threshold for the maximum number of parameters.
             max_inference_time (float): The threshold for the maximum inference time.
         """
-        self._init_args = locals()
-        del self._init_args['self']
+        super().__init__(metric_type=metric_type, max_params=max_params, max_inference_time=max_inference_time, **kwargs)
         self.metric_type = metric_type
         self.T_p = max_params
         self.T_t = max_inference_time
@@ -99,10 +98,9 @@ class ValidationLossFitness(BaseMetric):
     """
     name = "fitness_val_loss"
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         """Initializes the validation loss fitness calculator."""
-        self._init_args = locals()
-        del self._init_args['self']
+        super().__init__(**kwargs)
 
     def reset(self):
         """This metric is stateless across batches, so reset does nothing."""

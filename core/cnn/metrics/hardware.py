@@ -9,8 +9,10 @@ class HardwareMetrics(BaseMetric):
     Includes inference time, parameter count, FLOPs, and memory usage (MiB).
     """
     name = "hardware_metrics"
-
-    def __init__(self, model: torch.nn.Module, device: str, input_shape):
+    @property
+    def is_post_processing(self) -> bool:
+        return True
+    def __init__(self, model: torch.nn.Module, device: str, input_shape, **kwargs):
         """
         Args:
             model (torch.nn.Module): Model to evaluate.
@@ -18,7 +20,7 @@ class HardwareMetrics(BaseMetric):
             input_shape (tuple|list|int): Shape of a single sample (e.g., (C,H,W) or (N,C,H,W) or just int).
         """
         # keep init args for cloning in trainer
-        self._init_args = dict(model=model, device=device, input_shape=input_shape)
+        super().__init__(model=model, device=device, input_shape=input_shape, **kwargs)
 
         self.model_metrics = ModelMetrics(model, device=device)
         self.input_shape = input_shape
@@ -32,7 +34,7 @@ class HardwareMetrics(BaseMetric):
         """No-op: hardware metrics are computed once per eval/train epoch."""
         return
 
-    def compute(self) -> dict:
+    def compute(self, epoch_results=None) -> dict:
         """
         Compute hardware metrics (cached per epoch).
         - cuda_inference_time: μs
