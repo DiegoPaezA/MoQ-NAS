@@ -5,13 +5,14 @@
     algorithms.
 - It includes a base trainer class and a specialized ResNet trainer class.
 - Refactored trainer module to support a pluggable metrics system while
-  retaining direct loss calculation for training consistency.
+    retaining direct loss calculation for training consistency.
 - The trainer is now agnostic to the specific metrics being calculated,
-  making it highly extensible for new evaluation criteria like fairness.
+    making it highly extensible for new evaluation criteria like fairness.
 """
 
 
 import os
+import copy
 import time
 import torch
 from torch.amp import GradScaler, autocast
@@ -106,6 +107,15 @@ class BaseTrainer:
         # --- Pluggable Metrics System ---
         self.primary_metrics = [m for m in metrics if 'epoch_results' not in m.compute.__code__.co_varnames]
         self.post_processing_metrics = [m for m in metrics if m not in self.primary_metrics]
+        
+        fairness_metric = None
+        for i, metric in enumerate(self.primary_metrics):
+            if metric.name == "FairnessMetric":
+                fairness_metric = self.primary_metrics.pop(i)
+                break
+        if fairness_metric:
+            self.post_processing_metrics.append(fairness_metric)
+            
         self.val_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
         self.test_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
         
@@ -117,6 +127,7 @@ class BaseTrainer:
         self.best_validation_loss = float('inf')
         self.best_epoch = 0
         self.no_improve_count = 0
+        self.best_model_state_dict = None
         self.best_model_path = os.path.join(self.params['model_path'], 'best_model.pth')
         os.makedirs(self.params['model_path'], exist_ok=True)
 
@@ -198,8 +209,8 @@ class BaseTrainer:
         
         epoch_results['loss'] = total_loss / max(1, total_examples)
         
-        for metric in self.post_processing_metrics:
-            epoch_results.update(metric.compute(epoch_results))
+        # for metric in self.post_processing_metrics:
+        #     epoch_results.update(metric.compute(epoch_results))
             
         return epoch_results
 
@@ -217,8 +228,7 @@ class BaseTrainer:
         self.model = self.reset_and_load_best_model(self.best_model_path)
         
         # 1. Combina métricas de test y artefactos para procesarlos juntos
-        all_final_processors = self.test_primary_metrics + self.artifacts
-        
+        all_final_processors = self.test_primary_metrics + self.post_processing_metrics + self.artifacts
         # 2. Resetea todos los procesadores
         for processor in all_final_processors:
             processor.reset()
@@ -243,7 +253,7 @@ class BaseTrainer:
             final_results.update(processor.compute())
                 
         self.logger.info("Experiment: %s - Test loss: %.2f - Test accuracy: %.2f%%",
-                         self.params['experiment_path'], final_results.get('loss', 0), final_results.get('accuracy', 0))
+                        self.params['experiment_path'], final_results.get('loss', 0), final_results.get('accuracy', 0))
 
         return final_results
     
@@ -288,6 +298,8 @@ class BaseTrainer:
                 if current_accuracy > self.best_accuracy:
                     self.best_accuracy = current_accuracy
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
+                    if phase == 'evolution':
+                        self.best_model_state_dict = copy.deepcopy(self.model.state_dict())
                     if phase == 'retrain':
                         torch.save(self.model.state_dict(), self.best_model_path)
 
@@ -310,29 +322,39 @@ class BaseTrainer:
                     self.update_scheduler(metric=current_loss)
                     if epoch % 25 == 0:
                         self.logger.info("Experiment: %s: Epoch [%d/%d] - Train Loss: %.2f - Val Loss: %.2f - Val Acc: %.2f%%",
-                                         self.params['experiment_path'], epoch, max_epochs, train_results.get('loss',0), current_loss, current_accuracy)
+                                        self.params['experiment_path'], epoch, max_epochs, train_results.get('loss',0), current_loss, current_accuracy)
                 if debug:
                     if epoch >= start_eval_epoch:
                         self.logger.info("Epoch [%d/%d] - Training Loss: %.4f - Validation Loss: %.4f - Validation Accuracy: %.2f%%",
-                                         epoch, max_epochs, train_results.get('loss',0), current_loss, current_accuracy)
+                                        epoch, max_epochs, train_results.get('loss',0), current_loss, current_accuracy)
                     elif epoch % 5 == 0:
                         self.logger.info("Epoch [%d/%d] - Training Loss: %.4f - Training Accuracy: %.2f%%",
-                                         epoch, max_epochs, train_results.get('loss',0), train_results.get('accuracy',0))
+                                        epoch, max_epochs, train_results.get('loss',0), train_results.get('accuracy',0))
 
         # --- Final Result Aggregation ---
         total_training_time = time.time() - t0
         self.params['training_time'] = total_training_time
         
+        # 1. Run the test phase if needed (retrain/resnet)
         test_results = {}
         if (phase == 'retrain' or phase == 'resnet') and self.test_loader is not None:
             test_results = self._run_test_phase()
 
-        # Combine all available results for post-processing metrics
-        # This includes the final validation results and test results
+        # 2. Combine all intermediate results into one dictionary
         combined_final_results = {**val_results, **test_results}
-        for metric in self.post_processing_metrics:
-            combined_final_results.update(metric.compute(combined_final_results))
 
+        # 3. Run all post-processing metrics ONCE, using the combined results
+        if self.post_processing_metrics:
+            # Load the best model before running expensive metrics
+            if phase == 'evolution' and self.best_model_state_dict is not None:
+                self.model.load_state_dict(self.best_model_state_dict)
+            elif phase == 'retrain':
+                self.model = self.reset_and_load_best_model(self.best_model_path)
+            
+            for metric in self.post_processing_metrics:
+                # This call now correctly passes the results dictionary, fixing the error
+                combined_final_results.update(metric.compute(epoch_results=combined_final_results))
+        
         # Compile the final, comprehensive results dictionary in the original format
         final_output = {
             'training_losses': training_losses,
@@ -368,8 +390,15 @@ class BaseTrainer:
             'test_loss':             test_results.get('loss', None),
         })
         
+    
         # Escritura única del archivo
-        create_info_file(self.params['model_path'], self.params, 'training_params.txt')
+        clean_params = self._get_clean_params_for_saving()
+        clean_params.update({
+            "per_group_tpr": final_output.get("per_group_tpr"),
+            "metrics_fairness": final_output.get("metrics"),
+            "fairness_score": final_output.get("fairness_score"),
+        })
+        create_info_file(self.params['model_path'], clean_params, 'training_params.txt')
         self.release_gpu_memory()
 
         return final_output
@@ -423,7 +452,7 @@ class BaseTrainer:
             self.scheduler.step(metric)
         else: 
             self.scheduler.step()
-  
+
     def should_evaluate(self, epoch, start_eval_epoch):
         """
         Determines whether evaluation should be performed at the given epoch.
@@ -459,6 +488,23 @@ class BaseTrainer:
             return
         torch.cuda.empty_cache()
         #self.logger.info("GPU cache cleared.")
+
+    def _get_clean_params_for_saving(self):
+        """
+        Creates a deep copy of the params dictionary and removes non-serializable
+        or unnecessary items like the model object before saving to a file.
+        """
+        # Use deepcopy to avoid modifying the original params object
+        params_to_save = copy.deepcopy(self.params)
+        
+        # The model is passed within the 'metrics' list in the config.
+        # We need to find the FairnessMetric's params and remove the model from there.
+        if 'metrics' in params_to_save:
+            for metric_cfg in params_to_save['metrics']:
+                if metric_cfg.get('name') == 'FairnessMetric' and 'params' in metric_cfg:
+                    metric_cfg['params'].pop('model', None)
+        
+        return params_to_save
 
     def reset_and_load_best_model(self, best_model_path):
         """
