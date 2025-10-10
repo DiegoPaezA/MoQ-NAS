@@ -70,28 +70,27 @@ def evaluate_one_model(arch: str, ckpt_path: str, device: torch.device, args: ar
 
     # --- Step 1: Build the Model and Load its Weights ---
     model = make_baseline_model(arch, num_classes=2)
-    # Using weights_only=True is recommended for safety
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
     model.to(device)
     model.eval()
-    # --- Step 2: Create a Self-Contained Config Object ---
-    cfg = SimpleNamespace()
-    cfg.FAIRNESS = SimpleNamespace()
-    cfg.FAIRNESS.EVAL_DATASET = args.dataset_name
-    cfg.FAIRNESS.EVAL_DATASET_PATH = args.csv_path
-    cfg.FAIRNESS.BETA = args.beta
-    cfg.FAIRNESS.OBJECTIVE = "fairness_score" # This is the expected value
-    cfg.FAIRNESS.CACHE_DIR = args.cache_dir
-
-    cfg.TRAIN = SimpleNamespace(BATCH_SIZE=args.batch_size)
-    cfg.SYSTEM = SimpleNamespace(NUM_WORKERS=args.num_workers)
-    cfg.CNN = SimpleNamespace(INPUT_SIZE=args.img_size)
     
-    # --- Step 3: Instantiate and Run the Fairness Metric ---
-    fairness_metric = FairnessMetric(cfg=cfg)
-    results = fairness_metric.compute(model)
+    # --- Step 2: Instantiate and Run the Fairness Metric ---
+    # The new FairnessMetric is initialized with keyword arguments directly from 'args'
+    fairness_metric = FairnessMetric(
+        model=model,
+        device=device,
+        eval_dataset_name=args.dataset_name,
+        eval_dataset_path=args.csv_path,
+        optimization_objective="spd_sum",  # Objective for analysis
+        beta=args.beta,
+        cache_dir=args.cache_dir,
+        batch_size=args.batch_size,
+        positive_class_idx=1,
+        eval_skintone_method='soft'
+    )
+    results = fairness_metric.compute()
     
-    # --- Step 4: Print the Key Results ---
+    # --- Step 3: Print the Key Results ---
     print(f"\n--- Results for [{arch}] on [{args.dataset_name}] ---")
     print_detailed_results(arch, results)
         
