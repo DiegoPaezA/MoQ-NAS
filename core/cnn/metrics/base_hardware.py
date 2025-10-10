@@ -10,11 +10,11 @@ import torch.nn as nn
 def _normalize_input_shape(shape: Union[int, Sequence[int]]) -> Tuple[int, int, int, int]:
     """
     Ensure a 4D shape (N,C,H,W) from common inputs:
-      - int -> (1,1,int,int)
-      - (C,H,W) -> (1,C,H,W)
-      - (N,C,H,W) -> unchanged
-      - (H,W) -> (1,1,H,W)
-      - (C,) -> (1,C,1,1)
+        - int -> (1,1,int,int)
+        - (C,H,W) -> (1,C,H,W)
+        - (N,C,H,W) -> unchanged
+        - (H,W) -> (1,1,H,W)
+        - (C,) -> (1,C,1,1)
     """
     if isinstance(shape, int):
         return (1, 1, shape, shape)

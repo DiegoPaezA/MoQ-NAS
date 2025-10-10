@@ -44,6 +44,6 @@ class BaseMetric(ABC):
 
         Returns:
             dict: A dictionary where keys are metric names and values are the
-                  computed results. A single metric can return multiple key-value pairs.
+                computed results. A single metric can return multiple key-value pairs.
         """
         pass
