@@ -43,7 +43,7 @@ class ScalarizedFitness(BaseMetric):
 
         Args:
             epoch_results (Dict): A dictionary containing the computed values
-                                  from all other metrics for the current epoch.
+                                from all other metrics for the current epoch.
 
         Returns:
             Dict: A dictionary containing the final 'scalar_multi_objective' score.
@@ -118,7 +118,7 @@ class ValidationLossFitness(BaseMetric):
 
         Args:
             epoch_results (Dict): A dictionary containing the computed values
-                                  from all other metrics for the current epoch.
+                                from all other metrics for the current epoch.
 
         Returns:
             Dict: A dictionary containing the 'fitness_val_loss' score.
