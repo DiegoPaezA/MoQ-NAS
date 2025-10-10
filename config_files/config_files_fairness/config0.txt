@@ -2,11 +2,11 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 150
+    max_generations: 5
     max_num_nodes: 20
-    num_quantum_ind: 5
+    num_quantum_ind: 10
     penalize_number: 3
-    repetition: 4
+    repetition: 2
     replace_method: best
     update_quantum_gen: 5
     update_quantum_rate: 0.2
@@ -52,10 +52,10 @@ QNAS:
                      'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
 
 train:
-    batch_size: 256
-    eval_batch_size: 256
-    max_epochs: 50
-    epochs_to_eval: 5 
+    batch_size: 128
+    eval_batch_size: 128
+    max_epochs: 6
+    epochs_to_eval: 1 
     optimizer: AdamW
     mixed_precision: True
     device: cuda:0
@@ -73,10 +73,10 @@ train:
     subtract_mean: true
     limit_data: true
     limit_data_value: 10000
-    num_workers: 4
+    num_workers: 2
 
     # Hardware settings - parallelization
-    threads: 20
+    threads: 6
 
     # Network structure Configuration
     network_config: default
@@ -85,15 +85,18 @@ train:
     # Multi-objective parameters
     multi_objective: False
     num_objectives: 2
-    objectives: ['best_accuracy', 'spd_sum'] #
+    objectives: ['best_accuracy', 'fairness_score'] #
     metrics:
       - name: Accuracy
       - name: HardwareMetrics
       - name: FairnessMetric
         params:
           eval_dataset_name: 'facet'
-          eval_dataset_path: 'data/facet_eval.csv'
+          eval_skintone_method: 'soft'
+          eval_dataset_path: 'datasets/facet_data/facet_eval.csv'
           optimization_objective: 'spd_sum'
           beta: 0.2
+          cache_dir: '.cache/facet_crops'
+          batch_size_fairness: 16
     artifacts:
       - name: ConfusionMatrix
