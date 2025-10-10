@@ -3,7 +3,7 @@
 
 - Master module for training and evaluating CNN models.
 - Updated to support the pluggable metrics system by dynamically
-      creating metric objects from the configuration.
+        creating metric objects from the configuration.
 
 """
 import os
@@ -16,9 +16,8 @@ from . import model, trainer, model_resnet
 from utils.helpers import init_log, setup_dataset_info
 
 from .artifacts import ConfusionMatrix
-from .metrics import Accuracy, HardwareMetrics, MedMNIST_Metrics
+from .metrics import Accuracy, HardwareMetrics, MedMNIST_Metrics, FairnessMetric
 from .metrics.fitness import ScalarizedFitness, ValidationLossFitness
-# from .metrics.fairness import FairFaceMetrics, FacetMetrics
 
 # Initialize a logger (assumed to be defined in init_log)
 project_root = os.getcwd() 
@@ -55,6 +54,7 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
         "HardwareMetrics": HardwareMetrics,
         "ScalarizedFitness": ScalarizedFitness,
         "ValidationLossFitness": ValidationLossFitness,
+        "FairnessMetric": FairnessMetric,
     }
 
     for metric_config in config['metrics']:
@@ -69,11 +69,9 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
                 params['device'] = device
                 params['input_shape'] = input_shape[1:]  # Pass (C, H, W)
 
-            # (Aquí añadirías la lógica para otras métricas complejas como Fairness)
-            # if metric_name == "FairFaceMetrics":
-            #     params['model'] = model_instance
-            #     params['device'] = device
-            #     # ... y otros params como transforms, csv_path, etc.
+            if metric_name == "FairnessMetric":
+                params['model'] = model_instance
+                params['device'] = device
 
             metric_instances.append(MetricClass(**params))
     
