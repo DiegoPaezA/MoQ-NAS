@@ -181,6 +181,16 @@ def build_datasets(
         
         # 2. Load the original training data to prepare for splitting
         trainval_raw = tvd.ImageFolder(root=train_path, transform=None)
+        
+        class_to_idx = trainval_raw.class_to_idx
+        positive_class_name = 'person' if 'person' in ds_name else 'face'
+        
+        if positive_class_name in class_to_idx:
+            positive_idx = class_to_idx[positive_class_name]
+            params['positive_class_idx'] = positive_idx
+        else:
+            params['positive_class_idx'] = 1
+        
         labels_full = np.asarray([y for _, y in trainval_raw.samples], dtype=int)
         
         # 3. Create new train/val split from the original training data
