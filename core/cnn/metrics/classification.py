@@ -10,6 +10,7 @@ class Accuracy(BaseMetric):
     name = "accuracy"
 
     def __init__(self):
+        super().__init__()
         self.correct = 0
         self.total = 0
 
@@ -36,7 +37,7 @@ class MedMNIST_Metrics(BaseMetric):
     """
     name = "medmnist_metrics"
 
-    def __init__(self, dataset_name: str, data_path: str):
+    def __init__(self, dataset_name: str, data_path: str, **kwargs):
         """
         Initializes the MedMNIST evaluator.
 
@@ -44,6 +45,8 @@ class MedMNIST_Metrics(BaseMetric):
             dataset_name (str): The name of the MedMNIST dataset (e.g., 'bloodmnist').
             data_path (str): The root path where the dataset is stored.
         """
+        super().__init__(dataset_name=dataset_name, data_path=data_path, **kwargs)
+
         self.evaluator = Evaluator(dataset_name, 'test', root=data_path)
         self.y_scores = []
 

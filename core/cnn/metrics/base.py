@@ -9,6 +9,12 @@ class BaseMetric(ABC):
     any metric, ensuring a consistent workflow for resetting, updating, and
     computing metric values.
     """
+    def __init__(self, **kwargs):
+        """
+        Initializes the metric and stores all arguments in the `_init_args`
+        dictionary to allow the Trainer to re-instantiate it.
+        """
+        self._init_args = kwargs
 
     @property
     @abstractmethod
@@ -47,3 +53,11 @@ class BaseMetric(ABC):
                 computed results. A single metric can return multiple key-value pairs.
         """
         pass
+    
+    @property
+    def is_post_processing(self) -> bool:
+        """
+        Returns True if the metric is expensive and should only be run once
+        at the end of the training/evaluation process. Defaults to False.
+        """
+        return False
