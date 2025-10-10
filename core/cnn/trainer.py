@@ -47,6 +47,7 @@ class BaseTrainer:
         test_loader (torch.utils.data.DataLoader): DataLoader for test data.
         params (dict): Dictionary of training parameters and configuration.
         metrics (list of BaseMetric): List of metric instances to compute during training and evaluation.
+        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
     Attributes:
         model (torch.nn.Module): The model being trained.
         criterion (torch.nn.Module): The loss function.
@@ -93,7 +94,7 @@ class BaseTrainer:
         - Designed for extensibility and integration with neural architecture search workflows.
     """
     def __init__(self, model_instance, criterion, optimizer, train_loader, val_loader, test_loader,
-                params: dict, metrics: list[BaseMetric], artifacts: list[BaseArtifact]):
+                params: dict, metrics: list[BaseMetric], artifacts: list[BaseArtifact], gpu_semaphores=None):
         self.model = model_instance.to(params['device'])
         self.criterion = criterion
         self.optimizer = optimizer
@@ -102,23 +103,19 @@ class BaseTrainer:
         self.test_loader = test_loader
         self.params = params
         self.device = torch.device(params['device'])
+        self.gpu_semaphores = gpu_semaphores
 
         self.scaler = GradScaler(self.device.type, enabled=self.params.get('mixed_precision', False))
         # --- Pluggable Metrics System ---
-        self.primary_metrics = [m for m in metrics if 'epoch_results' not in m.compute.__code__.co_varnames]
-        self.post_processing_metrics = [m for m in metrics if m not in self.primary_metrics]
-        
-        fairness_metric = None
-        for i, metric in enumerate(self.primary_metrics):
-            if metric.name == "FairnessMetric":
-                fairness_metric = self.primary_metrics.pop(i)
-                break
-        if fairness_metric:
-            self.post_processing_metrics.append(fairness_metric)
-            
-        self.val_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
-        self.test_primary_metrics = [m.__class__(**m._init_args) if hasattr(m, '_init_args') else m.__class__() for m in self.primary_metrics]
-        
+        self.post_processing_metrics = [
+            m for m in metrics if m.is_post_processing or 'epoch_results' in m.compute.__code__.co_varnames
+        ]
+        self.primary_metrics = [m for m in metrics if m not in self.post_processing_metrics]
+
+        # Clones are only needed for primary metrics.
+        self.val_primary_metrics = [m.__class__(**m._init_args) for m in self.primary_metrics]
+        self.test_primary_metrics = [m.__class__(**m._init_args) for m in self.primary_metrics]
+
         self.artifacts = artifacts # List of artifact instances to compute after training
 
 
@@ -228,9 +225,9 @@ class BaseTrainer:
         self.model = self.reset_and_load_best_model(self.best_model_path)
         
         # 1. Combina métricas de test y artefactos para procesarlos juntos
-        all_final_processors = self.test_primary_metrics + self.post_processing_metrics + self.artifacts
+        batch_processors  = self.test_primary_metrics + self.artifacts
         # 2. Resetea todos los procesadores
-        for processor in all_final_processors:
+        for processor in batch_processors :
             processor.reset()
         
         # 3. Itera sobre el test_loader y actualiza
@@ -244,13 +241,18 @@ class BaseTrainer:
                 
                 outputs, _, labels = self._forward_pass(inputs, labels)
                 
-                for processor in all_final_processors:
+                for processor in batch_processors :
                     processor.update(outputs.detach(), labels.detach())
 
         # 4. Computa los resultados finales
+        all_final_processors = self.test_primary_metrics + self.post_processing_metrics + self.artifacts
+
         final_results = {}
         for processor in all_final_processors:
-            final_results.update(processor.compute())
+            try:
+                final_results.update(processor.compute(epoch_results=final_results))
+            except TypeError:
+                final_results.update(processor.compute())
                 
         self.logger.info("Experiment: %s - Test loss: %.2f - Test accuracy: %.2f%%",
                         self.params['experiment_path'], final_results.get('loss', 0), final_results.get('accuracy', 0))
@@ -342,18 +344,40 @@ class BaseTrainer:
 
         # 2. Combine all intermediate results into one dictionary
         combined_final_results = {**val_results, **test_results}
-
+        id_thread = self.params.get('generation', 'N/A') + "_" + str(self.params.get('individual', 'N/A'))  
         # 3. Run all post-processing metrics ONCE, using the combined results
         if self.post_processing_metrics:
             # Load the best model before running expensive metrics
             if phase == 'evolution' and self.best_model_state_dict is not None:
                 self.model.load_state_dict(self.best_model_state_dict)
-            elif phase == 'retrain':
-                self.model = self.reset_and_load_best_model(self.best_model_path)
+                self.model.eval()
             
-            for metric in self.post_processing_metrics:
-                # This call now correctly passes the results dictionary, fixing the error
-                combined_final_results.update(metric.compute(epoch_results=combined_final_results))
+                needs_lock = self.gpu_semaphores and any(m.name == "FairnessMetric" for m in self.post_processing_metrics)
+                
+                semaphore_for_this_gpu = None
+                if needs_lock:
+                    device_key = str(self.device)
+                    semaphore_for_this_gpu = self.gpu_semaphores.get(device_key)
+
+                # Acquire the lock for the specific GPU if needed.
+                if semaphore_for_this_gpu:
+                    self.logger.info(f"Thread {id_thread} on {device_key}: Waiting for GPU lock...")
+                    semaphore_for_this_gpu.acquire()
+                    self.logger.info(f"Thread {id_thread} acquired lock for {device_key}.")
+
+                try:
+                    # This block now runs with or without a lock, depending on the config.
+                    for metric in self.post_processing_metrics:
+                        try:
+                            combined_final_results.update(metric.compute(epoch_results=combined_final_results))
+                        except TypeError:
+                            combined_final_results.update(metric.compute())
+                finally:
+                    # ALWAYS release the lock if it was acquired.
+                    if semaphore_for_this_gpu:
+                        semaphore_for_this_gpu.release()
+                        self.logger.info(f"Thread {id_thread} released lock for {device_key}.")
+                # --- END FINAL LOGIC ---
         
         # Compile the final, comprehensive results dictionary in the original format
         final_output = {
