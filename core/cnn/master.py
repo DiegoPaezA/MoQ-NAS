@@ -223,7 +223,7 @@ def setup_additional_params(params, id_num=None):
     params['individual'] = individual
     return params
 
-def create_model_and_trainer(params, train_loader, val_loader, test_loader):
+def create_model_and_trainer(params, train_loader, val_loader, test_loader, gpu_semaphores=None) -> Union[trainer.BaseTrainer, trainer.ResNetTrainer]:
     """
     Create the model and corresponding trainer instance based on the training phase.
     For the 'resnet' phase, a ResNet model and ResNetTrainer are used.
@@ -235,6 +235,7 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
         train_loader: Training DataLoader.
         val_loader: Validation DataLoader.
         test_loader: Test DataLoader (can be None for evolution phase).
+        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
 
     Returns:
         Union[BaseTrainer, ResNetTrainer]: The trainer instance corresponding to the selected phase.
@@ -291,14 +292,15 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader):
         artifacts = create_artifacts_from_config(config=params)
 
         trainer_instance = trainer.BaseTrainer(net, criterion, optimizer,
-                                    train_loader, val_loader, test_loader, params, metrics, artifacts)
+                                    train_loader, val_loader, test_loader, params, 
+                                    metrics, artifacts,gpu_semaphores=gpu_semaphores)
     return trainer_instance
 
 def run_training_phase(params: Dict[str, Any],
                         fn_dict: Dict[str, Any] = None,
                         net_list: List[str] = None, decoded_params: Union[Dict[str, Any], List] = None,
                         id_num: str = None, debug: bool = False,
-                        train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
+                        train_loader=None, val_loader=None, test_loader=None,gpu_semaphores=None) -> Dict[str, Any]:
     """
     Generic function to update parameters, create the trainer, and run training.
     It updates fn_dict, net_list, and additional parameters if provided, ensures that
@@ -315,6 +317,7 @@ def run_training_phase(params: Dict[str, Any],
         train_loader: Training DataLoader.
         val_loader: Validation DataLoader.
         test_loader: Test DataLoader (can be None for certain phases).
+        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
 
     Returns:
         Dict[str, Any]: Dictionary containing the training results.
@@ -338,7 +341,7 @@ def run_training_phase(params: Dict[str, Any],
         params = setup_dataset_info(params)
         params = ensure_model_path(params)
 
-    trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
+    trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader, gpu_semaphores=gpu_semaphores)
 
     results_dict = trainer.train(debug=debug)
         
@@ -350,6 +353,7 @@ def fitness(id_num: str, params: Dict[str, Any],
             decoded_params: Dict[str, Any],
             train_loader: torch.utils.data.DataLoader, 
             val_loader: torch.utils.data.DataLoader,
+            gpu_semaphores=None,
             debug: bool = False) -> Dict[str, Any]:
     """
     Train and evaluate a model using evolved networks in the evolution phase.
@@ -362,6 +366,7 @@ def fitness(id_num: str, params: Dict[str, Any],
         decoded_params (Dict[str, Any]): Decoded parameters for the model.
         net_list (List[str]): List of layer names to be used in the network.
         train_loader (torch.utils.data.DataLoader): Training DataLoader.
+        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
         debug (bool, optional): If True, returns the raw results dictionary for debugging.
 
     Returns:
@@ -371,7 +376,7 @@ def fitness(id_num: str, params: Dict[str, Any],
         Exception: Propagates any exception encountered during training after setting return_val to zeros.
     """
     try:
-        results_dict = run_training_phase(params, fn_dict, net_list, decoded_params, id_num, debug, train_loader, val_loader, None)
+        results_dict = run_training_phase(params, fn_dict, net_list, decoded_params, id_num, debug, train_loader, val_loader, None, gpu_semaphores=gpu_semaphores)
         LOGGER.info(f"Training of model {id_num} finished, best {params['fitness_metric']}: {round(results_dict[params['fitness_metric']], 2)}")
         return results_dict
     except Exception as e:

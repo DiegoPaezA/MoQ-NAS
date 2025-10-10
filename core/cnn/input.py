@@ -181,7 +181,7 @@ class GenericDataLoader:
         # Persist info once
         self.info_dict = {
             "dataset": self.params["dataset"],
-            "seed": self.seed,
+            "seed": self.params.get("split_seed", self.seed),
             "shape": [channels, height, width],
             "mean": mean,
             "std": std,
