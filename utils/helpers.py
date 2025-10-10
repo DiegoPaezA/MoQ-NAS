@@ -597,16 +597,16 @@ def setup_dataset_info(params):
     Update 'params' with dataset-specific information, prioritizing YAML configs.
 
     Expects in params:
-      - 'dataset' (str)
-      - 'batch_size' (int)
-      - 'config_path_dataset' (str) -> preferred YAML path, e.g. 'configs/cifar10.yaml'
+        - 'dataset' (str)
+        - 'batch_size' (int)
+        - 'config_path_dataset' (str) -> preferred YAML path, e.g. 'configs/cifar10.yaml'
         OR
-      - 'data_path' (str) with an existing 'data_info.txt' (written by the loader)
+        - 'data_path' (str) with an existing 'data_info.txt' (written by the loader)
 
     Sets:
-      - 'num_classes' (int)
-      - 'task' (str)
-      - 'input_shape' ([B, C, H, W])
+        - 'num_classes' (int)
+        - 'task' (str)
+        - 'input_shape' ([B, C, H, W])
     """
     if "dataset" not in params:
         raise KeyError("params['dataset'] is required")
