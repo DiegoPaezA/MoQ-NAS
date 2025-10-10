@@ -16,7 +16,7 @@
             "goal": "minimize"
         },
         "fairness": {
-            "goal": "maximize"
+            "goal": "minimize"
         }
     }
 }
