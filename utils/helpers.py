@@ -4,8 +4,7 @@ import pickle as pkl
 import os
 import re
 import json
-import copy
-
+import tempfile
 import time
 import matplotlib.pyplot as plt
 from shutil import rmtree
@@ -47,10 +46,52 @@ def load_yaml(file_path):
         dict with loaded parameters.
     """
 
-    with open(file_path, 'r') as f:
-        file = yaml.safe_load(f)
+    if not os.path.exists(file_path):
+        return {}
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data or {}
 
-    return file
+def _deep_merge(dst: dict, src: dict) -> dict:
+    """Deep-merge src into dst (in place)."""
+    for k, v in (src or {}).items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_merge(dst[k], v)
+        else:
+            dst[k] = v
+    return dst
+
+def _atomic_write_yaml(file_path: str, data: dict):
+    """Write YAML atomically (temp file + replace)."""
+    os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".params.", suffix=".tmp", dir=os.path.dirname(file_path) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                data,
+                f,
+                sort_keys=False,         # keep human-friendly order if present
+                default_flow_style=False,
+                allow_unicode=True
+            )
+        os.replace(tmp_path, file_path)  # atomic on POSIX
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+def update_yaml_file(file_path: str, patch: dict):
+    """
+    Read existing YAML (or {}), deep-merge `patch`, then atomically write it back.
+    """
+    current = load_yaml(file_path)
+    if not isinstance(current, dict):
+        # If the root isn't a mapping, upgrade to a mapping
+        current = {"_value": current}
+    merged = _deep_merge(current, patch or {})
+    _atomic_write_yaml(file_path, merged)
 
 def load_pkl(file_path):
     """ Load a pickle file.
