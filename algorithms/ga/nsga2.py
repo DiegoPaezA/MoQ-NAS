@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import pickle
 import numpy as np
@@ -41,6 +42,29 @@ class NSGA2(GA):
         self.fronts_history = {}
         self.objectives = objectives
         self.num_objectives = len(objectives) if objectives else None
+        
+        # load config objective sense
+        try:
+            with open("configs/cfg_obj.json", "r") as f:
+                self.objectives_info = json.load(f)["objectives"]
+        except Exception as e:
+            raise RuntimeError(f"Failed to load objective config: {e}")
+
+        self.objective_names = []
+        self.objective_senses = []
+        # Ensure all specified objectives have corresponding info
+        # Map the active objectives to their information
+        for active_obj in self.objectives:
+            match_found = False
+            for key, info in self.objectives_info.items():
+                if key in active_obj:
+                    self.objective_names.append(key)
+                    sense = 'max' if info['goal'] == 'maximize' else 'min'
+                    self.objective_senses.append(sense)
+                    match_found = True
+                    break # Move to the next active_obj
+            if not match_found:
+                print(f"Warning: Could not find a rule for '{active_obj}'")
 
     def _evaluate_with_cache(self):
         """Private method to evaluate the population using the cache."""
@@ -101,56 +125,46 @@ class NSGA2(GA):
         
         return self.fitnesses
     
-    @staticmethod
-    def compute_hypervolume_mixed(front_raw: np.ndarray, ref_point=None) -> float:
+    def compute_hypervolume_mixed(self, front_raw: np.ndarray, ref_point=None) -> float:
         """
-        Compute hypervolume for a 3-objective Pareto front where:
-            - front_raw[:, 0] = accuracy (to be maximized)
-            - front_raw[:, 1] = num_parameters (to be minimized)
-            - front_raw[:, 2] = inference_time (to be minimized)
-
-        We first convert everything into minimization form by flipping accuracy → -accuracy,
-        then build a reference point slightly above the “worst” in each dimension,
-        and finally call pymoo’s Hypervolume on that minimization front.
-
-        Args:
-            front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
-            ref_point (np.ndarray): shape=(3,) with the reference point for hypervolume calculation.
-
-        Returns:
-            float: the hypervolume (in the original mixed‐obj space).
+        Compute hypervolume for a Pareto front with mixed objectives.
         """
         if front_raw is None or len(front_raw) == 0:
             return 0.0
 
         f = np.array(front_raw, dtype=float, copy=True)
-        f[:, 0] = -f[:, 0]  # flip accuracy to minimization
+
+        # Flip the sign for maximization objectives
+        for i, sense in enumerate(self.objective_senses):
+            if sense == 'max':
+                f[:, i] = -f[:, i]
 
         # Choose a safe reference point (must be worse than all points for minimization)
         if ref_point is None:
             rp = np.max(f, axis=0) + 1e-6
         else:
             rp = np.asarray(ref_point, dtype=float)
+            # Flip the sign for maximization objectives in the reference point as well
+            for i, sense in enumerate(self.objective_senses):
+                if sense == 'max':
+                    rp[i] = -rp[i]
 
         return float(Hypervolume(ref_point=rp).do(f))
 
-    @staticmethod
-    def dominates(a, b):
+    def dominates(self, a, b):
         """
-        Determine Pareto domination between two fitness tuples.
-
-        Converts the first objective to minimization by negating it, then checks
-        if `a` is no worse in all objectives and strictly better in at least one.
-
-        Args:
-            a (tuple or list): Fitness values for candidate a.
-            b (tuple or list): Fitness values for candidate b.
-
-        Returns:
-            bool: True if a dominates b, False otherwise.
+        Determine Pareto domination between two fitness tuples based on objective senses.
         """
-        obj_a = np.array([-a[0]] + list(a[1:]))
-        obj_b = np.array([-b[0]] + list(b[1:]))
+        # Create copies of the fitness values to avoid modifying the originals
+        obj_a = np.array(a, copy=True)
+        obj_b = np.array(b, copy=True)
+
+        # Flip the sign for maximization objectives to convert them to minimization
+        for i, sense in enumerate(self.objective_senses):
+            if sense == 'max':
+                obj_a[i] = -obj_a[i]
+                obj_b[i] = -obj_b[i]
+
         return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
 
     def fast_nondominated_sort(self, fits):
