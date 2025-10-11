@@ -479,12 +479,9 @@ class MOQNAS(QNAS):
             gen_record = {1: []} # Storing the front in a key '1'
             
             for i in range(len(self.pareto_global_ids)):
-                individual_data = {
-                    "id":              self.pareto_global_ids[i],
-                    "accuracy":        float(self.pareto_global_fitnesses[i][0]),
-                    "params":          float(self.pareto_global_fitnesses[i][1]),
-                    "inference_time":  float(self.pareto_global_fitnesses[i][2])
-                }
+                individual_data = {"id": self.pareto_global_ids[i]}
+                for j, obj_name in enumerate(self.objectives):
+                    individual_data[obj_name] = float(self.pareto_global_fitnesses[i][j])
                 gen_record[1].append(individual_data)
 
             # 2) Calculate the hypervolume of the current global front.
