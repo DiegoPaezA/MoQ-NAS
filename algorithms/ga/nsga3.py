@@ -122,10 +122,15 @@ class NSGA3(NSGA2):
         return self.population[i] if np.random.rand() < 0.5 else self.population[j]
 
     def _to_minimization(self, fits):
+        """
+        Convert objectives to minimization based on self.objective_senses.
+        """
         f = np.array(fits, dtype=float, copy=True)
-        if self.maximize_first and f.shape[1] >= 1:
-            f[:, 0] = -f[:, 0]  # flip accuracy (maximize) to minimization
+        for i, sense in enumerate(self.objective_senses):
+            if sense == 'max':
+                f[:, i] = -f[:, i]
         return f
+
 
     # ---------- NSGA-III core: ref dirs, normalization, association, niching ----------
 
