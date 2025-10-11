@@ -54,8 +54,8 @@ QNAS:
 train:
     batch_size: 128
     eval_batch_size: 128
-    max_epochs: 6
-    epochs_to_eval: 1 
+    max_epochs: 50
+    epochs_to_eval: 5
     optimizer: AdamW
     mixed_precision: True
     device: cuda:0
@@ -73,10 +73,10 @@ train:
     subtract_mean: true
     limit_data: true
     limit_data_value: 10000
-    num_workers: 2
+    num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 6
+    threads: 4
 
     # Network structure Configuration
     network_config: default
