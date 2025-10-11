@@ -8,15 +8,19 @@
 import os
 import torch
 import time
+import copy
 from typing import Dict, Any
 import torch.multiprocessing as mp
 from .cnn import input, master
 from utils.helpers import init_log, setup_dataset_info
 
+worker_data_loader = None
 
 class EvalPopulation(object):
     """
-    Evaluate a population using multiple processes.
+    Evaluate a population using a two-stage process.
+    1. Primary objectives are evaluated in parallel.
+    2. Expensive post-processing objectives (e.g., Fairness) are evaluated serially.
 
     This class is designed to distribute the evaluation of a population of models
     using multiple processes.
@@ -65,10 +69,8 @@ class EvalPopulation(object):
         """
         self.fn_dict = fn_dict
         self.logger = init_log(log_level, name=__name__)
-        self.gpus = [f'cuda:{i}' for i in range(torch.cuda.device_count())]
         self.loader = input.GenericDataLoader(params=params)
         self.train_params = setup_dataset_info(params)
-        
         if 'objectives' not in self.train_params:
             raise KeyError("train_params must contain 'objectives' for evaluation.")
         
@@ -76,19 +78,34 @@ class EvalPopulation(object):
         objectives   = self.train_params.get('objectives', [])
         self.train_params['fitness_metric'] = objectives[0] if isinstance(objectives, list) and objectives else 'best_accuracy'
         
-        # if not multi_obj:
-        #     # Reemplaza únicamente el primer objetivo por la métrica principal
-        #     if isinstance(objectives, list) and objectives:
-        #         objectives[0] = main_metric
-        #     else:
-        #         # Si no había lista o estaba vacía, inicializa con la principal
-        #         objectives = [main_metric]
-        #     self.train_params['objectives'] = objectives
-        #     self.logger.info(f"Setting main metric '{main_metric}' as the first objective.")
-        self.metric_names = self.train_params['objectives']
+        all_objectives = list(self.train_params['objectives'])
+        self.fairness_metric_name = None
+        self.primary_metric_names = []
+        self.parallel_train_params = copy.deepcopy(self.train_params) # Params for subprocesses
+
+        # Check if FairnessMetric is defined in the detailed metrics configuration
+        fairness_metric_config = next((m for m in self.train_params.get('metrics', []) if m['name'] == 'FairnessMetric'), None)
+
+        if fairness_metric_config:
+            # Convention: The fairness score is the LAST objective in the 'objectives' list.
+            self.fairness_metric_name = all_objectives[-1]
+            self.primary_metric_names = all_objectives[:-1]
+
+            # CRITICAL: Create a new 'metrics' list for the parallel trainers
+            # that EXCLUDES the FairnessMetric. This prevents them from running it.
+            self.parallel_train_params['metrics'] = [
+                m for m in self.train_params.get('metrics', []) if m['name'] != 'FairnessMetric'
+            ]
+            self.logger.info(f"Primary metrics for PARALLEL evaluation: {self.primary_metric_names}")
+            self.logger.info(f"Fairness metric for SERIAL evaluation: '{self.fairness_metric_name}'")
+        else:
+            self.primary_metric_names = all_objectives
+            self.logger.info(f"All metrics will be evaluated in PARALLEL: {self.primary_metric_names}")
         
-        # mp.set_start_method('spawn')  # <- Mantener comentado en Linux para alto rendimiento con 'fork'
-        self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")        
+        self.metric_names = self.primary_metric_names
+
+        #self.logger.info(f"Evaluation process initialized with {len(self.gpus)} GPUs")
+
         
     def __call__(self, decoded_params: list, decoded_nets: list, generation: int):
         """
@@ -116,24 +133,6 @@ class EvalPopulation(object):
         """
         pop_size = len(decoded_nets)
         result_queue: mp.Queue = mp.Queue()
-        
-        # --- THIS IS THE FINAL LOGIC ---
-        gpu_semaphores = None
-        # Check if FairnessMetric is in the user's configuration
-        is_fairness_enabled = any(
-            metric.get('name') == 'FairnessMetric' for metric in self.train_params.get('metrics', [])
-        )
-
-        if is_fairness_enabled:
-            manager = mp.Manager()
-            if self.gpus:
-                # Create a semaphore for each specific GPU
-                gpu_semaphores = {gpu: manager.Semaphore(1) for gpu in self.gpus}
-                self.logger.info(f"FairnessMetric enabled. Creating a dedicated semaphore for each of {len(self.gpus)} GPUs.")
-            else: # Fallback for CPU
-                gpu_semaphores = {"cpu": manager.Semaphore(1)}
-        else:
-            self.logger.info("FairnessMetric not found in config. Semaphore locking is disabled.")
 
         # Temporal solution to distribute the individuals in the threads
         selected_thread = 0
@@ -154,56 +153,90 @@ class EvalPopulation(object):
             batch_thread = [x for x in individual_per_thread if x[1] == thread_id]
             if not batch_thread:
                 continue
-            gpu_device = self.gpus[thread_id % len(self.gpus)]
             p = mp.Process(
                 target=self.run_individuals,
-                args=(generation, self.train_params, self.fn_dict, batch_thread, gpu_device, result_queue, gpu_semaphores)
+                args=(generation, self.parallel_train_params, self.fn_dict, batch_thread, thread_id, result_queue)
             )
             p.start()
             processes.append(p)
 
         results: Dict[int, Dict[str, Any]] = {}
+        model_specs = [None] * pop_size
         for _ in range(pop_size):
-            idx, res_dict = result_queue.get()
-            # return only the self.metric_names
-            res_dict = {k: res_dict[k] for k in self.metric_names if k in res_dict}
+            idx, res_dict, model_path = result_queue.get()
             results[idx] = res_dict
-        
+            
+            if model_path and os.path.exists(model_path):
+                # Save spec for later fairness eval; do NOT build/load model here
+                model_specs[idx] = {
+                    "model_path": model_path,
+                    "decoded_net": decoded_nets[idx],
+                    "decoded_params": decoded_params[idx],
+                    "info_dir": os.path.dirname(model_path)
+                }
+            else:
+                model_specs[idx] = None
         for p in processes:
             p.join()
+        self.logger.info("Parallel evaluation complete.")
+
+        if self.fairness_metric_name:
+            # Run on CUDA in a spawned child; parent stays CUDA-free
+            fairness_metrics_dict = self.evaluate_fairness_parallel_cuda(model_specs)
+            self.logger.info("Merging fairness results...")
+            for idx, fairness_scores in fairness_metrics_dict.items():
+                if idx in results:
+                    results[idx].update(fairness_scores)
+                    score = fairness_scores.get(self.fairness_metric_name, fairness_scores.get("fairness_score"))
+                    self.logger.info(f"Candidate {idx} - {self.fairness_metric_name}: {score:.4f}")
+            self.logger.info("Merging complete.")
 
         evol_end_time = time.perf_counter()
         mins, secs = divmod(evol_end_time - evol_time_start, 60)
-        self.logger.info(f"Time elapsed for {pop_size} individuals: {int(mins)}m {int(secs)}s")
+        self.logger.info(f"Total time elapsed for generation {generation}: {int(mins)}m {int(secs)}s")
 
         return results
 
-    def run_individuals(self, generation, train_params, fn_dict, individuals_thread, gpu_device, queue: mp.Queue, gpu_semaphores=None):
+    def run_individuals(self, generation, train_params, fn_dict, individuals_thread, thread_id, queue: mp.Queue):
         # --- Cambios mínimos para rendimiento y correctitud por proceso ---
-        # 1) Fijar dispositivo CUDA explícito por proceso (evita 'current_device' heredado)
-        if isinstance(gpu_device, str) and gpu_device.startswith("cuda"):
-            torch.cuda.set_device(int(gpu_device.split(":")[1]))
-            torch.backends.cudnn.benchmark = True  # acelera convs con tamaños fijos
+        # 1. Determine the device.
+        global worker_data_loader
+        gpu_device = 'cpu' # Default to CPU
+        try:
+            # This is the first and only place CUDA is initialized for this process.
+            if torch.cuda.is_available():
+                num_gpus = torch.cuda.device_count()
+                if num_gpus > 0:
+                    gpu_idx = thread_id % num_gpus
+                    torch.cuda.set_device(gpu_idx)
+                    gpu_device = f'cuda:{gpu_idx}'
+        except Exception as e:
+            self.logger.error(f"CUDA initialization failed for thread {thread_id}: {e}. Falling back to CPU.")
+            gpu_device = 'cpu'
+
 
         # 2) Evitar sobre-suscripción de hilos BLAS/CPU dentro de cada proceso
         os.environ.setdefault("OMP_NUM_THREADS", "1")
         os.environ.setdefault("MKL_NUM_THREADS", "1")
         torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
 
+        # if worker_data_loader is None:
+        #     worker_data_loader = input.GenericDataLoader(params=train_params)
+            #self.train_params = setup_dataset_info(self.train_params)
         # 3) Reutilizar DataLoaders por proceso (ya lo hacías) — una sola construcción
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
 
         for original_idx, thread_id, decoded_net, decoded_params in individuals_thread:
             id_str = f"{generation}_{decoded_params.get('candidate_id', original_idx)}"
+            model_path = None
             try:
-                results_dict = master.fitness(id_str,
+                results_dict, model_path = master.fitness(id_str,
                             {**train_params, 'device': gpu_device},
                             fn_dict,
                             decoded_net,
                             decoded_params,
                             train_loader,
-                            val_loader,
-                            gpu_semaphores=gpu_semaphores)
+                            val_loader)
             except RuntimeError as e:
                 # Manejo específico de OOM u otros errores de runtime
                 self.logger.error(f"RuntimeError training model {id_str}: {e}")
@@ -212,8 +245,8 @@ class EvalPopulation(object):
                 # Cualquier otro error
                 self.logger.error(f"Error training model {id_str}: {e}")
                 results_dict = {k: 0.0 for k in self.metric_names}
-            
-            queue.put((original_idx, results_dict))
+            filtered_results = {k: results_dict.get(k, 0.0) for k in self.metric_names}
+            queue.put((original_idx, filtered_results, model_path))
 
             # Log the results for each candidate
             if not results_dict:
@@ -222,3 +255,103 @@ class EvalPopulation(object):
             else:
                 metrics_log = ", ".join(f"{k}={results_dict.get(k, 0.0):.3f}" for k in self.metric_names)
                 self.logger.info(f"Thread {thread_id} – candidate {original_idx}: {metrics_log}")
+
+    # inside EvalPopulation
+    def evaluate_fairness_in_cuda_spawn(self, model_specs: list, device_idx: int | None = None):
+        import torch.multiprocessing as mp
+        from core.fairness.fairness_worker import fairness_spawn_runner  # top-level function
+
+        metric_config = next(
+            (m for m in self.train_params.get('metrics', []) if m['name'] == 'FairnessMetric'),
+            None
+        )
+        if not metric_config:
+            return {i: {self.fairness_metric_name: 0.0} for i in range(len(model_specs))}
+        fairness_params = metric_config.get('params', {}) or {}
+
+        shard = [(i, spec) for i, spec in enumerate(model_specs) if spec]
+
+        ctx = mp.get_context("spawn")
+        out_q = ctx.Queue()
+        p = ctx.Process(
+            target=fairness_spawn_runner,
+            args=(
+                out_q,
+                shard,
+                self.parallel_train_params,  # must be a plain dict
+                self.fn_dict,                # ensure only top-level callables inside
+                self.fairness_metric_name,
+                fairness_params,
+                device_idx,
+            ),
+        )
+        p.start()
+        merged = out_q.get()
+        p.join()
+
+        for i in range(len(model_specs)):
+            merged.setdefault(i, {self.fairness_metric_name: 0.0})
+        return merged
+    
+    def evaluate_fairness_parallel_cuda(self, model_specs: list) -> Dict[int, Dict[str, float]]:
+        import torch.multiprocessing as mp
+        from core.fairness.fairness_worker import (
+            device_count_probe_runner,
+            fairness_queue_runner,
+        )
+
+        # Parent-safe metric config
+        metric_config = next((m for m in self.train_params.get('metrics', [])
+                            if m['name'] == 'FairnessMetric'), None)
+        if not metric_config:
+            return {i: {self.fairness_metric_name: 0.0} for i in range(len(model_specs))}
+        fairness_params = metric_config.get('params', {}) or {}
+
+        # Probe GPU count in a spawned child (parent stays CUDA-free)
+        ctx = mp.get_context("spawn")
+        probe_q = ctx.Queue()
+        probe_p = ctx.Process(target=device_count_probe_runner, args=(probe_q,))
+        probe_p.start()
+        num_gpus = probe_q.get()
+        probe_p.join()
+
+        if num_gpus <= 0:
+            # Fallback to your CPU-only serial fairness
+            return self.evaluate_fairness_serially(model_specs)
+
+        # Build shards round-robin
+        indices = [i for i, spec in enumerate(model_specs) if spec]
+        if not indices:
+            return {i: {self.fairness_metric_name: 0.0} for i in range(len(model_specs))}
+
+        shards = [[] for _ in range(num_gpus)]
+        for k, idx in enumerate(indices):
+            shards[k % num_gpus].append((idx, model_specs[idx]))
+
+        # Launch one spawned worker per GPU
+        res_q = ctx.Queue()
+        procs = []
+        for dev_idx, shard in enumerate(shards):
+            if not shard:
+                continue
+            p = ctx.Process(
+                target=fairness_queue_runner,
+                args=(res_q, shard, self.parallel_train_params, self.fn_dict,
+                    self.fairness_metric_name, fairness_params, dev_idx),
+            )
+            p.start()
+            procs.append(p)
+
+        merged: Dict[int, Dict[str, float]] = {}
+        for _ in range(len(procs)):
+            part = res_q.get()
+            merged.update(part)
+
+        for p in procs:
+            p.join()
+
+        # Fill any missing entries
+        for i in range(len(model_specs)):
+            merged.setdefault(i, {self.fairness_metric_name: 0.0})
+
+        return merged
