@@ -1,12 +1,10 @@
-# (markdown) 
-# Patch: VRAM-safe, GPU-agnostic fairness evaluation (works on L40S, 3090, etc.)
-
 # moq-nas/core/cnn/metrics/fairness.py
 import torch
 import numpy as np
 from typing import Dict
 from collections import defaultdict
 from torch.amp import autocast
+from tqdm import tqdm
 
 from .base import BaseMetric
 from core.fairness.data import create_eval_loader
@@ -31,11 +29,9 @@ class FairnessMetric(BaseMetric):
         self.beta = self._init_args.get('beta')
         self.cache_dir = self._init_args.get('cache_dir')
         self.batch_size = self._init_args.get('batch_size_fairness', 64)
-        self.microbatch = int(self._init_args.get('batch_size_fairness_micro', 2))  # NEW: hard VRAM cap
         self.positive_class_idx = self._init_args.get('positive_class_idx', 1)
         self.eval_skintone_method = self._init_args.get('eval_skintone_method', 'soft').lower()
         self.phase = self._init_args.get('phase', 'evolution').lower()
-        self.empty_cache_every = int(self._init_args.get('empty_cache_every', 8))  # NEW: periodic cache clear
 
         if not all([self.model, self.device, self.eval_dataset_name, self.beta]):
             raise ValueError(f"FairnessMetric is missing required arguments. Provided: {list(self._init_args.keys())}")
@@ -48,7 +44,7 @@ class FairnessMetric(BaseMetric):
 
         self._results = {}
 
-    # ---------- NEW: helpers for portable, safe inference ----------
+    # ---------- NEW: helper for portable, safe inference ----------
 
     def _autocast_kwargs(self):
         """
@@ -59,25 +55,6 @@ class FairnessMetric(BaseMetric):
             use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
             return dict(device_type='cuda', dtype=(torch.bfloat16 if use_bf16 else torch.float16), enabled=True)
         return dict(device_type='cpu', enabled=False)
-
-    @torch.no_grad()
-    def _forward_microbatched(self, inputs):
-        """
-        Run forward in microbatches to bound peak VRAM.
-        Returns logits on CPU to free GPU memory ASAP.
-        """
-        outs = []
-        # Ensure inputs on device
-        inputs = inputs.to(self.device, non_blocking=True)
-        # Split current batch into tiny microbatches
-        for mb in inputs.split(self.microbatch, dim=0):
-            with autocast(**self._autocast_kwargs()):
-                logits_mb = self.model(mb)
-            outs.append(logits_mb.detach().cpu())  # move off GPU immediately
-            del mb, logits_mb
-        logits = torch.cat(outs, dim=0)
-        del outs, inputs
-        return logits
 
     # ---------------------------------------------------------------
 
@@ -94,7 +71,7 @@ class FairnessMetric(BaseMetric):
         dataloader = create_eval_loader(
             dataset_name=self.eval_dataset_name,
             csv_path=self.eval_dataset_path,
-            batch_size=self.batch_size,   # outer batch (throughput) — microbatched inside forward
+            batch_size=self.batch_size,
             cache_dir=self.cache_dir,
             phase=self.phase
         )
@@ -124,10 +101,12 @@ class FairnessMetric(BaseMetric):
         group_correct = defaultdict(int)
         group_total = defaultdict(int)
 
-        step = 0
         with torch.inference_mode():
-            for inputs, soft_labels in loader:
-                logits = self._forward_microbatched(inputs)  # logits on CPU
+            for inputs, soft_labels in tqdm(loader, desc="Computing TPR (skintone, hard)"):
+                inputs = inputs.to(self.device, non_blocking=True)
+                with autocast(**self._autocast_kwargs()):
+                    logits = self.model(inputs)
+                logits = logits.detach().cpu() # Move to CPU to free VRAM
                 preds = logits.argmax(dim=1)
 
                 hard_labels = soft_labels.argmax(dim=1)  # on CPU already
@@ -137,11 +116,7 @@ class FairnessMetric(BaseMetric):
                     group_total[group_idx] += 1
                     if int(preds[i].item()) == self.positive_class_idx:
                         group_correct[group_idx] += 1
-
-                step += 1
-                if self.device.type == 'cuda' and step % self.empty_cache_every == 0:
-                    torch.cuda.empty_cache()
-
+        
         per_tone_tpr = {
             str(tone): float(group_correct[tone] / group_total[tone]) if group_total[tone] > 0 else 0.0
             for tone in sorted(group_total.keys())
@@ -152,10 +127,12 @@ class FairnessMetric(BaseMetric):
         denominator = defaultdict(float)
         numerator = defaultdict(float)
 
-        step = 0
         with torch.inference_mode():
-            for inputs, soft_labels in loader:
-                logits = self._forward_microbatched(inputs)  # CPU
+            for inputs, soft_labels in tqdm(loader, desc="Computing TPR (skintone, soft)"):
+                inputs = inputs.to(self.device, non_blocking=True)
+                with autocast(**self._autocast_kwargs()):
+                    logits = self.model(inputs)
+                logits = logits.detach().cpu() # Move to CPU to free VRAM
                 preds = logits.argmax(dim=1)
 
                 # soft_labels is CPU; iterate without moving to GPU
@@ -172,10 +149,6 @@ class FairnessMetric(BaseMetric):
                             if pred_i == self.positive_class_idx:
                                 numerator[key] += prob
 
-                step += 1
-                if self.device.type == 'cuda' and step % self.empty_cache_every == 0:
-                    torch.cuda.empty_cache()
-
         per_tone_tpr = {
             str(tone): float(numerator[tone] / denominator[tone]) if denominator[tone] > 0 else 0.0
             for tone in sorted(denominator.keys())
@@ -187,10 +160,12 @@ class FairnessMetric(BaseMetric):
         group_counts = defaultdict(int)
         label_map = {v: k for k, v in loader.dataset.race_to_idx.items()}
 
-        step = 0
         with torch.inference_mode():
-            for inputs, labels in loader:
-                logits = self._forward_microbatched(inputs)  # CPU
+            for inputs, labels in tqdm(loader, desc="Computing TPR (per group)"):
+                inputs = inputs.to(self.device, non_blocking=True)
+                with autocast(**self._autocast_kwargs()):
+                    logits = self.model(inputs)
+                logits = logits.detach().cpu() # Move to CPU to free VRAM
                 preds = logits.argmax(dim=1)
 
                 for i in range(len(labels)):
@@ -199,11 +174,7 @@ class FairnessMetric(BaseMetric):
                     if int(preds[i].item()) == self.positive_class_idx:
                         group_tpr[group_name] += 1.0
                     group_counts[group_name] += 1
-
-                step += 1
-                if self.device.type == 'cuda' and step % self.empty_cache_every == 0:
-                    torch.cuda.empty_cache()
-
+        
         final_tpr = {}
         for group_name, total in group_counts.items():
             if total > 0:
