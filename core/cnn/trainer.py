@@ -47,7 +47,6 @@ class BaseTrainer:
         test_loader (torch.utils.data.DataLoader): DataLoader for test data.
         params (dict): Dictionary of training parameters and configuration.
         metrics (list of BaseMetric): List of metric instances to compute during training and evaluation.
-        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
     Attributes:
         model (torch.nn.Module): The model being trained.
         criterion (torch.nn.Module): The loss function.
@@ -94,7 +93,7 @@ class BaseTrainer:
         - Designed for extensibility and integration with neural architecture search workflows.
     """
     def __init__(self, model_instance, criterion, optimizer, train_loader, val_loader, test_loader,
-                params: dict, metrics: list[BaseMetric], artifacts: list[BaseArtifact], gpu_semaphores=None):
+                params: dict, metrics: list[BaseMetric], artifacts: list[BaseArtifact]):
         self.model = model_instance.to(params['device'])
         self.criterion = criterion
         self.optimizer = optimizer
@@ -103,7 +102,6 @@ class BaseTrainer:
         self.test_loader = test_loader
         self.params = params
         self.device = torch.device(params['device'])
-        self.gpu_semaphores = gpu_semaphores
 
         self.scaler = GradScaler(self.device.type, enabled=self.params.get('mixed_precision', False))
         # --- Pluggable Metrics System ---
@@ -154,7 +152,10 @@ class BaseTrainer:
             labels = labels.squeeze().long()
         
         # Run forward pass with mixed precision if enabled
-        with autocast(self.device.type, dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
+        
+        # enable bf16 on supported GPUs (A100/L40S), otherwise fp16 (e.g., 3090)
+        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        with autocast(self.device.type, dtype=(torch.bfloat16 if use_bf16 else torch.float16), enabled=self.params.get('mixed_precision', False)):
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
         
@@ -300,10 +301,8 @@ class BaseTrainer:
                 if current_accuracy > self.best_accuracy:
                     self.best_accuracy = current_accuracy
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
-                    if phase == 'evolution':
-                        self.best_model_state_dict = copy.deepcopy(self.model.state_dict())
-                    if phase == 'retrain':
-                        torch.save(self.model.state_dict(), self.best_model_path)
+                    self.best_model_state_dict = copy.deepcopy(self.model.state_dict())
+                    torch.save(self.model.state_dict(), self.best_model_path)
 
                 if self.best_validation_loss == float('inf'):
                     self.best_validation_loss = current_loss
@@ -344,7 +343,6 @@ class BaseTrainer:
 
         # 2. Combine all intermediate results into one dictionary
         combined_final_results = {**val_results, **test_results}
-        id_thread = self.params.get('generation', 'N/A') + "_" + str(self.params.get('individual', 'N/A'))  
         # 3. Run all post-processing metrics ONCE, using the combined results
         if self.post_processing_metrics:
             # Load the best model before running expensive metrics
@@ -352,33 +350,13 @@ class BaseTrainer:
                 self.model.load_state_dict(self.best_model_state_dict)
                 self.model.eval()
             
-                needs_lock = self.gpu_semaphores and any(m.name == "FairnessMetric" for m in self.post_processing_metrics)
-                
-                semaphore_for_this_gpu = None
-                if needs_lock:
-                    device_key = str(self.device)
-                    semaphore_for_this_gpu = self.gpu_semaphores.get(device_key)
-
-                # Acquire the lock for the specific GPU if needed.
-                if semaphore_for_this_gpu:
-                    self.logger.info(f"Thread {id_thread} on {device_key}: Waiting for GPU lock...")
-                    semaphore_for_this_gpu.acquire()
-                    self.logger.info(f"Thread {id_thread} acquired lock for {device_key}.")
-
-                try:
-                    # This block now runs with or without a lock, depending on the config.
-                    for metric in self.post_processing_metrics:
-                        try:
-                            combined_final_results.update(metric.compute(epoch_results=combined_final_results))
-                        except TypeError:
-                            combined_final_results.update(metric.compute())
-                finally:
-                    # ALWAYS release the lock if it was acquired.
-                    if semaphore_for_this_gpu:
-                        semaphore_for_this_gpu.release()
-                        self.logger.info(f"Thread {id_thread} released lock for {device_key}.")
-                # --- END FINAL LOGIC ---
-        
+            with torch.no_grad():
+                for metric in self.post_processing_metrics:
+                    try:
+                        # This will now only run post-processing metrics OTHER than Fairness
+                        combined_final_results.update(metric.compute(epoch_results=combined_final_results))
+                    except TypeError:
+                        combined_final_results.update(metric.compute())
         # Compile the final, comprehensive results dictionary in the original format
         final_output = {
             'training_losses': training_losses,
