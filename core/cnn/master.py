@@ -223,27 +223,14 @@ def setup_additional_params(params, id_num=None):
     params['individual'] = individual
     return params
 
-def create_model_and_trainer(params, train_loader, val_loader, test_loader, gpu_semaphores=None) -> Union[trainer.BaseTrainer, trainer.ResNetTrainer]:
+def create_model(params: Dict[str, Any]) -> nn.Module:
     """
-    Create the model and corresponding trainer instance based on the training phase.
-    For the 'resnet' phase, a ResNet model and ResNetTrainer are used.
-    For 'evolution' or 'retrain' phases, a generic NetworkGraph model and BaseTrainer are used.
-
-    Args:
-        params (Dict[str, Any]): Configuration dictionary containing keys such as 'phase', 
-            'num_classes', 'network_config', 'fn_dict', and 'net_list'.
-        train_loader: Training DataLoader.
-        val_loader: Validation DataLoader.
-        test_loader: Test DataLoader (can be None for evolution phase).
-        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
-
-    Returns:
-        Union[BaseTrainer, ResNetTrainer]: The trainer instance corresponding to the selected phase.
+    Creates and initializes a model instance based on the provided parameters.
+    This function is responsible for building the network graph and initializing it.
     """
-
-    phase = params.get('phase')
+    phase = params.get('phase', 'evolution')
+    
     if phase == 'resnet':
-        # Use ResNetTrainer for resnet training phase
         n_channels = params.get('input_channels', 3)
         num_classes = params.get('num_classes', 10)
         model_flag = params.get('model_flag', 'resnet18')
@@ -253,54 +240,70 @@ def create_model_and_trainer(params, train_loader, val_loader, test_loader, gpu_
             net = model_resnet.ResNet50(in_channels=n_channels, num_classes=num_classes)
         else:
             raise ValueError(f"Unsupported model_flag: {model_flag}")
-        optimizer = create_optimizer(net, params)
-        if params['task'] == 'multi-label, binary-class':
-            criterion = nn.BCEWithLogitsLoss()
-        else:
-            criterion = nn.CrossEntropyLoss()
-        trainer_instance = trainer.ResNetTrainer(net, criterion, optimizer,
-                                        train_loader, val_loader, test_loader, params)
-    else:
-        # For evolution or retrain phases, use the generic BaseTrainer
-        backbone_trainable = True if params.get('phase') == 'retrain' else False
+    else: # Handles 'evolution', 'retrain', etc.
+        backbone_trainable = True if phase == 'retrain' else False
         net = model.NetworkGraph(num_classes=params['num_classes'],
                                 input_shape=params['input_shape'],
                                 network_config=params['network_config'],
                                 backbone_name=params['backbone_name'],
-                                backbone_percentage=params['backbone_percentage'],
+                                backbone_percentage=params.get('backbone_percentage', 1.0),
                                 backbone_trainable=backbone_trainable)
         
         if params.get('network_config') == 'backbone':
-            net.auto_resize_backbone = False  # disable auto upscaling for ablations/strict 32x32
+            net.auto_resize_backbone = False
 
-        # Create functions using fn_dict and net_list from params
+        # Create functions and run a dummy forward pass to initialize layers
         filtered_dict = {key: val for key, val in params['fn_dict'].items() if key in params['net_list']}
         has_cbam_key = any(key.startswith('cbam') for key in filtered_dict)
         net.create_functions(fn_dict=filtered_dict, net_list=params['net_list'], cbam=has_cbam_key)
-        # Run a dummy input through the network to initialize any fully connected layers
+        
         dummy_input = torch.randn(params['input_shape'])
         with torch.no_grad():
             _ = net(dummy_input)
-        optimizer = create_optimizer(net, params)
+            
+    return net
+
+def create_trainer(params: Dict[str, Any], model: nn.Module, train_loader, val_loader, test_loader):
+    """
+    Creates a trainer instance for a given model.
+    """
+    phase = params.get('phase', 'evolution')
+    
+    if phase == 'resnet':
+        optimizer = create_optimizer(model, params)
+        criterion = nn.BCEWithLogitsLoss() if params.get('task') == 'multi-label, binary-class' else nn.CrossEntropyLoss()
+        return trainer.ResNetTrainer(model, criterion, optimizer,
+                                    train_loader, val_loader, test_loader, params)
+    else: # Handles 'evolution', 'retrain', etc.
+        optimizer = create_optimizer(model, params)
         criterion = nn.CrossEntropyLoss()
         
         metrics = create_metrics_from_config(
-        config=params,
-        model_instance=net,
-        device=params['device'],
-        input_shape=params['input_shape'])
+            config=params,
+            model_instance=model,
+            device=params['device'],
+            input_shape=params['input_shape']
+        )
         artifacts = create_artifacts_from_config(config=params)
 
-        trainer_instance = trainer.BaseTrainer(net, criterion, optimizer,
-                                    train_loader, val_loader, test_loader, params, 
-                                    metrics, artifacts,gpu_semaphores=gpu_semaphores)
+        return trainer.BaseTrainer(model, criterion, optimizer,
+                                train_loader, val_loader, test_loader, params, 
+                                metrics, artifacts)
+
+# This function is now a simple wrapper around the two new functions
+def create_model_and_trainer(params, train_loader, val_loader, test_loader):
+    """
+    Creates the model and the corresponding trainer instance.
+    """
+    net = create_model(params)
+    trainer_instance = create_trainer(params, net, train_loader, val_loader, test_loader)
     return trainer_instance
 
 def run_training_phase(params: Dict[str, Any],
                         fn_dict: Dict[str, Any] = None,
                         net_list: List[str] = None, decoded_params: Union[Dict[str, Any], List] = None,
                         id_num: str = None, debug: bool = False,
-                        train_loader=None, val_loader=None, test_loader=None,gpu_semaphores=None) -> Dict[str, Any]:
+                        train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
     """
     Generic function to update parameters, create the trainer, and run training.
     It updates fn_dict, net_list, and additional parameters if provided, ensures that
@@ -317,7 +320,6 @@ def run_training_phase(params: Dict[str, Any],
         train_loader: Training DataLoader.
         val_loader: Validation DataLoader.
         test_loader: Test DataLoader (can be None for certain phases).
-        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
 
     Returns:
         Dict[str, Any]: Dictionary containing the training results.
@@ -341,11 +343,11 @@ def run_training_phase(params: Dict[str, Any],
         params = setup_dataset_info(params)
         params = ensure_model_path(params)
 
-    trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader, gpu_semaphores=gpu_semaphores)
+    trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
 
     results_dict = trainer.train(debug=debug)
-        
-    return results_dict
+
+    return results_dict, trainer.best_model_path
 
 # --- Entry-point functions ---
 def fitness(id_num: str, params: Dict[str, Any], 
@@ -353,7 +355,6 @@ def fitness(id_num: str, params: Dict[str, Any],
             decoded_params: Dict[str, Any],
             train_loader: torch.utils.data.DataLoader, 
             val_loader: torch.utils.data.DataLoader,
-            gpu_semaphores=None,
             debug: bool = False) -> Dict[str, Any]:
     """
     Train and evaluate a model using evolved networks in the evolution phase.
@@ -366,7 +367,6 @@ def fitness(id_num: str, params: Dict[str, Any],
         decoded_params (Dict[str, Any]): Decoded parameters for the model.
         net_list (List[str]): List of layer names to be used in the network.
         train_loader (torch.utils.data.DataLoader): Training DataLoader.
-        gpu_semaphores (multiprocessing.Semaphore, optional): Semaphore for GPU access control.
         debug (bool, optional): If True, returns the raw results dictionary for debugging.
 
     Returns:
@@ -376,9 +376,9 @@ def fitness(id_num: str, params: Dict[str, Any],
         Exception: Propagates any exception encountered during training after setting return_val to zeros.
     """
     try:
-        results_dict = run_training_phase(params, fn_dict, net_list, decoded_params, id_num, debug, train_loader, val_loader, None, gpu_semaphores=gpu_semaphores)
-        LOGGER.info(f"Training of model {id_num} finished, best {params['fitness_metric']}: {round(results_dict[params['fitness_metric']], 2)}")
-        return results_dict
+        results_dict, model_path = run_training_phase(params, fn_dict, net_list, decoded_params, id_num, debug, train_loader, val_loader, None)
+        LOGGER.info(f"Training of _path {id_num} finished, best {params['fitness_metric']}: {round(results_dict[params['fitness_metric']], 2)}")
+        return results_dict, model_path
     except Exception as e:
         LOGGER.error(f"An error occurred during training of model {id_num}: {e}")
         # Set return_val to zeros if an error occurs
@@ -411,7 +411,7 @@ def retrain(params: Dict[str, Any],
     """
     try:
         LOGGER.info(f"Retraining evolved model {params['experiment_path']} ...")
-        results_dict = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
+        results_dict, _ = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
         LOGGER.info(f"Retraining finished, test acc: {round(results_dict['test_accuracy'], 2)}")
         return results_dict
     except RuntimeError as e:
