@@ -179,31 +179,24 @@ class MOQNAS(QNAS):
         self.pareto_global_ids = []
         self.fronts_history = {}
 
-        try:
-            with open("config_objectives/cfg_obj.json", "r") as f:
-                self.objectives_info = json.load(f)["objectives"]
-        except Exception as e:
-            self.logger.error(f"Could not load objectives config: {e}")
-            self.objectives_info = {}
-
-         # load config objective sense
+        # load config objective sense
         try:
             with open("configs/cfg_obj.json", "r") as f:
                 self.objectives_info = json.load(f)["objectives"]
         except Exception as e:
-            print(f"Error loading objectives config: {e}")
+            raise RuntimeError(f"Failed to load objective config: {e}")
 
-        objective_names = []
-        objective_senses = []
-
+        self.objective_names = []
+        self.objective_senses = []
+        # Ensure all specified objectives have corresponding info
         # Map the active objectives to their information
         for active_obj in self.objectives:
             match_found = False
             for key, info in self.objectives_info.items():
                 if key in active_obj:
-                    objective_names.append(key)
+                    self.objective_names.append(key)
                     sense = 'max' if info['goal'] == 'maximize' else 'min'
-                    objective_senses.append(sense)
+                    self.objective_senses.append(sense)
                     match_found = True
                     break # Move to the next active_obj
             if not match_found:
@@ -212,8 +205,8 @@ class MOQNAS(QNAS):
         # moead_topk
         self.qpop_net.ref_dir_method = ref_dir_method
         print(f"Reference direction method set to: {self.qpop_net.ref_dir_method}")
-        self.qpop_net.set_objective_directions(names=objective_names, sense=objective_senses)
-        print(f"Set objective directions: {list(zip(objective_names, objective_senses))}")
+        self.qpop_net.set_objective_directions(names=self.objective_names, sense=self.objective_senses)
+        print(f"Set objective directions: {list(zip(self.objective_names, self.objective_senses))}")
         if self.qpop_net._ref_dirs is not None and self.qpop_net._ind_to_dir is not None:
             for i in range(self.qpop_net.num_ind):
                 dir_index = self.qpop_net._ind_to_dir[i]
@@ -268,8 +261,8 @@ class MOQNAS(QNAS):
         self.fits = fits
 
         return fits
-    @staticmethod
-    def compute_hypervolume_mixed(front_raw: np.ndarray, ref_point=None) -> float:
+
+    def compute_hypervolume_mixed(self, front_raw: np.ndarray, ref_point=None) -> float:
         """
         Compute hypervolume for a 3-objective Pareto front where:
             - front_raw[:, 0] = accuracy (to be maximized)
@@ -291,18 +284,25 @@ class MOQNAS(QNAS):
             return 0.0
 
         f = np.array(front_raw, dtype=float, copy=True)
-        f[:, 0] = -f[:, 0]  # flip accuracy to minimization
+
+        # Flip the sign for maximization objectives
+        for i, sense in enumerate(self.objective_senses):
+            if sense == 'max':
+                f[:, i] = -f[:, i]
 
         # Choose a safe reference point (must be worse than all points for minimization)
         if ref_point is None:
             rp = np.max(f, axis=0) + 1e-6
         else:
             rp = np.asarray(ref_point, dtype=float)
+            # Flip the sign for maximization objectives in the reference point as well
+            for i, sense in enumerate(self.objective_senses):
+                if sense == 'max':
+                    rp[i] = -rp[i]
 
         return float(Hypervolume(ref_point=rp).do(f))
     
-    @staticmethod
-    def dominates(a, b):
+    def dominates(self, a, b):
         """
         Determine Pareto domination between two fitness tuples.
 
@@ -316,8 +316,15 @@ class MOQNAS(QNAS):
         Returns:
             bool: True if a dominates b, False otherwise.
         """
-        obj_a = np.array([-a[0]] + list(a[1:]))
-        obj_b = np.array([-b[0]] + list(b[1:]))
+        obj_a = np.array(a, copy=True)
+        obj_b = np.array(b, copy=True)
+
+        # Flip the sign for maximization objectives to convert them to minimization
+        for i, sense in enumerate(self.objective_senses):
+            if sense == 'max':
+                obj_a[i] = -obj_a[i]
+                obj_b[i] = -obj_b[i]
+
         return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
 
     def fast_nondominated_sort(self, fitnesses: np.ndarray):
