@@ -189,7 +189,8 @@ if __name__ == '__main__':
                         help='Path to dataset config file (YAML).')
     parser.add_argument('--dataset', type=str, required=True,
                         choices=['cifar10', 'cifar100', 'pathmnist', 'octmnist', 'tissuemnist',
-                                'organamnist', 'organcmnist', 'atleta_axial', 'atleta_coronal'],
+                                'organamnist', 'organcmnist', 'atleta_axial', 'atleta_coronal',
+                                'personbin', 'facebin'],
                         help='Dataset name.')
     parser.add_argument('--config_file', type=str, required=True,
                         help='Configuration file name.')
