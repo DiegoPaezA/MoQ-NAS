@@ -206,7 +206,7 @@ def create_eval_loader(dataset_name: str, csv_path: str, batch_size: int, img_si
     else:
         raise ValueError(f"Evaluation dataset '{dataset_name}' is not supported. Use 'facet' or 'fairface'.")
 
-    is_evolution = (phase == 'evolution')
+    is_evolution = (phase == 'evolutionx')
 
     num_workers = 0 if is_evolution else 4
     pin_memory = False if is_evolution else True
