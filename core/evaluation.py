@@ -220,5 +220,5 @@ class EvalPopulation(object):
                 self.logger.warning(f"Thread {thread_id} – candidate {original_idx}: No results returned.")
                 continue
             else:
-                metrics_log = ", ".join(f"{k}={results_dict.get(k, 0.0):.2f}" for k in self.metric_names)
+                metrics_log = ", ".join(f"{k}={results_dict.get(k, 0.0):.3f}" for k in self.metric_names)
                 self.logger.info(f"Thread {thread_id} – candidate {original_idx}: {metrics_log}")
