@@ -86,7 +86,8 @@ def evaluate_one_model(arch: str, ckpt_path: str, device: torch.device, args: ar
         cache_dir=args.cache_dir,
         batch_size=args.batch_size,
         positive_class_idx=1,
-        eval_skintone_method='soft'
+        eval_skintone_method='soft',
+        img_size=args.img_size,
     )
     results = fairness_metric.compute()
     
