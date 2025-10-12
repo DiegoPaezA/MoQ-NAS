@@ -32,6 +32,7 @@ class FairnessMetric(BaseMetric):
         self.positive_class_idx = self._init_args.get('positive_class_idx', 1)
         self.eval_skintone_method = self._init_args.get('eval_skintone_method', 'soft').lower()
         self.phase = self._init_args.get('phase', 'evolution').lower()
+        self.img_size = self._init_args.get('img_size', 224)
 
         if not all([self.model, self.device, self.eval_dataset_name, self.beta]):
             raise ValueError(f"FairnessMetric is missing required arguments. Provided: {list(self._init_args.keys())}")
@@ -72,6 +73,7 @@ class FairnessMetric(BaseMetric):
             dataset_name=self.eval_dataset_name,
             csv_path=self.eval_dataset_path,
             batch_size=self.batch_size,
+            img_size=self.img_size,
             cache_dir=self.cache_dir,
             phase=self.phase
         )
