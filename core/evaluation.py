@@ -293,7 +293,7 @@ class EvalPopulation(object):
             merged.setdefault(i, {self.fairness_metric_name: 0.0})
         return merged
     
-    def evaluate_fairness_parallel_cuda(self, model_specs: list) -> Dict[int, Dict[str, float]]:
+    def evaluate_fairness_parallel_cuda(self, model_specs: list, processes_per_gpu: int = 10) -> Dict[int, Dict[str, float]]:
         import torch.multiprocessing as mp
         from core.fairness.fairness_worker import (
             device_count_probe_runner,
@@ -306,6 +306,8 @@ class EvalPopulation(object):
         if not metric_config:
             return {i: {self.fairness_metric_name: 0.0} for i in range(len(model_specs))}
         fairness_params = metric_config.get('params', {}) or {}
+        input_shape = self.train_params.get('input_shape', (3, 224, 224))
+        fairness_params['img_size'] = input_shape[2]
 
         # Probe GPU count in a spawned child (parent stays CUDA-free)
         ctx = mp.get_context("spawn")
@@ -315,33 +317,50 @@ class EvalPopulation(object):
         num_gpus = probe_q.get()
         probe_p.join()
 
-        if num_gpus <= 0:
-            # Fallback to your CPU-only serial fairness
-            return self.evaluate_fairness_serially(model_specs)
-
-        # Build shards round-robin
+        # Build index list
         indices = [i for i, spec in enumerate(model_specs) if spec]
         if not indices:
             return {i: {self.fairness_metric_name: 0.0} for i in range(len(model_specs))}
 
-        shards = [[] for _ in range(num_gpus)]
-        for k, idx in enumerate(indices):
-            shards[k % num_gpus].append((idx, model_specs[idx]))
+        # ---- NEW: fan out to multiple processes per GPU ----
+        # total "virtual slots" = num_gpus * processes_per_gpu
+        # (If there are 0 GPUs, keep 0 slots; we’ll end with empty procs and fill zeros later.)
+        slots = max(0, num_gpus * max(1, int(processes_per_gpu)))
+        if slots == 0:
+            # No GPU present; fall back to zeros (keeps previous behavior)
+            merged = {}
+            for i in range(len(model_specs)):
+                merged.setdefault(i, {self.fairness_metric_name: 0.0})
+            return merged
 
-        # Launch one spawned worker per GPU
+        # Distribute work round-robin across slots
+        shards = [[] for _ in range(slots)]
+        for k, idx in enumerate(indices):
+            shards[k % slots].append((idx, model_specs[idx]))
+
+        # Launch one spawned worker per slot, binding each to a GPU via device_idx = slot % num_gpus
         res_q = ctx.Queue()
         procs = []
-        for dev_idx, shard in enumerate(shards):
+        for slot_id, shard in enumerate(shards):
             if not shard:
                 continue
+            dev_idx = slot_id % num_gpus
             p = ctx.Process(
                 target=fairness_queue_runner,
-                args=(res_q, shard, self.parallel_train_params, self.fn_dict,
-                    self.fairness_metric_name, fairness_params, dev_idx),
+                args=(
+                    res_q,
+                    shard,
+                    self.parallel_train_params,
+                    self.fn_dict,
+                    self.fairness_metric_name,
+                    fairness_params,
+                    dev_idx,  # each slot pinned to a GPU index
+                ),
             )
             p.start()
             procs.append(p)
 
+        # Gather results
         merged: Dict[int, Dict[str, float]] = {}
         for _ in range(len(procs)):
             part = res_q.get()
