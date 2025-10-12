@@ -2,7 +2,7 @@
 from typing import Dict, Any, List, Tuple
 import os, torch
 import traceback
-from utils.helpers import create_info_file, update_yaml_file
+from utils.helpers import update_yaml_file
 
 def fairness_worker_cuda(
     shard: List[Tuple[int, dict]],
