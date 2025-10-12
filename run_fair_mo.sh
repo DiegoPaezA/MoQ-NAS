@@ -9,7 +9,7 @@
 algos=("moqnas")
 # —— Experiment settings ——
 dataset="personbin"
-data_path="datasets/${dataset}_data"
+data_path="datasets/${dataset}_data_96"
 config_dir="config_files/config_files_fairness"
 exp_root="experiment_${dataset}_qfamily"
 log_level="INFO"
@@ -19,7 +19,7 @@ fitness_metric="best_accuracy"
 dataset_sample_size=10000
 
 # NEW: dataset YAML path derived from dataset name
-config_path_dataset="configs/person_bin.yaml"
+config_path_dataset="configs/person_bin_96.yaml"
 
 # —— Common toggles (kept from your scripts) ——
 use_cache=false                     
