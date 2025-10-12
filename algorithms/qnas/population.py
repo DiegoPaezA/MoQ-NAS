@@ -119,19 +119,30 @@ class QPopulationParams(QPopulation):
         Args:
             intensity: (float) value defining the maximum intensity of the update.
         """
-
-        random = np.random.rand(self.num_ind, self.chromosome.num_genes)
-        mask = np.where(random <= self.update_quantum_rate)
+        num_current_ind = self.current_pop.shape[0]
+        
+        # Check if the current population size matches the expected quantum population size
+        if num_current_ind == self.num_ind:
+            random = np.random.rand(self.num_ind, self.chromosome.num_genes)
+            mask = np.where(random <= self.update_quantum_rate)
+        else:
+            # Backup method: Generate mask based on the actual (smaller) size
+            # This could happen in multi-objective scenarios where the pareto front
+            # has fewer individuals than num_ind
+            random = np.random.rand(num_current_ind, self.chromosome.num_genes)
+            mask = np.where(random <= self.update_quantum_rate)
 
         max_genes = np.max(self.current_pop, axis=0)
         min_genes = np.min(self.current_pop, axis=0)
         diff = np.tile(max_genes - min_genes, (self.num_ind, 1))
 
+        # The update logic is now safe for both cases
         update = self.current_pop[mask] - self.lower[mask] - (diff[mask] / 2)
         self.lower[mask] += intensity * update
 
         update = self.current_pop[mask] - self.upper[mask] + (diff[mask] / 2)
         self.upper[mask] += intensity * update
+
         # Correct limits (truncate) if they get out of the initial boundaries
         for i in range(self.num_ind):
             idx = np.where(self.lower[i] - self.initial_lower < -self.tolerance)
@@ -251,7 +262,7 @@ class QPopulationNetwork(QPopulation):
         patterns = pool_op_name if isinstance(pool_op_name, (list, tuple, set)) else [pool_op_name]
         patterns = [str(p) for p in patterns]
         self.pool_ids = [i for i, name in enumerate(self.fn_list)
-                         if any(pat in str(name) for pat in patterns)]
+                        if any(pat in str(name) for pat in patterns)]
 
         self.enforce_noop_in_update = bool(enforce_noop_in_update)
         self.noop_max_prob = float(noop_max_prob)
@@ -646,9 +657,9 @@ class QPopulationNetwork(QPopulation):
         Args:
             names (list): A list of objective names.
             sense (list | None, optional): A list of "min" or "max" for each objective.
-                                           Defaults to all "min".
+                                        Defaults to all "min".
             D (int | None, optional): The number of reference directions. Defaults to
-                                      the number of quantum individuals.
+                                    the number of quantum individuals.
         """
         self.objective_names = list(names)
         self.num_objectives = len(self.objective_names)
@@ -879,7 +890,7 @@ class QPopulationNetwork(QPopulation):
         return q_rows
 
     def _build_q_moead_topk_rows(self, pool_choices: np.ndarray, pool_objs: np.ndarray,
-                                  rows: np.ndarray, cols: np.ndarray, F: int, K: int) -> np.ndarray:
+                                rows: np.ndarray, cols: np.ndarray, F: int, K: int) -> np.ndarray:
         """Builds target distributions using the MOEA/D-TopK strategy.
 
         For each quantum individual to be updated, it uses its assigned reference
