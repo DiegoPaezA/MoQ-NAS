@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageOps
 from tqdm import tqdm
 
 # Ensure pycocotools is installed for COCO processing
@@ -19,6 +19,16 @@ except ImportError:
     COCO = None
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+try:
+    _RESAMPLING_SPACE = getattr(Image, "Resampling", Image)
+    RESAMPLE_BICUBIC = getattr(_RESAMPLING_SPACE, "BICUBIC", Image.BICUBIC)
+    RESAMPLE_LANCZOS = getattr(
+        _RESAMPLING_SPACE, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC)
+    )
+except Exception:
+    RESAMPLE_BICUBIC = Image.BICUBIC
+    RESAMPLE_LANCZOS = getattr(Image, "ANTIALIAS", Image.BICUBIC)
 
 # --- General Helper Functions ---
 
@@ -232,3 +242,65 @@ def build_person_binary_dataset(coco_root: str, out_dir: str, **kwargs):
     print(f"Building PERSON/NON_PERSON dataset at: {out_dir}")
     for split in ['train', 'val']:
         _build_person_binary_split(split, Path(coco_root), Path(out_dir), **kwargs)
+
+# --- 4) Make a square resized mirror of an existing dataset -------------------
+
+_CLASS_DIRS = {"person", "non_person", "face", "non_face"}
+_IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+def _center_crop_square(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top  = (h - side) // 2
+    return img.crop((left, top, left + side, top + side))
+
+def _letterbox_square(img: Image.Image, fill=(0,0,0)) -> Image.Image:
+    w, h = img.size
+    side = max(w, h)
+    out = Image.new("RGB", (side, side), fill)
+    out.paste(img, ((side - w)//2, (side - h)//2))
+    return out
+
+def _resize_and_save(src_path: Path, dst_path: Path, target: int, mode: str, quality: int) -> bool:
+    try:
+        im = Image.open(src_path).convert("RGB")
+    except Exception:
+        return False
+
+    if mode == "center_crop":
+        im = _center_crop_square(im)
+    elif mode == "letterbox":
+        im = _letterbox_square(im)
+    else:
+        raise ValueError("mode must be 'center_crop' or 'letterbox'")
+
+    # Use compat resample constant (works for old/new Pillow)
+    im = im.resize((target, target), RESAMPLE_BICUBIC)
+
+    dst_path = dst_path.with_suffix(".jpg")
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        im.save(dst_path, "JPEG", quality=quality, optimize=True)
+        return True
+    except Exception:
+        return False
+
+def build_square_resized_version(src_root: str, dst_root: str, target: int = 96, mode: str = "center_crop", quality: int = 90):
+    """
+    Mirror an existing split/class folder dataset (train/val with person/non_person or face/non_face)
+    into a new root, resizing everything to target x target.
+    """
+    src_root, dst_root = Path(src_root), Path(dst_root)
+    for split in ("train", "val"):
+        split_dir = src_root / split
+        if not split_dir.exists():
+            continue
+        for class_dir in (d for d in split_dir.iterdir() if d.is_dir() and d.name in _CLASS_DIRS):
+            imgs = [p for p in class_dir.rglob("*") if p.suffix.lower() in _IMG_EXTS]
+            for src_img in tqdm(imgs, desc=f"[{split}] {class_dir.name} -> {target}x{target}"):
+                rel = src_img.relative_to(split_dir)        # keep any nested structure
+                dst_img = (dst_root / split / rel).with_suffix(".jpg")
+                _resize_and_save(src_img, dst_img, target=target, mode=mode, quality=quality)
+
+    print(f"✅ Resized dataset at: {dst_root} (size={target}x{target}, mode={mode})")

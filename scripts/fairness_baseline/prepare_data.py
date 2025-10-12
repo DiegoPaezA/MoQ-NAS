@@ -1,4 +1,5 @@
 # moq-nas/scripts/fairness_prepare_data.py
+
 import sys
 import argparse
 from pathlib import Path
@@ -10,7 +11,8 @@ sys.path.append(str(project_root))
 from core.fairness.build import (
     build_facet_csv, 
     build_face_binary_dataset, 
-    build_person_binary_dataset
+    build_person_binary_dataset,
+    build_square_resized_version,   # NEW
 )
 
 def main():
@@ -72,13 +74,33 @@ def main():
         '--facet_out_csv', type=str, default='datasets/facet_data/facet_eval.csv', 
         help="Output path for the processed FACET CSV."
     )
+
+    # --- NEW: 96×96 (or other) mirrors ----------------------------------------
+    parser.add_argument('--make_person_96', action='store_true',
+                        help="Generate a square resized mirrored version of the PERSON dataset (default 96x96).")
+    parser.add_argument('--make_face_96', action='store_true',
+                        help="Generate a square resized mirrored version of the FACE dataset (default 96x96).")
+    parser.add_argument('--resize_target', type=int, default=96,
+                        help="Target side length for the resized mirror (e.g., 64, 96, 128).")
+    parser.add_argument('--resize_mode', type=str, default='center_crop', choices=['center_crop', 'letterbox'],
+                        help="Square strategy: crop center or pad (letterbox).")
+    parser.add_argument('--jpg_quality', type=int, default=90,
+                        help="JPEG quality for resized images (1-100).")
+    parser.add_argument('--person96_out_dir', type=str, default='datasets/personbin_data_96',
+                        help="Output dir for the resized PERSON mirror.")
+    parser.add_argument('--face96_out_dir', type=str, default='datasets/facebin_data_96',
+                        help="Output dir for the resized FACE mirror.")
+    parser.add_argument('--person_src_for_resize', type=str, default=None,
+                        help="Custom source root for PERSON resizing (defaults to --person_out_dir).")
+    parser.add_argument('--face_src_for_resize', type=str, default=None,
+                        help="Custom source root for FACE resizing (defaults to --face_out_dir).")
     
     args = parser.parse_args()
 
     # --- Task Execution ---
-    if not any([args.build_person, args.build_face, args.build_facet]):
-        print("\nNo build action was specified. Use --build_person, --build_face, or --build_facet to begin.")
-        print("Example: python scripts/fairness_prepare_data.py --build_person --build_face --build_facet")
+    if not any([args.build_person, args.build_face, args.build_facet, args.make_person_96, args.make_face_96]):
+        print("\nNo build action was specified. Use --build_person, --build_face, --build_facet, --make_person_96, or --make_face_96.")
+        print("Example: python scripts/fairness_prepare_data.py --build_person --build_face --make_person_96 --make_face_96")
         return
 
     if args.build_person:
@@ -107,6 +129,29 @@ def main():
             out_csv=args.facet_out_csv
         )
         print("--- Finished: FACET CSV ---")
+
+    # --- Resize mirrors (square) ---
+    if args.make_person_96:
+        src = args.person_src_for_resize or args.person_out_dir
+        print(f"\n--- Making PERSON {args.resize_target}x{args.resize_target} mirror ---")
+        build_square_resized_version(
+            src_root=src,
+            dst_root=args.person96_out_dir,
+            target=args.resize_target,
+            mode=args.resize_mode,
+            quality=args.jpg_quality
+        )
+
+    if args.make_face_96:
+        src = args.face_src_for_resize or args.face_out_dir
+        print(f"\n--- Making FACE {args.resize_target}x{args.resize_target} mirror ---")
+        build_square_resized_version(
+            src_root=src,
+            dst_root=args.face96_out_dir,
+            target=args.resize_target,
+            mode=args.resize_mode,
+            quality=args.jpg_quality
+        )
 
 if __name__ == "__main__":
     main()
