@@ -589,7 +589,7 @@ class MOQNAS(QNAS):
         fitness_str = np.array2string(
             self.pareto_global_fitnesses,
             separator='  ',
-            formatter={'float_kind': lambda x: f"{x:.2f}"}
+            formatter={'float_kind': lambda x: f"{x:.3f}"}
         )
 
         self.logger.info(
