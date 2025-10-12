@@ -2,7 +2,7 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 5
+    max_generations: 150
     max_num_nodes: 20
     num_quantum_ind: 10
     penalize_number: 3
@@ -76,7 +76,7 @@ train:
     num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 4
+    threads: 18
 
     # Network structure Configuration
     network_config: default
@@ -97,6 +97,7 @@ train:
           optimization_objective: 'spd_sum'
           beta: 0.2
           cache_dir: '.cache/facet_crops'
-          batch_size_fairness: 16
+          square_mode: center_crop
+          batch_size_fairness: 256
     artifacts:
       - name: ConfusionMatrix
