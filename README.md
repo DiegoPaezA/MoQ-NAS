@@ -4,15 +4,16 @@ This repository provides a flexible and extensible framework for Neural Architec
 
 ## Features
 
-- **Multiple Search Algorithms**: Includes implementations for:
-  - Quantum-Inspired NAS (QNAS) for single-objective optimization.
-  - Multi-Objective QNAS (MO-QNAS).
-  - Classic Genetic Algorithm (GA).
-  - NSGA-II and NSGA-III for multi-objective optimization.
-- **Modular Architecture**: A clean, refactored structure that separates algorithms, core components, and utilities.
-- **Extensible CNN Library**: A rich set of CNN building blocks, including standard convolutions, residual blocks, and attention mechanisms (SE, CBAM).
-- **Flexible Configuration**: Easily configure experiments, search spaces, and network parameters using YAML files.
-- **Multi-Objective Optimization**: Optimize for competing objectives simultaneously, such as accuracy, model size, and inference time.
+- **Multiple Search Algorithms:** Includes implementations for:
+  - **Quantum-Inspired NAS (QNAS)** for single-objective optimization.
+  - **Multi-Objective QNAS (MO-QNAS).**
+  - **Classic Genetic Algorithm (GA).**
+  - **NSGA-II and NSGA-III** for multi-objective optimization.
+- **Modular Architecture:** A clean, refactored structure that separates algorithms, core components, and utilities.
+- **Extensible CNN Library:** A rich set of CNN building blocks, including standard convolutions, residual blocks, and attention mechanisms (SE, CBAM).
+- **Flexible Configuration:** Easily configure experiments, search spaces, and network parameters using YAML files.
+- **Multi-Objective Optimization:** Optimize for competing objectives simultaneously, such as accuracy, model size, and inference time.
+- **Fairness Evaluation:** A post-processing step to evaluate model fairness across different demographic groups, such as skin tone and race.
 
 ## Project Structure
 
@@ -26,6 +27,7 @@ moqnas/
 │
 ├── core/
 │   ├── cnn/                  # CNN model definitions, trainer, and metrics
+│   ├── fairness/             # Fairness evaluation logic and data loaders
 │   ├── config.py             # Experiment configuration handler
 │   └── evaluation.py         # Population evaluation engine
 │
@@ -39,17 +41,57 @@ moqnas/
 ├── configs/
 │   └── *.yaml                # YAML files for experiment configuration
 │
-├── run_evolution.py          # Entry-point scripts to launch experiments
-├── run_ga_evolution.py
+├── scripts/
+│   ├── download_datasets/    # Script to download and prepare datasets like FairFace, WiderFace, Coco 
+│   ├── fairness_baseline/    # Evaluate fairness of baseline models (e.g., ResNet, MobileNet)
+│   └── readme.md             # Instructions to create person/face datasets for fairness evaluation
+│
+├── dataset_utils/
+│   ├── factory.py            # Dataset loading and splitting logic
+│   └── transformations.py    # Data augmentation and transforms
+│
+├── utils/
+│   └── helpers.py            # General utility functions
+│
 └── ...
 ```
 
-- **`algorithms/`**: Contains the core logic for all search algorithms.  
-- **`core/`**: Holds shared components essential for any experiment, including the CNN builder/trainer and the evaluation engine.  
-- **`dataset_utils/`**: Manages all data loading, preprocessing, and splitting.  
-- **`utils/`**: Contains helper functions used across the project.  
-- **`configs/`**: Stores YAML configuration files that define the search space, model parameters, and training settings for experiments.  
-- **`run_*.py`**: Executable scripts to launch different types of NAS experiments.  
+- `algorithms/`: Contains the core logic for all search algorithms.
+- `core/`: Holds shared components essential for any experiment, including the CNN builder/trainer and the evaluation engine.
+- `dataset_utils/`: Manages all data loading, preprocessing, and splitting.
+- `utils/`: Contains helper functions used across the project.
+- `configs/`: Stores YAML configuration files that define the search space, model parameters, and training settings for experiments.
+- `run_*.py`: Executable scripts to launch different types of NAS experiments.
+
+## Fairness Evaluation
+
+The framework includes a **FairnessMetric** module designed to evaluate the performance of trained models across different demographic subgroups. This is treated as a **post-processing** step, meaning it runs on fully trained models to assess their fairness **without influencing the training process itself**.
+
+### How It Works
+
+The fairness evaluation is orchestrated by the `fairness_worker_cuda` function, which performs the following steps for each model architecture in a generation:
+
+1. **Model Loading:** The worker loads a pre-trained model onto a specified CUDA device.
+2. **Dataloader Creation:** It creates a special evaluation dataloader for fairness assessment using datasets like **Facet** or **FairFace**.
+3. **Inference and Metric Calculation:** The `FairnessMetric` class runs inference on the evaluation dataset and calculates the **True Positive Rate (TPR)** for each demographic group.
+4. **Fairness Score Computation:** Based on the per-group TPRs, it computes a final `fairness_score` and other summary metrics.
+
+### Fairness Score Calculation
+
+The primary metric, `fairness_score`, is derived from the per-group TPRs. The key components of this calculation are:
+
+- **Per-Group TPR:** The True Positive Rate is calculated for each demographic group (e.g., for each skin tone in the Facet dataset or each race in the FairFace dataset).
+- **Minimum Group TPR (`min_tpr`):** This is the lowest TPR observed across all groups.
+- **Sum of Gaps (`spd_sum`):** This value represents the sum of the differences between each group's TPR and the `min_tpr`. A lower `spd_sum` indicates better fairness.
+- **Fairness Score:** The final score is calculated as `max(0.0, (beta - spd_sum) / beta)`, where `beta` is a configurable hyperparameter. This score is normalized to a range between **0** and **1**, where **1** represents the best possible fairness.
+
+For the **Facet** dataset, the TPR can be calculated in two ways:
+
+- **hard method:** Assigns each image to a single skin tone class.
+- **soft method:** Uses weighted probabilities for each skin tone class.
+
+These fairness metrics are then saved alongside other evaluation results, allowing you to incorporate fairness as a key consideration in your multi-objective NAS experiments.
+
 
 ## Getting Started
 
