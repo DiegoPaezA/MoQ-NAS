@@ -31,17 +31,17 @@ LOGGER = init_log("INFO", name=__name__, file_path=log_file)
 
 def create_metrics_from_config(config: dict, model_instance, device, input_shape) -> list:
     """
-    Reads the 'metrics' section from the configuration and creates the
-    corresponding metric class instances.
+    Build metric instances from config['metrics'].
+    Injects runtime params (model, device, input_shape/img_size) when needed.
 
     Args:
-        config (dict): The 'train_spec' dictionary from the configuration.
-        model_instance (torch.nn.Module): The instantiated model.
-        device (str): The device for computation ('cuda' or 'cpu').
-        input_shape (tuple): The shape of the input tensor (B, C, H, W).
+        config (dict): Experiment/train spec dict (must include 'metrics': [...]).
+        model_instance (torch.nn.Module): The model to evaluate.
+        device (str): 'cuda' or 'cpu'.
+        input_shape (tuple): (B, C, H, W)
 
     Returns:
-        list: A list of instantiated metric objects to be passed to the Trainer.
+        list: List of metric objects.
     """
     metric_instances = []
     if 'metrics' not in config:
