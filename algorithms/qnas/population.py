@@ -50,105 +50,136 @@ class QPopulation(object):
 
 
 class QPopulationParams(QPopulation):
-    """ QNAS Chromosomes for the hyperparameters to be evolved. """
+    """QNAS Chromosomes for the hyperparameters to be evolved."""
 
-    def __init__(self, num_quantum_ind, params_ranges, repetition, crossover_rate,
-                update_quantum_rate):
-        """ Initialize QPopulationParams.
-
+    def __init__(self, num_quantum_ind, params_ranges, repetition, crossover_rate, update_quantum_rate):
+        """
         Args:
             num_quantum_ind: (int) number of quantum individuals.
-            params_ranges: {'parameter_name': [parameter_lower_limit, parameter_upper_limit]}.
-            repetition: (int) ratio between the number of classic individuals in the classic
-                population and the quantum individuals in the quantum population.
-            crossover_rate: (float) crossover rate.
-            update_quantum_rate: (float) probability that a quantum gene will be updated.
+            params_ranges: dict[str, list[float]] mapping parameter_name -> [lower, upper].
+            repetition: (int) ratio between classic and quantum pop sizes.
+            crossover_rate: (float or None) arithmetic crossover rate in [0, 1].
+            update_quantum_rate: (float) probability a quantum gene will be updated.
         """
+        super(QPopulationParams, self).__init__(num_quantum_ind, repetition, update_quantum_rate)
 
-        super(QPopulationParams, self).__init__(num_quantum_ind, repetition,
-                                                update_quantum_rate)
-
-        self.tolerance = 1.e-15  # Tolerance to compare floating point
-
+        self.tolerance = 1.0e-15
         self.lower = None
         self.upper = None
-        self.crossover = crossover_rate
+
+        if crossover_rate is None:
+            self.crossover = 0.0
+        else:
+            self.crossover = float(crossover_rate)
 
         self.chromosome = QChromosomeParams(params_ranges, self.dtype)
-
         self.initial_lower, self.initial_upper = self.chromosome.initialize_qgenes()
-
         self.initialize_qpop()
 
     def initialize_qpop(self):
-        """ Initialize quantum population with *self.num_ind* individuals. """
-
+        """Initialize quantum population with self.num_ind individuals."""
         self.lower = np.tile(self.initial_lower, (self.num_ind, 1))
         self.upper = np.tile(self.initial_upper, (self.num_ind, 1))
 
     def classic_crossover(self, new_pop, distance):
-        """ Perform arithmetic crossover of the old classic population with the new one.
-
-        Args:
-            new_pop: float numpy array representing the new classical population.
-            distance: (float) random distance for arithmetic crossover (range = [0, 1]).
         """
+        Arithmetic crossover between the previous classic population (self.current_pop)
+        and the newly sampled one (new_pop). Works even if row counts differ.
+        """
+        if self.current_pop is None or self.current_pop.size == 0 or self.crossover == 0.0:
+            return new_pop
 
-        mask = np.random.rand(self.num_ind * self.repetition, self.chromosome.num_genes)
-        idx = np.where(mask <= self.crossover)
-        new_pop[idx] = new_pop[idx] + (self.current_pop[idx] - new_pop[idx]) * distance
+        Nc, G = new_pop.shape
+        if G != self.chromosome.num_genes:
+            raise RuntimeError(f"classic_crossover: gene count mismatch (new_pop {G} vs expected {self.chromosome.num_genes}).")
 
+        num_curr, g2 = self.current_pop.shape
+        if g2 != G:
+            raise RuntimeError(f"classic_crossover: gene count mismatch (current_pop {g2} vs new_pop {G}).")
+
+        donor_idx = np.random.randint(0, num_curr, size=Nc)
+        donors = self.current_pop[donor_idx, :]
+
+        mask = (np.random.rand(Nc, G) <= self.crossover)
+        delta = (donors - new_pop) * float(distance)
+        new_pop[mask] = new_pop[mask] + delta[mask]
         return new_pop
 
     def generate_classical(self):
-        """ Generate a specific number of classical individuals from the observation of quantum
-            individuals. This number is equal to (*num_ind* x *repetition*).
         """
+        Generate (num_ind * repetition) classical individuals by sampling uniformly
+        within the per-gene quantum intervals [lower, upper].
+        """
+        G = self.chromosome.num_genes
+        Nq = self.num_ind
+        R = self.repetition
 
-        random_numbers = np.random.rand(self.num_ind * self.repetition,
-                                        self.chromosome.num_genes).astype(self.dtype)
-
-        new_pop = random_numbers * np.tile(self.upper - self.lower, (self.repetition, 1)) \
-            + np.tile(self.lower, (self.repetition, 1))
-
+        rnd = np.random.rand(Nq * R, G).astype(self.dtype)
+        span = (self.upper - self.lower)
+        new_pop = rnd * np.tile(span, (R, 1)) + np.tile(self.lower, (R, 1))
         return new_pop
 
     def update_quantum(self, intensity):
-        """ Update self.lower and self.upper.
-
-        Args:
-            intensity: (float) value defining the maximum intensity of the update.
         """
-        num_current_ind = self.current_pop.shape[0]
-        
-        # Check if the current population size matches the expected quantum population size
-        if num_current_ind == self.num_ind:
-            random = np.random.rand(self.num_ind, self.chromosome.num_genes)
-            mask = np.where(random <= self.update_quantum_rate)
-        else:
-            # Backup method: Generate mask based on the actual (smaller) size
-            # This could happen in multi-objective scenarios where the pareto front
-            # has fewer individuals than num_ind
-            random = np.random.rand(num_current_ind, self.chromosome.num_genes)
-            mask = np.where(random <= self.update_quantum_rate)
+        Update quantum intervals self.lower and self.upper using exemplars drawn
+        from self.current_pop, robust to any current_pop row count.
+        """
+        if self.current_pop is None or self.current_pop.size == 0:
+            raise RuntimeError("update_quantum: self.current_pop must be set and non-empty before updating.")
 
-        max_genes = np.max(self.current_pop, axis=0)
-        min_genes = np.min(self.current_pop, axis=0)
-        diff = np.tile(max_genes - min_genes, (self.num_ind, 1))
+        intensity = float(intensity)
 
-        # The update logic is now safe for both cases
-        update = self.current_pop[mask] - self.lower[mask] - (diff[mask] / 2)
-        self.lower[mask] += intensity * update
+        num_current_ind, num_genes = self.current_pop.shape
+        if num_genes != self.chromosome.num_genes:
+            raise RuntimeError(
+                f"update_quantum: gene count mismatch (current_pop has {num_genes}, "
+                f"expected {self.chromosome.num_genes})."
+            )
 
-        update = self.current_pop[mask] - self.upper[mask] + (diff[mask] / 2)
-        self.upper[mask] += intensity * update
+        # Target shapes
+        Nq, G = self.num_ind, self.chromosome.num_genes
 
-        # Correct limits (truncate) if they get out of the initial boundaries
-        for i in range(self.num_ind):
-            idx = np.where(self.lower[i] - self.initial_lower < -self.tolerance)
-            self.lower[i][idx] = self.initial_lower[idx]
-            idx = np.where(self.upper[i] - self.initial_upper > self.tolerance)
-            self.upper[i][idx] = self.initial_upper[idx]
+        # 1) Build update mask in TARGET SHAPE: (Nq, G)
+        rnd = np.random.rand(Nq, G)
+        mask = np.where(rnd <= self.update_quantum_rate)
+        rows, _ = mask
+        if rows.size == 0:
+            return
+
+        # 2) Pick donor row for each quantum row (with replacement)
+        donor_idx = np.random.randint(0, num_current_ind, size=Nq)
+        donors = self.current_pop[donor_idx, :]  # shape (Nq, G)
+
+        # 3) Compute non-negative per-gene spread across ALL current_pop
+        max_genes = np.max(self.current_pop, axis=0)       # (G,)
+        min_genes = np.min(self.current_pop, axis=0)       # (G,)
+        spread = np.maximum(max_genes - min_genes, 0.0)    # guard tiny negatives
+        diff = np.broadcast_to(spread[None, :], (Nq, G))   # (Nq, G)
+
+        # 4) Apply updates using donors in place of current_pop
+        # lower update
+        upd = donors[mask] - self.lower[mask] - (diff[mask] / 2.0)
+        self.lower[mask] += intensity * upd
+
+        # upper update
+        upd = donors[mask] - self.upper[mask] + (diff[mask] / 2.0)
+        self.upper[mask] += intensity * upd
+
+        # 5) Truncate to initial bounds (broadcast-safe, no 2D->1D mask indexing)
+        init_lower = self.initial_lower[None, :]  # (1, G) -> broadcasts to (Nq, G)
+        init_upper = self.initial_upper[None, :]
+
+        # Clamp with tolerance using vectorized where (avoids boolean advanced indexing on 1D arrays)
+        self.lower = np.where(self.lower < (init_lower - self.tolerance), init_lower, self.lower)
+        self.upper = np.where(self.upper > (init_upper + self.tolerance), init_upper, self.upper)
+
+        # 6) Safe swap if any lower > upper (rare but makes it bulletproof)
+        swap_mask = self.lower > self.upper
+        if np.any(swap_mask):
+            tmp = self.lower.copy()
+            self.lower[swap_mask] = self.upper[swap_mask]
+            self.upper[swap_mask] = tmp[swap_mask]
+
 
 
 class QPopulationNetwork(QPopulation):
