@@ -2,13 +2,13 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 150
+    max_generations: 100
     max_num_nodes: 20
     num_quantum_ind: 10
     penalize_number: 3
     repetition: 2
     replace_method: best
-    update_quantum_gen: 5
+    update_quantum_gen: 5  # every n generations, update quantum population
     update_quantum_rate: 0.2
     save_data_freq: 10
     crossover_frequency: 5
@@ -76,7 +76,7 @@ train:
     num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 18
+    threads: 20
 
     # Network structure Configuration
     network_config: default
