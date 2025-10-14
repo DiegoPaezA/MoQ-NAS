@@ -69,8 +69,6 @@ class BaseTrainer:
             Trains the model for one epoch and returns average loss and accuracy.
         evaluate(loader):
             Evaluates the model on a given data loader and returns average loss and accuracy.
-        compute_additional_metrics(loader):
-            Computes additional metrics such as confusion matrix and AUC for multi-class tasks.
         update_scheduler(scheduler, metric=None):
             Updates the learning rate scheduler based on the specified policy.
         release_gpu_memory():
@@ -152,10 +150,7 @@ class BaseTrainer:
             labels = labels.squeeze().long()
         
         # Run forward pass with mixed precision if enabled
-        
-        # enable bf16 on supported GPUs (A100/L40S), otherwise fp16 (e.g., 3090)
-        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        with autocast(self.device.type, dtype=(torch.bfloat16 if use_bf16 else torch.float16), enabled=self.params.get('mixed_precision', False)):
+        with autocast(self.device.type, dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
         
