@@ -7,7 +7,7 @@
 
 """
 import os
-
+import traceback
 import torch
 import torch.nn as nn
 
@@ -76,7 +76,7 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
             metric_instances.append(MetricClass(**params))
     
     # Conditionally add MedMNIST metrics if the dataset requires it
-    if "mnist" in config.get('dataset', '').lower():
+    if "mnist" in config.get('dataset', '').lower() and config.get('phase', '') in ['retrain', 'resnet']:
         metric_instances.append(
             MedMNIST_Metrics(dataset_name=config['dataset'], data_path=config['data_path'])
         )
@@ -381,6 +381,7 @@ def fitness(id_num: str, params: Dict[str, Any],
         return results_dict, model_path
     except Exception as e:
         LOGGER.error(f"An error occurred during training of model {id_num}: {e}")
+        LOGGER.error(traceback.format_exc()) # This will log the full traceback
         # Set return_val to zeros if an error occurs
         raise e
 
