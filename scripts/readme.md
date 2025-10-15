@@ -59,8 +59,8 @@ You can change output size via `--resize_target` (e.g., 96 or 128).
 
 #### Option A — Build originals and the resized mirrors in one go
 ```bash
-# Build PERSON and FACE, then create 96×96 mirrors
-python scripts/fairness_baseline/prepare_data.py   --build_person --person_out_dir datasets/personbin_data   --build_face   --face_out_dir   datasets/facebin_data   --make_person_96 --person96_out_dir datasets/personbin_data_96   --make_face_96   --face96_out_dir   datasets/facebin_data_96   --resize_target 96 --resize_mode center_crop --jpg_quality 90
+# Build PERSON and FACE, then create 96×96 mirrors (no cropping)
+python scripts/fairness_baseline/prepare_data.py   --build_person --person_out_dir datasets/personbin_data   --build_face   --face_out_dir   datasets/facebin_data   --make_person_96 --person96_out_dir datasets/personbin_data_96   --make_face_96   --face96_out_dir   datasets/facebin_data_96   --resize_target 96 --resize_mode letterbox --jpg_quality 90
 
 # Same but produce 128×128 mirrors
 python scripts/fairness_baseline/prepare_data.py   --build_person --person_out_dir datasets/personbin_data   --build_face   --face_out_dir   datasets/facebin_data   --make_person_96 --person96_out_dir datasets/personbin_data_128   --make_face_96   --face96_out_dir   datasets/facebin_data_128   --resize_target 128 --resize_mode center_crop --jpg_quality 90
@@ -68,8 +68,8 @@ python scripts/fairness_baseline/prepare_data.py   --build_person --person_out_d
 
 #### Option B — Create mirrors from already-built roots
 ```bash
-# Create 96×96 from existing PERSON and FACE datasets
-python scripts/fairness_baseline/prepare_data.py   --make_person_96 --person_src_for_resize datasets/personbin_data --person96_out_dir datasets/personbin_data_96   --make_face_96   --face_src_for_resize   datasets/facebin_data   --face96_out_dir   datasets/facebin_data_96   --resize_target 96 --resize_mode center_crop --jpg_quality 90
+# Create 96×96 from existing PERSON and FACE datasets (no cropping)
+python scripts/fairness_baseline/prepare_data.py   --make_person_96 --person_src_for_resize datasets/personbin_data --person96_out_dir datasets/personbin_data_96   --make_face_96   --face_src_for_resize   datasets/facebin_data   --face96_out_dir   datasets/facebin_data_96   --resize_target 96 --resize_mode letterbox --jpg_quality 90
 
 # Create 128×128 with letterboxing (no cropping)
 python scripts/fairness_baseline/prepare_data.py   --make_person_96 --person_src_for_resize datasets/personbin_data --person96_out_dir datasets/personbin_data_128   --make_face_96   --face_src_for_resize   datasets/facebin_data   --face96_out_dir   datasets/facebin_data_128   --resize_target 128 --resize_mode letterbox --jpg_quality 90

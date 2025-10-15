@@ -175,13 +175,34 @@ def build_face_binary_dataset(wider_root: str, neg_root: str, out_dir: str, **kw
 # --- 3. Person Binary Dataset Builder (from COCO) -----------------------------
 
 def _build_person_binary_split(split: str, coco_root: Path, out_dir: Path, **kwargs):
-    """Builds one split (train/val) for the person binary dataset."""
+    """
+    Builds one split (train/val) for the PERSON vs NON_PERSON dataset, balanced 1:1.
+
+    Positives:
+        - Cap at most 2 crops per image.
+        - Pad bbox ~15% for context, clip to image bounds.
+        - Keep only "person-like" boxes via geometry filters:
+              * min size: min(w,h) >= 64
+              * aspect ratio: 0.35 <= w/h <= 2.5
+              * area fraction: (w*h)/(W*H) >= 0.01
+            * relative height in frame: h/H >= 0.35
+        - (Optional) If keypoints exist, require >= 4 labeled keypoints.
+
+    Negatives:
+        - Random background crop from non-person images; keep sampling until 1:1.
+
+    Notes:
+        - Resizing to fixed squares (e.g., 96×96) should be done later with your letterbox exporter.
+    """
+    import random
+
     random.seed(kwargs.get('seed', 42))
+
     ann_file = coco_root / "annotations" / f"instances_{split}2017.json"
     img_dir = coco_root / f"{split}2017"
     coco = COCO(str(ann_file))
     person_cat_id = coco.getCatIds(catNms=['person'])[0]
-    
+
     img_ids = coco.getImgIds()
     person_img_ids = coco.getImgIds(catIds=[person_cat_id])
     non_person_img_ids = list(set(img_ids) - set(person_img_ids))
@@ -190,46 +211,137 @@ def _build_person_binary_split(split: str, coco_root: Path, out_dir: Path, **kwa
     out_pos = out_dir / split / "person"; _ensure_dir(out_pos)
     out_neg = out_dir / split / "non_person"; _ensure_dir(out_neg)
 
+    def _clip_box(x0, y0, x1, y1, W, H):
+        x0 = max(0, min(int(x0), W - 1))
+        y0 = max(0, min(int(y0), H - 1))
+        x1 = max(0, min(int(x1), W - 1))
+        y1 = max(0, min(int(y1), H - 1))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, y0, x1, y1
+
+    # ---------------------------
+    # 1) Positives (cap and filters)
+    # ---------------------------
     pos_count = 0
     for img_id in tqdm(person_img_ids, desc=f"[{split}] Cropping person positives"):
         ann_ids = coco.getAnnIds(imgIds=[img_id], catIds=[person_cat_id], iscrowd=False)
-        if not ann_ids: continue
-        
+        if not ann_ids:
+            continue
+
         img_info = coco.loadImgs([img_id])[0]
         img_path = img_dir / img_info['file_name']
-        if not img_path.exists(): continue
+        if not img_path.exists():
+            continue
+
         try:
             img = Image.open(img_path).convert("RGB")
-        except Exception: continue
+        except Exception:
+            continue
 
+        W, H = img.size
         anns = coco.loadAnns(ann_ids)
+
+        # Hard cap: at most 2 person crops per image
+        if len(anns) > 2:
+            anns = random.sample(anns, 2)
+
         for i, ann in enumerate(anns):
             x, y, w, h = ann['bbox']
-            if w < kwargs.get('min_person_w', 32) or h < kwargs.get('min_person_h', 32): continue
-            
-            box = (int(x), int(y), int(x + w), int(y + h))
+
+            # Skip clearly tiny boxes first (preserve your original guard)
+            if w < kwargs.get('min_person_w', 32) or h < kwargs.get('min_person_h', 32):
+                continue
+
+            # 1) Padding (~15%) around bbox center
+            px = 0.15 * w
+            py = 0.15 * h
+            cx = x + w / 2.0
+            cy = y + h / 2.0
+            x0 = cx - (w / 2.0 + px)
+            y0 = cy - (h / 2.0 + py)
+            x1 = cx + (w / 2.0 + px)
+            y1 = cy + (h / 2.0 + py)
+
+            # 2) Clip to image bounds
+            clipped = _clip_box(x0, y0, x1, y1, W, H)
+            if clipped is None:
+                continue
+            x0, y0, x1, y1 = clipped
+            pw, ph = x1 - x0, y1 - y0
+
+            # 3) Geometry-based filters (favor whole/upper-body)
+            if pw < 64 or ph < 64:
+                continue
+            ar = pw / float(ph)
+            if ar < 0.35 or ar > 2.5:
+                continue
+            area_frac = (pw * ph) / float(W * H)
+            if area_frac < 0.01:
+                continue
+            rel_h = ph / float(H)
+            if rel_h < 0.35:
+                continue
+
+            # 4) Optional keypoints filter (if available)
+            kpts = ann.get('keypoints')
+            if kpts:
+                # COCO keypoints: [x1,y1,v1, x2,y2,v2, ...]; v>0 labeled, v>1 visible
+                visible = sum(1 for i_k in range(2, len(kpts), 3) if kpts[i_k] > 0)
+                if visible < 4:
+                    continue
+
+            # Save positive crop
+            box = (x0, y0, x1, y1)
             out_pos_path = out_pos / f"{img_path.stem}_{i}.jpg"
             if _save_crop(img, box, out_pos_path):
                 pos_count += 1
 
-    # Generate balanced negatives from non-person images
+    # ---------------------------
+    # 2) Negatives (1:1 balance)
+    # ---------------------------
+    target_neg = pos_count
     neg_count = 0
-    pbar_neg = tqdm(total=pos_count, desc=f"[{split}] Sampling non-person negatives")
+    pbar_neg = tqdm(total=target_neg, desc=f"[{split}] Sampling non-person negatives")
+
     img_ptr = 0
-    while neg_count < pos_count and img_ptr < len(non_person_img_ids):
-        img_id = non_person_img_ids[img_ptr]; img_ptr += 1
-        img_info = coco.loadImgs([img_id])[0]
+    while neg_count < target_neg:
+        if img_ptr >= len(non_person_img_ids):
+            img_ptr = 0
+            random.shuffle(non_person_img_ids)
+
+        np_img_id = non_person_img_ids[img_ptr]
+        img_ptr += 1
+
+        img_info = coco.loadImgs([np_img_id])[0]
         img_path = img_dir / img_info['file_name']
-        if not img_path.exists(): continue
-        
-        # We can just copy the whole image as a negative sample
-        out_neg_path = out_neg / img_path.name
+        if not img_path.exists():
+            continue
+
         try:
-            shutil.copy(str(img_path), str(out_neg_path))
-            neg_count += 1
-            pbar_neg.update(1)
+            neg_img = Image.open(img_path).convert("RGB")
         except Exception:
             continue
+
+        nW, nH = neg_img.size
+        if nW < 64 or nH < 64:
+            continue
+
+        # single random crop per iteration; cap crop size by image dims
+        tw = random.randint(64, min(224, nW))
+        th = random.randint(64, min(224, nH))
+        if nW <= tw or nH <= th:
+            continue
+
+        nx0 = random.randint(0, nW - tw)
+        ny0 = random.randint(0, nH - th)
+        box = (nx0, ny0, nx0 + tw, ny0 + th)
+
+        out_neg_path = out_neg / f"{img_path.stem}_{random.randint(0, 99999)}.jpg"
+        if _save_crop(neg_img, box, out_neg_path):
+            neg_count += 1
+            pbar_neg.update(1)
+
     pbar_neg.close()
     print(f"✅ [{split}] split built: {pos_count} persons, {neg_count} non-persons.")
 
@@ -286,7 +398,7 @@ def _resize_and_save(src_path: Path, dst_path: Path, target: int, mode: str, qua
     except Exception:
         return False
 
-def build_square_resized_version(src_root: str, dst_root: str, target: int = 96, mode: str = "center_crop", quality: int = 90):
+def build_square_resized_version(src_root: str, dst_root: str, target: int = 96, mode: str = "letterbox", quality: int = 90):
     """
     Mirror an existing split/class folder dataset (train/val with person/non_person or face/non_face)
     into a new root, resizing everything to target x target.
