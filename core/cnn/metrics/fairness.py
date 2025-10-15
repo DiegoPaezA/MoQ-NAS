@@ -31,7 +31,6 @@ class FairnessMetric(BaseMetric):
         self.batch_size = self._init_args.get('batch_size_fairness', 64)
         self.positive_class_idx = self._init_args.get('positive_class_idx', 1)
         self.eval_skintone_method = self._init_args.get('eval_skintone_method', 'soft').lower()
-        self.phase = self._init_args.get('phase', 'evolution').lower()
         self.img_size = self._init_args.get('img_size', 224)
 
         if not all([self.model, self.device, self.eval_dataset_name, self.beta]):
@@ -75,7 +74,6 @@ class FairnessMetric(BaseMetric):
             batch_size=self.batch_size,
             img_size=self.img_size,
             cache_dir=self.cache_dir,
-            phase=self.phase
         )
 
         if self.eval_dataset_name.lower() == 'facet':
