@@ -29,16 +29,16 @@ class PadToSquare(object):
         new_img.paste(img, ((side - w) // 2, (side - h) // 2))
         return new_img
 
-def make_transforms(img_size: int = 224, mode: str = "center_crop", train: bool = True) -> transforms.Compose:
+def make_transforms(img_size: int = 224, mode: str = "letterbox", train: bool = True) -> transforms.Compose:
     """
-    mode: 'center_crop' -> center-crop square then resize
+    mode: 'letterbox' -> center-crop square then resize
           'letterbox'   -> pad to square then resize (no crop)
     """
     imagenet_mean = [0.485, 0.456, 0.406]
     imagenet_std  = [0.229, 0.224, 0.225]
 
     square_ops: List[transforms.Transform] = []
-    if mode == "center_crop":
+    if mode == "letterbox":
         # If the input is non-square (e.g., 224x244), crop to square around center
         # Then resize to desired side.
         square_ops = [
@@ -51,7 +51,7 @@ def make_transforms(img_size: int = 224, mode: str = "center_crop", train: bool 
             transforms.Resize((img_size, img_size)),
         ]
     else:
-        raise ValueError("mode must be 'center_crop' or 'letterbox'")
+        raise ValueError("mode must be 'letterbox' or 'letterbox'")
 
     if train:
         aug = [
@@ -69,11 +69,11 @@ def make_transforms(img_size: int = 224, mode: str = "center_crop", train: bool 
     )
 
 # Rebuild make_transforms to ensure proper PIL ordering
-def make_transforms(img_size: int = 224, mode: str = "center_crop", train: bool = True) -> transforms.Compose:
+def make_transforms(img_size: int = 224, mode: str = "letterbox", train: bool = True) -> transforms.Compose:
     imagenet_mean = [0.485, 0.456, 0.406]
     imagenet_std  = [0.229, 0.224, 0.225]
 
-    if mode == "center_crop":
+    if mode == "letterbox":
         squaring = [transforms.CenterCrop( min(img_size*3, 1024) )]  # wide crop guard; replaced below per dataset
         # We’ll do a pragmatic approach: center-crop to square using the shorter side of the current image at runtime
         # torchvision doesn't have dynamic min-side center-crop; but CenterCrop(s) works if s <= min(W,H).
@@ -88,7 +88,7 @@ def make_transforms(img_size: int = 224, mode: str = "center_crop", train: bool 
             transforms.Resize((img_size, img_size)),
         ]
     else:
-        raise ValueError("mode must be 'center_crop' or 'letterbox'")
+        raise ValueError("mode must be 'letterbox' or 'letterbox'")
 
     if train:
         aug = [
@@ -234,8 +234,8 @@ def get_default_transforms(img_size: int = 224) -> dict:
     Backward-compatible wrapper; uses center-crop squaring.
     For small sizes (e.g., 96/128), returns sensible train/eval pipelines.
     """
-    tf_train = make_transforms(img_size=img_size, mode="center_crop", train=True)
-    tf_val   = make_transforms(img_size=img_size, mode="center_crop", train=False)
+    tf_train = make_transforms(img_size=img_size, mode="letterbox", train=True)
+    tf_val   = make_transforms(img_size=img_size, mode="letterbox", train=False)
     return {'train': tf_train, 'val': tf_val}
 
 def create_binary_loaders(
@@ -261,8 +261,7 @@ def create_eval_loader(
     batch_size: int,
     img_size: int = 224,
     cache_dir: Optional[str] = ".cache/facet_crops",
-    phase: Optional[str] = None,
-    square_mode: str = "center_crop",   # new: choose squaring for fairness eval
+    square_mode: str = "letterbox",   # new: choose squaring for fairness eval
 ) -> DataLoader:
     """
     Creates a DataLoader for fairness evaluation datasets with deterministic transforms.
