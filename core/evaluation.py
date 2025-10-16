@@ -190,6 +190,14 @@ class EvalPopulation(object):
                     score = fairness_scores.get(self.fairness_metric_name, fairness_scores.get("fairness_score"))
                     self.logger.info(f"Candidate {idx} - {self.fairness_metric_name}: {score:.4f}")
             self.logger.info("Merging complete.")
+        else:
+            # remove the model files if no fairness evaluation is done
+            for spec in model_specs:
+                if spec and os.path.exists(spec["model_path"]):
+                    try:
+                        os.remove(spec["model_path"])
+                    except Exception as e:
+                        self.logger.warning(f"Could not remove model file {spec['model_path']}: {e}")
 
         evol_end_time = time.perf_counter()
         mins, secs = divmod(evol_end_time - evol_time_start, 60)
