@@ -299,6 +299,8 @@ class QPopulationNetwork(QPopulation):
         self.noop_max_prob = float(noop_max_prob)
         self.noop_ramp_cap = bool(noop_ramp_cap)
 
+        self._parent_map = None
+        
         self.initialize_qpop()
         self._init_metrics_min()
 
@@ -341,7 +343,7 @@ class QPopulationNetwork(QPopulation):
 
         new_pop = np.zeros((N, L), dtype=np.int32)
         base_prob = np.tile(self.probabilities, (self.repetition, 1, 1))
-
+        self._parent_map = np.tile(np.arange(self.num_ind, dtype=int), self.repetition)
         def _renorm_or_fallback(p, base=None):
             """Safely renormalizes a probability vector, with fallbacks."""
             s = p.sum()
