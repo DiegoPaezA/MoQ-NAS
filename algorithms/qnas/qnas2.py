@@ -14,6 +14,8 @@ import time
 from collections import defaultdict
 
 from .population import QPopulationNetwork, QPopulationParams
+from .neighborhood import NeighborhoodRegistry
+
 from utils.helpers import (
     delete_old_dirs_v2,
     init_log,
@@ -99,6 +101,7 @@ class QNAS(object):
         self.save_data_freq = np.inf
         self.qpop_params = None
         self.qpop_net = None
+        self._parent_map = None
 
         if self.use_cache:
             self.logger.info("Cache is enabled.")
@@ -255,6 +258,7 @@ class QNAS(object):
 
         U_total = max(1, max_generations // max(1, update_quantum_gen))
         self.qpop_net.set_schedule_total_updates(U_total)
+        self.neighborhoods = NeighborhoodRegistry(num_neighborhoods=self.qpop_net.num_ind, k_hist=10)
 
     def select_population(self, old_params: np.ndarray, old_nets: np.ndarray, old_pen: np.ndarray,
                         old_raw: np.ndarray, old_eval_idx: np.ndarray, new_params: np.ndarray,
@@ -378,6 +382,7 @@ class QNAS(object):
         self.random = np.random.rand()
         new_pop_params = self.qpop_params.generate_classical()
         new_pop_net = self.qpop_net.generate_classical()
+        self._parent_map = getattr(self.qpop_net, "_parent_map", None)
         self.logger.info("Generated classical networks:\n%s", new_pop_net)
         return new_pop_params, new_pop_net
 
@@ -607,6 +612,125 @@ class QNAS(object):
                 except AttributeError:
                     pass  # Skip if the method doesn't exist
         return new_pop_net
+    
+    def crossover_network_neighborhood(self, new_pop_net: np.ndarray) -> np.ndarray:
+        """
+        Applies crossover *per neighborhood*.
+        - Gated by en_pop_crossover and crossover_frequency, like your current method.
+        - Uses each child's own neighborhood elites as donors (from self.neighborhoods).
+        - Falls back to no-op when archives are empty.
+        """
+        if not getattr(self, "en_pop_crossover", False):
+            return new_pop_net
+        if self.current_gen <= 0 or (self.current_gen % self.crossover_frequency != 0):
+            return new_pop_net
+
+        parent_map = self._parent_map  # (Nq*R,)
+        if parent_map is None or parent_map.shape[0] != new_pop_net.shape[0]:
+            return new_pop_net  # safety
+
+        Nq = self.qpop_net.num_ind
+        rng = np.random.default_rng()
+
+        # For each neighborhood, pick a subset of its children to cross over,
+        # pair them with random elites from the same neighborhood, and apply crossover.
+        for q in range(Nq):
+            child_idx = np.where(parent_map == q)[0]
+            if child_idx.size == 0:
+                continue
+            
+            # pull top-k elites from this neighborhood's history
+            elites_q, _ = self.neighborhoods.neighborhoods[q].topk(k=2)
+            if elites_q.size == 0:
+                continue  # no history yet
+            
+            # how many children from this neighborhood to crossover
+            m = int(np.ceil(child_idx.size * float(getattr(self, "pop_crossover_rate", 0.5))))
+            if m <= 0:
+                continue
+
+            sel = child_idx if child_idx.size <= m else rng.choice(child_idx, size=m, replace=False)
+
+            # build donor array aligned to sel (random elite per child)
+            donors = np.empty_like(new_pop_net[sel])
+            pick = rng.integers(0, elites_q.shape[0], size=sel.size)
+            donors[:] = elites_q[pick]
+
+            # OPTIONAL: cx_rate mask (apply crossover to a subset only)
+            cx_rate = float(getattr(self, "cx_rate_neighborhood", 1.0))
+            if cx_rate < 1.0:
+                mask = rng.random(sel.size) < cx_rate
+                if not np.any(mask):
+                    continue
+                # pair non-selected with themselves (no-op)
+                donors[~mask] = new_pop_net[sel][~mask]
+
+            # use your existing crossover API
+            try:
+                offspring = self.qpop_net.apply_crossover(donors, new_pop_net[sel])
+                new_pop_net[sel] = offspring
+            except AttributeError:
+                # fallback: do nothing if apply_crossover not available
+                pass
+
+        self.logger.info("Neighborhood crossover applied to networks at gen %d", self.current_gen)
+        return new_pop_net
+
+    def crossover_network_cross_neighborhood(self, new_pop_net: np.ndarray, 
+                                            elite_k_each: int = 2, cx_rate: float = 0.3, 
+                                            frequency: int | None = None) -> np.ndarray:
+        """
+        Cross-neighborhood crossover: mix a subset of children with elites from *other* neighborhoods.
+        Intended for single-objective runs as controlled migration.
+        """
+        if not getattr(self, "en_pop_crossover", False):
+            return new_pop_net
+
+        freq = int(frequency or getattr(self, "crossover_frequency", 5))
+        if self.current_gen <= 0 or (self.current_gen % freq != 0):
+            return new_pop_net
+
+        parent_map = self._parent_map
+        if parent_map is None or parent_map.shape[0] != new_pop_net.shape[0]:
+            return new_pop_net
+
+        Nq = self.qpop_net.num_ind
+        rng = np.random.default_rng()
+
+        # Preload elites per neighborhood
+        elites_per_q = []
+        for q in range(Nq):
+            A_q, _ = self.neighborhoods.neighborhoods[q].topk(elite_k_each)
+            elites_per_q.append(A_q)  # may be empty
+
+        # For each child, with prob cx_rate, pick a *different* neighborhood donor
+        for i in range(new_pop_net.shape[0]):
+            if rng.random() > cx_rate:
+                continue
+            q_src = int(parent_map[i])
+
+            # choose a different neighborhood that has elites
+            candidates = [q for q in range(Nq) if q != q_src and elites_per_q[q].size > 0]
+            if not candidates:
+                continue
+            q_partner = candidates[rng.integers(0, len(candidates))]
+            donor_pool = elites_per_q[q_partner]
+
+            # pick one elite from partner neighborhood
+            donor = donor_pool[rng.integers(0, donor_pool.shape[0])]
+            child = new_pop_net[i]
+
+            # apply your existing crossover method
+            if getattr(self.qpop_net, "crossover_method", "hux") == "hux":
+                child_new, _ = self.qpop_net.hux_crossover(child, donor)
+            else:
+                child_new, _ = self.qpop_net.uniform_crossover(child, donor)
+
+            new_pop_net[i] = child_new
+
+        self.logger.info("Cross-neighborhood crossover applied at gen %d", self.current_gen)
+        return new_pop_net
+
 
     @staticmethod
     def _fmt_arr(a, prec=6):
@@ -772,10 +896,43 @@ class QNAS(object):
             # --- Generation, Crossover, and Evaluation ---
             new_p, new_n = self.generate_classical()
             new_p = self.crossover_hyperparams(new_p)
-            new_n = self.crossover_network(new_n)
+            
+            # 1) local mixing within neighborhoods
+            new_n = self.crossover_network_neighborhood(new_n)
+
+            # 2) sparse cross-neighborhood migration
+            new_n = self.crossover_network_cross_neighborhood(
+                new_pop_net=new_n,
+                elite_k_each=2,
+                cx_rate=0.2,           # small probability to avoid homogenization
+                frequency= self.crossover_frequency * 2,  # less frequent
+            )
+
             new_f_pen, new_f_raw = self.eval_pop(new_p, new_n)
             new_eval_idx = np.arange(new_p.shape[0], dtype=int)
+            
+            # 1) log the whole evaluated batch into the neighborhood registry
+            self.neighborhoods.add_batch_by_parent(
+                parent_map=self._parent_map,            # shape: (Nq*R,)
+                archs=new_n,                            # (Nq*R, G_net) genotype
+                objs=new_f_pen.reshape(-1, 1),          # (Nq*R, 1) higher = better
+                gen=self.current_gen
+            )
 
+            # 2) fetch one champion per neighborhood (fallback = best-of-batch per neighborhood)
+            nb_pop, _ = self.neighborhoods.champions()
+            if nb_pop is None:  # cold start fallback
+                Nq = self.qpop_net.num_ind
+                champs = []
+                for q in range(Nq):
+                    idx = np.where(self._parent_map == q)[0]
+                    j = idx[int(np.argmax(new_f_pen[idx]))]
+                    champs.append(new_n[j])
+                nb_pop = np.vstack(champs)
+
+            # 3) expose donors for the quantum updater ('single' uses this)
+            self.qpop_net.neighborhood_pop = nb_pop      # shape: (Nq, G_net)
+            
             # --- Selection ---
             next_p, next_n, next_pen, next_raw, next_eidx = self.select_population(
                 self.qpop_params.current_pop, self.qpop_net.current_pop,
