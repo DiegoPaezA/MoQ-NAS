@@ -198,11 +198,14 @@ class QNAS(object):
         self.penalize_number = penalize_number
         self.patience = patience
         self.early_stopping = early_stopping
+        self.survivors_per_q = k_elites
+        self.elite_mode = elite_mode
 
         # 2) Population crossover settings
         self.en_pop_crossover = en_pop_crossover
         self.pop_crossover_rate = pop_crossover_rate
         self.crossover_frequency = crossover_frequency
+
 
         # 3) Reducing-layer penalty setup
         if reducing_fns_list:
@@ -258,7 +261,7 @@ class QNAS(object):
 
         U_total = max(1, max_generations // max(1, update_quantum_gen))
         self.qpop_net.set_schedule_total_updates(U_total)
-        self.neighborhoods = NeighborhoodRegistry(num_neighborhoods=self.qpop_net.num_ind, k_hist=10)
+        self.neighborhoods = NeighborhoodRegistry(num_neighborhoods=self.qpop_net.num_ind, k_hist=self.survivors_per_q)
 
     def select_population(self, old_params: np.ndarray, old_nets: np.ndarray, old_pen: np.ndarray,
                         old_raw: np.ndarray, old_eval_idx: np.ndarray, new_params: np.ndarray,
@@ -731,6 +734,43 @@ class QNAS(object):
         self.logger.info("Cross-neighborhood crossover applied at gen %d", self.current_gen)
         return new_pop_net
 
+    def update_global_best_from_batch(
+        self,
+        batch_penalized: np.ndarray,   # new_f_pen
+        batch_eval_idx: np.ndarray,    # new_eval_idx
+        batch_archs: np.ndarray | None,# new_n (optional but recommended)
+        batch_params: np.ndarray | None,# new_p (optional)
+        parent_map: np.ndarray | None  # self._parent_map to know q_ind (neighborhood)
+    ) -> None:
+        """Updates the *global* best-so-far using the just-evaluated batch."""
+        if batch_penalized is None or batch_penalized.size == 0:
+            return
+        safe = np.where(np.isnan(batch_penalized), -np.inf, batch_penalized)
+        j = int(np.argmax(safe))
+        val = float(safe[j])
+
+        # init globals if missing
+        if getattr(self, "best_so_far", None) is None:
+            self.best_so_far = -np.inf
+            self.best_so_far_id = [-1, -1]
+            self.best_so_far_q  = -1
+            self.best_so_far_arch = None
+            self.best_so_far_params = None
+
+        if val > self.best_so_far:
+            self.best_so_far = val
+            self.best_so_far_id = [self.current_gen, int(batch_eval_idx[j])]
+            self.best_so_far_q  = int(parent_map[j]) if parent_map is not None else -1
+            # snapshot genotype/params for analysis/replay
+            if batch_archs is not None:
+                self.best_so_far_arch = batch_archs[j].copy()
+            if batch_params is not None:
+                self.best_so_far_params = batch_params[j].copy()
+            # (optional) log a concise line
+            self.logger.info(
+                "NEW GLOBAL BEST @ gen %d | q=%s | eidx=%d | value=%.6f",
+                self.current_gen, str(self.best_so_far_q), int(batch_eval_idx[j]), val
+            )
 
     @staticmethod
     def _fmt_arr(a, prec=6):
@@ -912,35 +952,42 @@ class QNAS(object):
             new_eval_idx = np.arange(new_p.shape[0], dtype=int)
             
             # 1) log the whole evaluated batch into the neighborhood registry
-            self.neighborhoods.add_batch_by_parent(
-                parent_map=self._parent_map,            # shape: (Nq*R,)
-                archs=new_n,                            # (Nq*R, G_net) genotype
-                objs=new_f_pen.reshape(-1, 1),          # (Nq*R, 1) higher = better
+            self.neighborhoods.add_full_batch_by_parent(
+                parent_map=self._parent_map,
+                archs=new_n,
+                objs=new_f_pen.reshape(-1, 1),   # single-objective
                 gen=self.current_gen
             )
 
-            # 2) fetch one champion per neighborhood (fallback = best-of-batch per neighborhood)
-            nb_pop, _ = self.neighborhoods.champions()
-            if nb_pop is None:  # cold start fallback
-                Nq = self.qpop_net.num_ind
-                champs = []
-                for q in range(Nq):
-                    idx = np.where(self._parent_map == q)[0]
-                    j = idx[int(np.argmax(new_f_pen[idx]))]
-                    champs.append(new_n[j])
-                nb_pop = np.vstack(champs)
-
-            # 3) expose donors for the quantum updater ('single' uses this)
-            self.qpop_net.neighborhood_pop = nb_pop      # shape: (Nq, G_net)
+            # donors for scheduled quantum update
+            champion_nets_nb, champion_scores_nb= self.neighborhoods.champions_or_best_of_batch(
+                parent_map=self._parent_map,
+                archs=new_n,
+                scores=new_f_pen
+            )
             
-            # --- Selection ---
+            print("Champions per neighborhood (from batch):")
+            for q in range(self.qpop_net.num_ind):
+                print(f"  Neighborhood {q}: Score: {champion_scores_nb[q]:.4f} | Net: {champion_nets_nb[q]}")
+                
+            top_nets_nb, top_scores_nb = self.neighborhoods.per_neighborhood_topk(k_each=self.survivors_per_q)
+            
+            print("Champions per neighborhood (networks):")
+            for q in range(self.qpop_net.num_ind):
+                nets_q, scores_q = self.neighborhoods.neighborhoods[q].topk(k=3)
+                print(f"  Neighborhood {q}:")
+                for i in range(nets_q.shape[0]):
+                    print(f"    Score: {scores_q[i]:.4f} | Net: {nets_q[i]}")
+                    
+            
+            # --- Selection Global best population ---
             next_p, next_n, next_pen, next_raw, next_eidx = self.select_population(
                 self.qpop_params.current_pop, self.qpop_net.current_pop,
                 self.fitnesses, self.raw_fitnesses, self.eval_idx,
                 new_p, new_n, new_f_pen, new_f_raw, new_eval_idx,
             )
 
-            # --- Update State for Next Generation ---
+            # --- Update State for Next Generation, results across generations ---
             self.qpop_params.current_pop = next_p
             self.qpop_net.current_pop = next_n
             self.fitnesses = next_pen
