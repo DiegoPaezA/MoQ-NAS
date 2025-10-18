@@ -966,20 +966,28 @@ class QNAS(object):
                 scores=new_f_pen
             )
             
-            print("Champions per neighborhood (from batch):")
-            for q in range(self.qpop_net.num_ind):
-                print(f"  Neighborhood {q}: Score: {champion_scores_nb[q]:.4f} | Net: {champion_nets_nb[q]}")
+            # print("Champions per neighborhood (from batch):")
+            # champ_scores_1d = np.asarray(champion_scores_nb).reshape(-1)
+            # for q in range(self.qpop_net.num_ind):
+            #     score = float(champ_scores_1d[q])
+            #     print(f"  Neighborhood {q}: Score: {score:.4f} | Net: {champion_nets_nb[q]}")
                 
-            top_nets_nb, top_scores_nb = self.neighborhoods.per_neighborhood_topk(k_each=self.survivors_per_q)
+            top_nets_nb, top_scores_nb = self.neighborhoods.per_neighborhood_topk(
+                k_each=self.survivors_per_q
+            )
             
-            print("Champions per neighborhood (networks):")
+            self.logger.info("Champions per neighborhood (networks):")
             for q in range(self.qpop_net.num_ind):
-                nets_q, scores_q = self.neighborhoods.neighborhoods[q].topk(k=3)
-                print(f"  Neighborhood {q}:")
+                nets_q, scores_q = self.neighborhoods.neighborhoods[q].topk(k=self.survivors_per_q)
+                scores_q_1d = np.asarray(scores_q).reshape(-1)
+                self.logger.info(f"  Neighborhood {q}:")
                 for i in range(nets_q.shape[0]):
-                    print(f"    Score: {scores_q[i]:.4f} | Net: {nets_q[i]}")
-                    
-            
+                    self.logger.info(f"    Score: {float(scores_q_1d[i]):.4f} | Net: {nets_q[i]}")
+
+            self.qpop_net.neighborhood_pop = champion_nets_nb 
+            self.qpop_net.global_elite_pool = top_nets_nb.copy()
+            self.qpop_net.global_elite_scores = top_scores_nb.reshape(-1) 
+
             # --- Selection Global best population ---
             next_p, next_n, next_pen, next_raw, next_eidx = self.select_population(
                 self.qpop_params.current_pop, self.qpop_net.current_pop,
