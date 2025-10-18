@@ -242,6 +242,10 @@ class QPopulationNetwork(QPopulation):
         self.probabilities = None
 
         self.chromosome = QChromosomeNetwork(max_num_nodes, fn_list, self.dtype)
+        
+        self.neighborhood_pop: np.ndarray | None = None   # shape: (Nq, G)
+        self.global_elite_pool: np.ndarray | None = None  # shape: (K,  G)
+        self.global_elite_scores: np.ndarray | None = None  # shape: (K,)
 
         self.max_update = 0.05
         self.max_prob = 0.90
@@ -1116,16 +1120,42 @@ class QPopulationNetwork(QPopulation):
         P_sel = self._apply_noop_caps_rows(P_sel, rows, cols)
 
         if self.elite_mode == "single":
-            E = min(self.num_ind, self.current_pop.shape[0])
-            best_classic = self.current_pop[:E]
-            winners_single = best_classic[rows, cols]
+            pool_choices = self.neighborhood_pop if (getattr(self, "neighborhood_pop", None) is not None) else self.current_pop
+            E = min(self.num_ind, 0 if pool_choices is None else pool_choices.shape[0])
+            if E == 0: 
+                return
+            best_classic   = pool_choices[:E]          # (Nq, G) expected for 'single'
+            winners_single = best_classic[rows, cols]  # rows are q_idx
             q_rows = np.zeros_like(P_sel)
             q_rows[np.arange(rows.size), winners_single] = 1.0
         elif self.elite_mode == "global_k":
-            E = min(self.k_elites, self.current_pop.shape[0])
-            topk = self.current_pop[:E]
-            q_full = self._build_q_global(topk, F)
-            q_rows = q_full[cols, :]
+            pool   = getattr(self, "global_elite_pool", None)
+            k_each = int(self.k_elites)
+
+            if pool is None or pool.size == 0 or k_each <= 0:
+                # fallback: original global (across all elites)
+                E = min(self.k_elites, 0 if self.current_pop is None else self.current_pop.shape[0])
+                if E <= 0: return
+                topk  = self.current_pop[:E]
+                q_full= self._build_q_global(topk, F)
+                q_rows= q_full[cols, :]
+            else:
+                Nq = int(self.num_ind); L = int(pool.shape[1])
+                q_per_nb = np.zeros((Nq, L, F), dtype=float)
+                for q in range(Nq):
+                    start, end = q*k_each, (q+1)*k_each
+                    group = pool[start:end]                  # (k_each, L) best→worst for this q
+                    if group.shape[0] == 0: continue
+                    E_use = min(self.k_elites, group.shape[0])
+                    w     = self._elite_weights(E_use)
+                    counts = np.zeros((L, F), dtype=float)
+                    for e in range(E_use):
+                        counts[np.arange(L), group[e]] += w[e]
+                    denom = np.maximum(counts.sum(axis=1, keepdims=True), 1e-12)
+                    q_per_nb[q] = counts / denom
+
+                q_rows = q_per_nb[rows, cols, :]            # (len(rows), F)
+
         elif self.elite_mode == "bootstrap_k":
             E_pool = min(self.current_pop.shape[0], max(self.k_elites, self.pool_factor * self.k_elites))
             pool = self.current_pop[:E_pool]
