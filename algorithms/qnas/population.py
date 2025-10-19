@@ -110,15 +110,23 @@ class QPopulationParams(QPopulation):
         Generate (num_ind * repetition) classical individuals by sampling uniformly
         within the per-gene quantum intervals [lower, upper].
         """
-        G = self.chromosome.num_genes
+        G  = self.chromosome.num_genes
         Nq = self.num_ind
-        R = self.repetition
+        R  = self.repetition
 
+        # randoms for all (Nq*R, G)
         rnd = np.random.rand(Nq * R, G).astype(self.dtype)
-        span = (self.upper - self.lower)
-        new_pop = rnd * np.tile(span, (R, 1)) + np.tile(self.lower, (R, 1))
-        return new_pop
+        lower_rep = np.repeat(self.lower, repeats=R, axis=0)
+        upper_rep = np.repeat(self.upper, repeats=R, axis=0)
+        span_rep  = upper_rep - lower_rep
 
+        # sample
+        new_pop = rnd * span_rep + lower_rep
+
+        # so qnas2 can sync: self._parent_map = np.repeat(np.arange(Nq, dtype=int), R)
+        self._parent_map = np.repeat(np.arange(Nq, dtype=int), R)
+
+        return new_pop
     def update_quantum(self, intensity):
         """
         Update quantum intervals self.lower and self.upper using exemplars drawn
@@ -346,8 +354,9 @@ class QPopulationNetwork(QPopulation):
         N = self.num_ind * self.repetition
 
         new_pop = np.zeros((N, L), dtype=np.int32)
-        base_prob = np.tile(self.probabilities, (self.repetition, 1, 1))
-        self._parent_map = np.tile(np.arange(self.num_ind, dtype=int), self.repetition)
+        base_prob = np.repeat(self.probabilities, repeats=self.repetition, axis=0)
+        self._parent_map = np.repeat(np.arange(self.num_ind, dtype=int), self.repetition)
+
         def _renorm_or_fallback(p, base=None):
             """Safely renormalizes a probability vector, with fallbacks."""
             s = p.sum()
