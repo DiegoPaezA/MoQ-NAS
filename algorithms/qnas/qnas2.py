@@ -385,7 +385,7 @@ class QNAS(object):
         self.random = np.random.rand()
         new_pop_params = self.qpop_params.generate_classical()
         new_pop_net = self.qpop_net.generate_classical()
-        self._parent_map = getattr(self.qpop_net, "_parent_map", None)
+        self._parent_map = self.qpop_net._parent_map
         self.logger.info("Generated classical networks:\n%s", new_pop_net)
         return new_pop_params, new_pop_net
 
@@ -733,44 +733,6 @@ class QNAS(object):
 
         self.logger.info("Cross-neighborhood crossover applied at gen %d", self.current_gen)
         return new_pop_net
-
-    def update_global_best_from_batch(
-        self,
-        batch_penalized: np.ndarray,   # new_f_pen
-        batch_eval_idx: np.ndarray,    # new_eval_idx
-        batch_archs: np.ndarray | None,# new_n (optional but recommended)
-        batch_params: np.ndarray | None,# new_p (optional)
-        parent_map: np.ndarray | None  # self._parent_map to know q_ind (neighborhood)
-    ) -> None:
-        """Updates the *global* best-so-far using the just-evaluated batch."""
-        if batch_penalized is None or batch_penalized.size == 0:
-            return
-        safe = np.where(np.isnan(batch_penalized), -np.inf, batch_penalized)
-        j = int(np.argmax(safe))
-        val = float(safe[j])
-
-        # init globals if missing
-        if getattr(self, "best_so_far", None) is None:
-            self.best_so_far = -np.inf
-            self.best_so_far_id = [-1, -1]
-            self.best_so_far_q  = -1
-            self.best_so_far_arch = None
-            self.best_so_far_params = None
-
-        if val > self.best_so_far:
-            self.best_so_far = val
-            self.best_so_far_id = [self.current_gen, int(batch_eval_idx[j])]
-            self.best_so_far_q  = int(parent_map[j]) if parent_map is not None else -1
-            # snapshot genotype/params for analysis/replay
-            if batch_archs is not None:
-                self.best_so_far_arch = batch_archs[j].copy()
-            if batch_params is not None:
-                self.best_so_far_params = batch_params[j].copy()
-            # (optional) log a concise line
-            self.logger.info(
-                "NEW GLOBAL BEST @ gen %d | q=%s | eidx=%d | value=%.6f",
-                self.current_gen, str(self.best_so_far_q), int(batch_eval_idx[j]), val
-            )
 
     @staticmethod
     def _fmt_arr(a, prec=6):
