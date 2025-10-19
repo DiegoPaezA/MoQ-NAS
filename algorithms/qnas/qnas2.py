@@ -15,7 +15,7 @@ from collections import defaultdict
 
 from .population import QPopulationNetwork, QPopulationParams
 from .neighborhood import NeighborhoodRegistry
-
+from .qhistory import QHistory
 from utils.helpers import (
     delete_old_dirs_v2,
     init_log,
@@ -113,13 +113,8 @@ class QNAS(object):
             self.evaluated = {}
             self.eval_history = defaultdict(list)
 
-        # self.history_database_path = os.path.join('network_history', "history_db.json")
-        # os.makedirs(os.path.dirname(self.history_database_path), exist_ok=True)
-        # try:
-        #     self.history_database = load_history_from_json(self.history_database_path)
-        # except Exception:
-        #     self.logger.info("Could not load history database, creating a new one.")
-        #     self.history_database = {}
+        self.history = QHistory(base_dir=self.experiment_path)
+
 
     def initialize_qnas(self, num_quantum_ind, repetition, max_generations, update_quantum_gen,
                         update_quantum_rate, replace_method, params_ranges, crossover_rate,
@@ -410,23 +405,45 @@ class QNAS(object):
             decoded_nets[i] = self.qpop_net.chromosome.decode(pop_net[i, :])
         return decoded_params, decoded_nets
 
-    def _eval_pop_without_cache(self, decoded_params, decoded_nets):
-        """Internal: Evaluates the population without using a cache."""
+    def _eval_pop_without_cache(self, decoded_params, decoded_nets, pop_net):
+        """Evaluate the population without using the cache; log history for each individual.
+
+        This preserves the original evaluation flow (evaluate everything) and
+        adds a single call to `_log_eval_history` to persist a detailed audit
+        trail (architecture key, q_index, candidate_id, primary metric, fitness,
+        and full metric payload when available). No reuse/deduplication is done.
+
+        Args:
+            decoded_params: Sequence of per-individual parameter dicts. Must contain
+                `candidate_id` if the evaluator returns a dict keyed by id.
+            decoded_nets: Sequence/array of decoded architectures for evaluation.
+
+        Returns:
+            A numpy array (N,) with the primary metric fitness for each individual.
+        """
         self.logger.info("Evaluating population of %d individuals without cache.", len(decoded_nets))
-        results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
 
-        if not results:
-            return [0.0] * len(decoded_nets)
+        # Evaluate all individuals exactly as before.
+        results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen) or {}
 
-        raw_fits = [0.0] * len(decoded_nets)
+        # Build raw_fits for the primary metric (first objective).
         metric_key = self.objectives[0]
-        for i in range(len(decoded_nets)):
+        num = len(decoded_nets)
+        raw_fits = [0.0] * num
+
+        for i in range(num):
             candidate_id = decoded_params[i]['candidate_id']
             if candidate_id in results:
                 raw_fits[i] = results[candidate_id].get(metric_key, 0.0)
 
-        self.total_eval += len(decoded_nets)
-        return np.array(raw_fits, dtype=float)
+        raw_fits = np.array(raw_fits, dtype=float)
+        self.total_eval += num
+
+        # NEW: Log evaluation history (no reuse).
+        self._log_eval_history(decoded_params, decoded_nets, results, raw_fits, pop_net=pop_net)
+
+        return raw_fits
+
 
     def _eval_pop_with_history(self, decoded_params, decoded_nets, pop_net):
         """Internal: Evaluates the population using a persistent history database (memoization)."""
@@ -542,7 +559,7 @@ class QNAS(object):
         if self.use_cache:
             raw_fits = self._eval_pop_with_cache(decoded_params, decoded_nets, pop_net)
         else:
-            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
+            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets, pop_net)
 
         penalized_fits = raw_fits.copy()
         if self.penalize_number and self.reducing_fns_list:
@@ -758,6 +775,102 @@ class QNAS(object):
             self._fmt_arr(self.raw_fitnesses, prec=4),
         )
 
+    def _log_eval_history(
+        self,
+        decoded_params,
+        decoded_nets,
+        results,
+        raw_fits,
+        *,
+        pop_net=None,
+        objective_names=None,
+        extra_metrics=None
+    ):
+        """Record one JSONL log entry per evaluated individual (no reuse).
+
+        Centralized logger for evaluation history. It writes:
+        - generation number
+        - quantum individual id (`q_index`, from `self._parent_map`, or -1)
+        - `candidate_id` (if present in `decoded_params`, else index)
+        - canonical architecture key (prefer encoded `pop_net` row if provided)
+        - `primary_metric` (first from `objective_names` or `self.objectives`)
+        - `fitness` (scalar; if `raw_fits` is 2D, column 0 is used)
+        - `metrics` payload: combines evaluator outputs and any `extra_metrics[i]`
+
+        Args:
+            decoded_params: List of per-individual parameter dicts (contains
+                `candidate_id` in most pipelines).
+            decoded_nets: List/array of decoded architectures; only used if `pop_net`
+                is not provided.
+            results: Evaluator output. Either:
+                - dict keyed by `candidate_id`, or
+                - list/tuple aligned by index `i` with per-individual dicts.
+            raw_fits: 1D array (N,) or 2D array (N, M) of raw fitness values.
+                If 2D, the first column is logged as the scalar fitness.
+            pop_net: Optional encoded population matrix/array (preferred for
+                architecture keys, ensures canonical identity).
+            objective_names: Optional sequence of objective names. If omitted,
+                `self.objectives` is used.
+            extra_metrics: Optional list of dicts (len N) to merge into the metrics
+                payload per individual.
+
+        Notes:
+            - This method assumes `self.history` is an instance of `QHistory`
+            initialized in `__init__`.
+            - No deduplication or reuse is performed here; this is pure logging.
+        """
+        parent_map = self._parent_map
+        primary_metric = (objective_names or self.objectives)[0]
+        N = len(decoded_nets)
+
+        rf = np.asarray(raw_fits)
+        is_2d = (rf.ndim == 2)
+
+        for i in range(N):
+            # Architecture key (prefer encoded row if available).
+            if pop_net is not None:
+                arch_key = self.history.key_from_row(pop_net[i])
+            else:
+                arch_key = self.history.key_from_row(decoded_nets[i])
+
+            # Quantum individual id.
+            try:
+                q_index = int(parent_map[i]) if (parent_map is not None and i < len(parent_map)) else -1
+            except Exception:
+                q_index = -1
+
+            # Candidate id (if present), else index.
+            candidate_id = decoded_params[i].get("candidate_id", i)
+
+            # Build metrics payload from evaluator results.
+            if isinstance(results, dict):
+                metrics_payload = dict(results.get(candidate_id, {}))
+            elif isinstance(results, (list, tuple)):
+                try:
+                    metrics_payload = dict(results[i])
+                except Exception:
+                    metrics_payload = {}
+            else:
+                metrics_payload = {}
+
+            # Merge any extra per-individual metrics.
+            if extra_metrics and i < len(extra_metrics) and isinstance(extra_metrics[i], dict):
+                metrics_payload.update(extra_metrics[i])
+
+            # Scalar fitness to log.
+            fitness_scalar = float(rf[i, 0]) if is_2d else float(rf[i])
+
+            self.history.log(
+                gen=self.current_gen,
+                q_index=q_index,
+                candidate_id=candidate_id,
+                arch_key=arch_key,
+                primary_metric=primary_metric,
+                fitness=fitness_scalar,
+                metrics=metrics_payload,
+            )
+
+
     def save_data(self):
         """Saves the complete state of the evolution to a pickle file.
 
@@ -871,7 +984,7 @@ class QNAS(object):
         backup_cache(self.evaluated, file_path=self.experiment_path)
         self.save_data()
         self.log_data()
-
+        self.history.flush()
         best_gen, best_idx = self.best_so_far_id
         best_id = f"{best_gen}_{best_idx}" if best_gen >= 0 and best_idx >= 0 else None
         keep_ids = [best_id] if best_id else []

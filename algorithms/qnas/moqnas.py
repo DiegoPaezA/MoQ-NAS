@@ -12,7 +12,9 @@ import json
 import pickle
 import numpy as np
 from pymoo.indicators.hv import Hypervolume
+
 from .qnas2 import QNAS
+from .qhistory import QHistory
 from utils.helpers import calculate_time, delete_old_dirs_v2
 
 
@@ -43,6 +45,7 @@ class MOQNAS(QNAS):
         self.data_file = data_file
         self.pop_size = None
         self.max_generations = None
+        self.history = QHistory(self.experiment_path)
 
     def initialize_moqnas(self,
                         # Core EA Parameters
@@ -178,7 +181,7 @@ class MOQNAS(QNAS):
         self.pareto_global_params = None
         self.pareto_global_ids = []
         self.fronts_history = {}
-
+        
         # load config objective sense
         try:
             with open("configs/cfg_obj.json", "r") as f:
@@ -217,48 +220,77 @@ class MOQNAS(QNAS):
             print("Quantum directions have not been assigned yet. Please call 'set_objective_directions'.")
         
     def multiobjective_fitness(self) -> np.ndarray:
-        """
-        Evaluate the current classical population on all objectives.
+        """Compute multi-objective fitness and log a per-individual history record.
 
-        Steps:
-            1. Decode classical_params and classical_nets via QNAS.decode_pop.
-            2. Call self.eval_func(list_of_param_dicts, list_of_net_structures, generation)
-                which returns a list (length=pop_size) of dicts, each mapping metric_name→value.
-            3. Build a (pop_size × n_obj) array, selecting metrics in the order of self.objectives.
-            4. Apply the same “penalty” from QNAS to the first objective column (if penalize_number>0).
-        
+        The method:
+        1) Decodes the current classical population.
+        2) Calls the evaluator to obtain raw metric dictionaries per individual.
+        3) Builds `raw_fits` and `fits` (applying penalties to the first objective if configured).
+        4) Logs a JSONL record per individual using `_log_eval_history`, including:
+            - generation, q_index (from `parent_map`)
+            - candidate_id and canonical architecture key
+            - primary metric (first objective) and its raw scalar value
+            - a metrics payload that contains:
+                * the raw evaluator dict
+                * `_raw_vector`: full raw objectives
+                * `_penalized_vector`: penalized objectives (if any)
+                * `_penalty` and `_first_obj_penalized` when penalties apply
+        5) Returns the penalized multi-objective `fits`.
+
         Returns:
-            fits (np.ndarray): shape=(pop_size, n_obj) of penalized objective values.
+            A (N, M) numpy array of penalized objective values for each individual,
+            where N is population size and M is `self.num_objectives`.
         """
-        # 1) Decode current classical to human‐readable
-        decoded_params, decoded_nets = self.decode_pop(
-            self.classical_params, self.classical_nets
-        )
+        # Decode to human-readable form (params + decoded nets).
+        decoded_params, decoded_nets = self.decode_pop(self.classical_params, self.classical_nets)
 
-        # 2) Evaluate all individuals: eval_func returns list/array of dicts
+        # Evaluate all individuals on all objectives; returns per-individual dicts.
         raw_results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
-        # raw_results[i] is a dict of metric_name→value for individual i
 
         N = len(decoded_nets)
-        fits = np.zeros((N, self.num_objectives), dtype=float)
-        raw_fits = np.zeros((N, self.num_objectives), dtype=float)
+        M = self.num_objectives
+        raw_fits = np.zeros((N, M), dtype=float)
+        fits     = np.zeros((N, M), dtype=float)
 
-        # 3) Fill each column j with metric self.objectives[j]
+        # Fill raw_fits/fits with evaluator outputs for each objective.
         for i in range(N):
-            metrics = raw_results[i]
-            for j, obj_name in enumerate(self.objectives[: self.num_objectives]):
-                val = metrics[obj_name]
+            for j, obj in enumerate(self.objectives[:M]):
+                val = raw_results[i][obj]
                 raw_fits[i, j] = val
-                fits[i, j] = val
+                fits[i, j]     = val
 
-        # 4) Apply penalty to first objective if needed (QNAS.get_penalties uses network topology)
+        # Apply optional penalty to the first objective.
+        penalty_vec = None
         if self.penalize_number and self.reducing_fns_list:
-            penalties = self.get_penalties(self.classical_nets)
-            fits[:, 0] -= penalties
+            penalty_vec = self.get_penalties(self.classical_nets)
+            fits[:, 0] -= penalty_vec
 
-        # 5) Store raw_fits for logging / saving
+        # Expose for downstream consumers / serializers.
         self.raw_fits = raw_fits
         self.fits = fits
+
+        # Build extra payload for logging (vectors + penalty info).
+        extra_metrics = []
+        for i in range(N):
+            em = {
+                "_raw_vector": raw_fits[i, :].tolist(),
+                "_penalized_vector": fits[i, :].tolist(),
+            }
+            if penalty_vec is not None:
+                em["_penalty"] = float(penalty_vec[i])
+                em["_first_obj_penalized"] = float(fits[i, 0])
+            extra_metrics.append(em)
+
+        # Log one record per individual (no reuse).
+        self._log_eval_history(
+            decoded_params,
+            decoded_nets,
+            results=raw_results,
+            raw_fits=raw_fits,                   # 2D; helper will use column 0 as scalar fitness
+            pop_net=self.classical_nets,         # encoded rows -> canonical architecture key
+            objective_names=self.objectives[:M],
+            extra_metrics=extra_metrics,
+        )
 
         return fits
 
@@ -556,6 +588,7 @@ class MOQNAS(QNAS):
 
         # 2. Record the history of the updated global front and save it to disk.
         self.record_and_save_history()
+        self.history.flush()
 
         # 3. Select a diverse subset from the global front to update the quantum populations.
         # We use the crowding distance that was calculated and stored in the previous step.
