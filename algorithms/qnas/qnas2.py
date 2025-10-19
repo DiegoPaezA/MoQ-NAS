@@ -643,7 +643,7 @@ class QNAS(object):
                 continue
             
             # pull top-k elites from this neighborhood's history
-            elites_q, _ = self.neighborhoods.neighborhoods[q].topk(k=2)
+            elites_q, _ = self.neighborhoods.neighborhoods[q].topk(k=self.survivors_per_q)
             if elites_q.size == 0:
                 continue  # no history yet
             
@@ -905,7 +905,7 @@ class QNAS(object):
             # 2) sparse cross-neighborhood migration
             new_n = self.crossover_network_cross_neighborhood(
                 new_pop_net=new_n,
-                elite_k_each=2,
+                elite_k_each=self.survivors_per_q,
                 cx_rate=0.2,           # small probability to avoid homogenization
                 frequency= self.crossover_frequency * 2,  # less frequent
             )
