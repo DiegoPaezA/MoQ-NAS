@@ -219,40 +219,51 @@ class BaseTrainer:
             return {}
 
         self.model = self.reset_and_load_best_model(self.best_model_path)
-        
-        # 1. Combina métricas de test y artefactos para procesarlos juntos
-        batch_processors  = self.test_primary_metrics + self.artifacts
-        # 2. Resetea todos los procesadores
-        for processor in batch_processors :
+
+        batch_processors = self.test_primary_metrics + self.artifacts
+        for processor in batch_processors:
             processor.reset()
-        
-        # 3. Itera sobre el test_loader y actualiza
+        for processor in getattr(self, "post_processing_metrics", []):
+            processor.reset()
+
         self.model.eval()
+
+        total_loss = 0.0
+        total_examples = 0
+
         with torch.no_grad():
             for batch in self.test_loader:
                 if len(batch) == 2:
                     inputs, labels = batch
                 else:
-                    inputs, labels, _ = batch # Ignora grupos si existen
-                
-                outputs, _, labels = self._forward_pass(inputs, labels)
-                
-                for processor in batch_processors :
+                    inputs, labels, _ = batch
+
+                outputs, batch_loss, labels = self._forward_pass(inputs, labels)
+
+                bs = inputs.size(0) if hasattr(inputs, "size") else len(labels)
+                total_loss += float(batch_loss.item()) * bs
+                total_examples += bs
+
+                for processor in batch_processors:
                     processor.update(outputs.detach(), labels.detach())
 
-        # 4. Computa los resultados finales
         all_final_processors = self.test_primary_metrics + self.post_processing_metrics + self.artifacts
-
         final_results = {}
         for processor in all_final_processors:
             try:
                 final_results.update(processor.compute(epoch_results=final_results))
             except TypeError:
                 final_results.update(processor.compute())
-                
-        self.logger.info("Experiment: %s - Test loss: %.2f - Test accuracy: %.2f%%",
-                        self.params['experiment_path'], final_results.get('loss', 0), final_results.get('accuracy', 0))
 
+        if 'loss' not in final_results and total_examples > 0:
+            final_results['loss'] = total_loss / total_examples
+
+        self.logger.info(
+            "Experiment: %s - Test loss: %.4f - Test accuracy: %.2f%%",
+            self.params['experiment_path'],
+            float(final_results.get('loss', 0.0)),
+            float(final_results.get('accuracy', 0.0)),
+        )
         return final_results
     
     def train(self, debug=False):
