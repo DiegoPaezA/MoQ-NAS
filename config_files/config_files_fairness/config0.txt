@@ -76,14 +76,14 @@ train:
     num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 20
+    threads: 16
 
     # Network structure Configuration
     network_config: default
     backbone_name: mobilenet_v3_small
 
     # Multi-objective parameters
-    multi_objective: False
+    multi_objective: True
     num_objectives: 2
     objectives: ['best_accuracy', 'fairness_score'] #
     metrics:
@@ -97,7 +97,7 @@ train:
           optimization_objective: 'spd_sum'
           beta: 0.2
           cache_dir: '.cache/facet_crops'
-          square_mode: center_crop
-          batch_size_fairness: 256
+          square_mode: letterbox
+          batch_size_fairness: 128
     artifacts:
       - name: ConfusionMatrix
