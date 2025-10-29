@@ -10,6 +10,7 @@ from algorithms.qnas.moqnas import MOQNAS
 from algorithms.qnas import qnas2 as qnas
 from algorithms.ga import base_ga as ga
 from algorithms.ga import nsga2, nsga3
+from algorithms.ga import moead
 
 
 def _bootstrap(logger, args) -> Tuple[object, object, str]:
@@ -106,7 +107,23 @@ def main(**args):
             data_file=config.files_spec['data_file'],
             use_cache=args['use_cache'],
         )
-
+    elif algo == 'moead':
+        if moead is None:
+            raise ImportError("algorithms.ga.moead not found.")
+        logger.info("Using MOEA/D.")
+        engine = moead.MOEAD(
+            eval_func=eval_pop,
+            experiment_path=config.train_spec['experiment_path'],
+            objectives=config.train_spec['objectives'],
+            log_file=config.files_spec['log_file'],
+            log_level=config.train_spec['log_level'],
+            data_file=config.files_spec['data_file'],
+            use_cache=args['use_cache'],
+            divisions=args.get('ref_divisions', None),          # reuse NSGA-III arg name
+            T=args.get('moead_T', 20),
+            scalar_method=args.get('moead_scalar', 'tchebycheff'),
+            prob_neighbor_mating=args.get('moead_pneighbor', 0.9),
+        )
     elif algo == 'qnas':
         if qnas is None:
             raise ImportError("algorithms.qnas.qnas2 not found.")
@@ -217,7 +234,7 @@ if __name__ == '__main__':
 
     # Algorithm selector
     parser.add_argument('--algo', type=str, default='nsga2',
-                        choices=['ga', 'nsga2', 'nsga3', 'qnas', 'moqnas'],
+                        choices=['ga', 'nsga2', 'nsga3', 'moead', 'qnas', 'moqnas'],
                         help='Which evolutionary algorithm to run.')
 
     # GA/NSGA params
@@ -234,6 +251,15 @@ if __name__ == '__main__':
     # NSGA-III specific
     parser.add_argument('--ref_divisions', type=int, default=None,
                         help='NSGA-III lattice divisions p (auto if None).')
+    
+    # MOEA/D specific
+    parser.add_argument('--moead_T', type=int, default=20,
+                        help='Neighborhood size T for MOEA/D.')
+    parser.add_argument('--moead_scalar', type=str, default='tchebycheff',
+                        choices=['tchebycheff', 'weighted_sum'],
+                        help='Scalarization method for MOEA/D.')
+    parser.add_argument('--moead_pneighbor', type=float, default=0.9,
+                        help='Probability of mating within neighborhood in MOEA/D.')
 
     # QNAS/MO-QNAS extras (kept for compatibility)
     parser.add_argument('--elite_mode', type=str, default='global_k',
