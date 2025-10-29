@@ -4,9 +4,9 @@ QNAS:
     crossover_rate: 0.5
     max_generations: 150
     max_num_nodes: 20
-    num_quantum_ind: 10
+    num_quantum_ind: 5
     penalize_number: 3
-    repetition: 2
+    repetition: 4
     replace_method: best
     update_quantum_gen: 5
     update_quantum_rate: 0.2
@@ -57,7 +57,7 @@ train:
     max_epochs: 50
     epochs_to_eval: 5 
     optimizer: AdamW
-    mixed_precision: true
+    mixed_precision: True
     device: cuda:0
 
     # Dataset
