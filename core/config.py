@@ -93,27 +93,27 @@ class ConfigParameters(object):
 
         vars_dict = {
             'QNAS': [('crossover_rate', float), ('max_generations', int), ('max_num_nodes', int),
-                     ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
-                     ('replace_method', str), ('update_quantum_rate', float), ('update_quantum_gen', int),
-                     ('save_data_freq', int), ('params_ranges', dict), ('patience', int),
-                     ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', str),
-                     ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
-                     ('ema_beta', float), ('rank_weighting', bool),
-                     ('initial_prob_distribution', str), ('function_dict', dict),
-                     ('terminal_op_name', str), ('pool_op_name', str), ('min_active_len', int),
-                     ('truncate_after_noop', bool), ('avoid_consecutive_pool', bool), ('enforce_noop_in_update', bool),
-                     ('noop_max_prob', float), ('noop_ramp_cap', bool)],
+                    ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
+                    ('replace_method', str), ('update_quantum_rate', float), ('update_quantum_gen', int),
+                    ('save_data_freq', int), ('params_ranges', dict), ('patience', int),
+                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', str),
+                    ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
+                    ('ema_beta', float), ('rank_weighting', bool),
+                    ('initial_prob_distribution', str), ('function_dict', dict),
+                    ('terminal_op_name', str), ('pool_op_name', str), ('min_active_len', int),
+                    ('truncate_after_noop', bool), ('avoid_consecutive_pool', bool), ('enforce_noop_in_update', bool),
+                    ('noop_max_prob', float), ('noop_ramp_cap', bool)],
             
             'train': [('batch_size', int), ('eval_batch_size', int), ('max_epochs', int),
-                      ('epochs_to_eval', int), ('optimizer', str), ('device', str),
-                      ('dataset', str), ('mixed_precision', bool),
-                      ('objectives', list), ('multi_objective', bool), ('metrics', list), 
-                      ('data_augmentation', bool), ('subtract_mean', bool), ('artifacts', list),
-                      ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
-                      ('network_config', str), ('threads', int),
-                      ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),             
-                      ('stats_max_batches', int), ('num_workers', int),           
-                      ]
+                    ('epochs_to_eval', int), ('optimizer', str), ('device', str),
+                    ('dataset', str), ('mixed_precision', bool),
+                    ('objectives', list), ('multi_objective', bool), ('metrics', list), 
+                    ('data_augmentation', bool), ('subtract_mean', bool), ('artifacts', list),
+                    ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
+                    ('network_config', str), ('threads', int),
+                    ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),             
+                    ('stats_max_batches', int), ('num_workers', int),           
+                    ]
         }
 
         for config, items in vars_dict.items():
