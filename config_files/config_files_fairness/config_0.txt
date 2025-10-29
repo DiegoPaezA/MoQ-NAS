@@ -91,12 +91,10 @@ train:
       - name: HardwareMetrics
       - name: FairnessMetric
         params:
-          eval_dataset_name: 'facet'
-          eval_skintone_method: 'soft'
-          eval_dataset_path: 'datasets/facet_data/facet_eval.csv'
+          eval_dataset_name: 'fairface'
+          eval_dataset_path: 'datasets/FairFace/0.25/fairface_val.csv'
           optimization_objective: 'spd_sum'
           beta: 0.2
-          cache_dir: '.cache/facet_crops'
           square_mode: letterbox
           batch_size_fairness: 128
     artifacts:
