@@ -6,7 +6,7 @@
 
 # —— Which algorithms to run (choose any of: qnas, moqnas) ——
 #algos=("qnas" "moqnas")
-algos=("qnas")
+algos=("moqnas")
 # —— Experiment settings ——
 dataset="cifar10"
 data_path="datasets/${dataset}_data"
@@ -39,7 +39,8 @@ optimizer="AdamW"
 save_checkpoints_epochs=5           
 data_augmentation=false             
 elite_mode_moqnas="moead_topk"      # "single"|"global_k"|"bootstrap_k"|"old"|"moead_topk"  
-ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"                             
+ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"
+multi_objective=true               # true | false                             
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
