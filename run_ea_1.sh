@@ -72,6 +72,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
         --network_config       "${network_config}"
         --backbone_name        "${backbone_name}"
         --log_level            "${log_level}"
+        --gpu_list             "${cuda_devices}"
         $($elitism && echo --elitism)
         $($use_cache && echo --use_cache)
         $($early_stopping && echo --early_stopping)
