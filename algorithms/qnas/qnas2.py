@@ -14,6 +14,9 @@ import time
 from collections import defaultdict
 
 from .population import QPopulationNetwork, QPopulationParams
+from .helpers.configs import NetworkRulesConfig, EliteUpdateConfig
+from .helpers.operators import apply_crossover
+
 from utils.helpers import (
     delete_old_dirs_v2,
     init_log,
@@ -200,6 +203,7 @@ class QNAS(object):
         self.en_pop_crossover = en_pop_crossover
         self.pop_crossover_rate = pop_crossover_rate
         self.crossover_frequency = crossover_frequency
+        self.crossover_method = pop_crossover_method
 
         # 3) Reducing-layer penalty setup
         if reducing_fns_list:
@@ -224,33 +228,37 @@ class QNAS(object):
             update_quantum_rate=update_quantum_rate,
         )
 
+        rules_cfg = NetworkRulesConfig(
+            terminal_op_name=terminal_op_name,
+            pool_op_name=pool_op_name,
+            min_active_len=min_active_len,
+            truncate_after_noop=truncate_after_noop,
+            avoid_consecutive_pool=avoid_consecutive_pool,
+            enforce_noop_in_update=enforce_noop_in_update,
+            noop_max_prob=noop_max_prob,
+            noop_ramp_cap=noop_ramp_cap
+        )
+
+        elite_cfg = EliteUpdateConfig(
+            elite_mode=elite_mode,
+            k_elites=k_elites,
+            pool_factor=pool_factor,
+            ema_beta=ema_beta,
+            rank_weighting=rank_weighting
+        )
+
+        # Now the instantiation is small and clean!
         self.qpop_net = QPopulationNetwork(
-            # Core QGA Parameters
             num_quantum_ind=num_quantum_ind,
             max_num_nodes=max_num_nodes,
             repetition=repetition,
             update_quantum_rate=update_quantum_rate,
             fn_list=fn_list,
             initial_probs=initial_probs,
-            crossover_method=pop_crossover_method,
-            # Elite Selection Strategy
-            elite_mode=elite_mode,
-            k_elites=k_elites,
-            pool_factor=pool_factor,
-            ema_beta=ema_beta,
-            rank_weighting=rank_weighting,
-            # Network Architecture Rules
-            terminal_op_name=terminal_op_name,
-            pool_op_name=pool_op_name,
-            min_active_len=min_active_len,
-            truncate_after_noop=truncate_after_noop,
-            avoid_consecutive_pool=avoid_consecutive_pool,
-            # No-Op Probability Management
-            enforce_noop_in_update=enforce_noop_in_update,
-            noop_max_prob=noop_max_prob,
-            noop_ramp_cap=noop_ramp_cap,
-            # System/Path
-            experiment_path=self.experiment_path
+            experiment_path=self.experiment_path,
+            rules_config=rules_cfg,
+            elite_config=elite_cfg,
+            moea_config=None
         )
 
         U_total = max(1, max_generations // max(1, update_quantum_gen))
@@ -600,8 +608,8 @@ class QNAS(object):
                 num_off = int(len(new_pop_net) * self.pop_crossover_rate)
                 best_current = self.qpop_net.current_pop[:num_off]
                 try:
-                    new_pop_net[:num_off] = self.qpop_net.apply_crossover(
-                        best_current, new_pop_net[:num_off]
+                    new_pop_net[:num_off] = apply_crossover(
+                        best_current, new_pop_net[:num_off], method=self.crossover_method
                     )
                     self.logger.info("Crossover applied to networks:\n%s", new_pop_net)
                 except AttributeError:
