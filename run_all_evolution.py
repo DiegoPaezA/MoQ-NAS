@@ -28,6 +28,12 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
 
     if args["use_cache"]:
         logger.info("Using cached evaluations to speed up runs.")
+    
+    if args['gpu_list'] is not None:
+        logger.info(f"Using GPU devices: {args['gpu_list']}")
+    
+    if args.get('multi_objective', False):
+        logger.info("Multi-objective optimization is enabled.")
 
     logger.info(f"Getting parameters from {args['config_file']} ...")
     config = cfg.ConfigParameters(args, phase=phase)
@@ -246,10 +252,15 @@ if __name__ == '__main__':
                         help='Disable the rule preventing consecutive pooling layers.')
     parser.add_argument('--no-enforce-noop-in-update', action='store_true', dest='enforce_noop_in_update',
                         help='Disable enforcing no-op rules during the quantum update.')
+    
+    parser.add_argument('--multi_objective', action='store_true', default=False,
+                        help='Enable multi-objective optimization (MO-QNAS).')
 
     # Cache
     parser.add_argument('--use_cache', action='store_true', default=False,
                         help='Use cached evaluations to speed up runs.')
+
+    parser.add_argument('--gpu_list', type=str, default=None, help='String of CUDA devices to be used (e.g., "0,1")')
 
     args = parser.parse_args()
     main(**vars(args))
