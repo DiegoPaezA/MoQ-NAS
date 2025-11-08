@@ -124,7 +124,7 @@ class QNAS(object):
     def initialize_qnas(self, num_quantum_ind, repetition, max_generations, update_quantum_gen,
                         update_quantum_rate, replace_method, params_ranges, crossover_rate,
                         fn_list, initial_probs, max_num_nodes, reducing_fns_list, en_pop_crossover=False, 
-                        pop_crossover_method="hux", pop_crossover_rate=0.25, crossover_frequency=5,
+                        pop_crossover_method=["hux"], pop_crossover_rate=0.25, crossover_frequency=5,
                         elite_mode="global_k", k_elites=5, pool_factor=2, ema_beta=0.7, rank_weighting=True,
                         terminal_op_name="no_op", pool_op_name="pool", min_active_len=5,
                         truncate_after_noop=True, avoid_consecutive_pool=True, enforce_noop_in_update=True, 
@@ -148,8 +148,8 @@ class QNAS(object):
             reducing_fns_list (list): List of operation names that are penalized.
             en_pop_crossover (bool, optional): If True, enables network crossover.
                 Defaults to False.
-            pop_crossover_method (str, optional): Crossover type for networks
-                ("hux" or "uniform"). Defaults to "hux".
+            pop_crossover_method (list, optional): Crossover types for networks
+                ["hux", "uniform", "one_point", "two_point"]. Defaults to ["hux"].
             pop_crossover_rate (float, optional): Fraction of the population to
                 be replaced by crossover offspring. Defaults to 0.25.
             crossover_frequency (int, optional): Apply network crossover every N
@@ -203,7 +203,8 @@ class QNAS(object):
         self.en_pop_crossover = en_pop_crossover
         self.pop_crossover_rate = pop_crossover_rate
         self.crossover_frequency = crossover_frequency
-        self.crossover_method = pop_crossover_method
+        self.crossover_methods = pop_crossover_method
+        self.logger.info("Network population crossover methods: %s", self.crossover_methods)
 
         # 3) Reducing-layer penalty setup
         if reducing_fns_list:
@@ -595,7 +596,8 @@ class QNAS(object):
         """Applies crossover to the network population if conditions are met.
 
         Crossover is triggered based on generation frequency and the
-        `en_pop_crossover` flag.
+        `en_pop_crossover` flag. It selects random individuals from
+        new_pop_net to cross with the best from current_pop.
 
         Args:
             new_pop_net (np.ndarray): The new network chromosomes.
@@ -605,15 +607,33 @@ class QNAS(object):
         """
         if self.current_gen > 0 and getattr(self, "en_pop_crossover", False):
             if self.current_gen % self.crossover_frequency == 0:
+                
+                # Determine how many to crossover based on rate
                 num_off = int(len(new_pop_net) * self.pop_crossover_rate)
-                best_current = self.qpop_net.current_pop[:num_off]
-                try:
-                    new_pop_net[:num_off] = apply_crossover(
-                        best_current, new_pop_net[:num_off], method=self.crossover_method
-                    )
-                    self.logger.info("Crossover applied to networks:\n%s", new_pop_net)
-                except AttributeError:
-                    pass  # Skip if the method doesn't exist
+                
+                # Ensure we don't try to crossover more than we have
+                num_off = min(num_off, len(self.qpop_net.current_pop), len(new_pop_net))
+                if num_off > 0:
+                    # 1. Select BEST individuals from the current (old) population as first parents
+                    best_current = self.qpop_net.current_pop[:num_off]
+                    # 2. Select RANDOM indices from the new population to be second parents AND replaced
+                    replace_indices = np.random.choice(len(new_pop_net), num_off, replace=False)
+                    parents_from_new = new_pop_net[replace_indices]
+                    # 3. Apply crossover using the new list of methods
+                    # Make sure self.crossover_methods is loaded as a list ['hux', 'one_point', etc.]
+                    try:
+                        offspring = apply_crossover(
+                            best_current, 
+                            parents_from_new, 
+                            method_keys=self.crossover_methods
+                        )
+                        # 4. Replace the chosen individuals in the new population with offspring
+                        new_pop_net[replace_indices] = offspring
+                        
+                        self.logger.info(f"Crossover applied. Replaced {num_off} individuals at indices {replace_indices}")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Crossover failed: {e}")
         return new_pop_net
 
     @staticmethod
