@@ -96,7 +96,7 @@ class ConfigParameters(object):
                     ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
                     ('replace_method', str), ('update_quantum_rate', float), ('update_quantum_gen', int),
                     ('save_data_freq', int), ('params_ranges', dict), ('patience', int),
-                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', str),
+                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', list),
                     ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
                     ('ema_beta', float), ('rank_weighting', bool),
                     ('initial_prob_distribution', str), ('function_dict', dict),
