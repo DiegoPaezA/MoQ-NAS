@@ -31,7 +31,7 @@ QNAS:
     noop_ramp_cap: true
 
     quantum_update_config:
-      quantum_rate_schedule: 'static'                     # use 'cosine' schedule or 'static'
+      quantum_rate_schedule: 'cosine'                     # use 'cosine' schedule or 'static'
       max_update_schedule: 'static'                       # use 'cosine' schedule or 'static'
       static_quantum_rate: 0.1                            # (Your old 0.4 / 5)
       static_max_update: 0.02                             # (Your old 0.105 / 5)
