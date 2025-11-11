@@ -31,24 +31,18 @@ QNAS:
     noop_ramp_cap: true
 
     quantum_update_config:
-      # 'cosine' = use the cosine annealing schedule
-      # 'static' = use a single float value
-      quantum_rate_schedule: 'cosine'
-      max_update_schedule: 'static'
-      # Values for 'static' mode (good for testing)
-      static_quantum_rate: 0.1       # (Your old 0.4 / 5)
-      static_max_update: 0.02   # (Your old 0.105 / 5)
-      # Parameters for 'cosine' rate schedule
-      quantum_rate_schedule_params:
-          start: 0.2    # Scaled down from 0.4
-          end: 0.01     # Scaled down from ~0.01
-      # Parameters for 'cosine' max_update schedule
-      max_update_schedule_params:
-          start: 0.3     # Scaled down from 1.5
-          end: 0.16    # Scaled down from 0.8
-      # Intensity sampling range
-      intensity_min: 0.5
-      intensity_max: 1.0
+      quantum_rate_schedule: 'static'                     # use 'cosine' schedule or 'static'
+      max_update_schedule: 'static'                       # use 'cosine' schedule or 'static'
+      static_quantum_rate: 0.1                            # (Your old 0.4 / 5)
+      static_max_update: 0.02                             # (Your old 0.105 / 5)
+      quantum_rate_schedule_params:                       # Parameters for 'cosine' rate schedule
+          start: 0.25                                      # Scaled down from 0.4
+          end: 0.01                                       # Scaled down from ~0.01
+      max_update_schedule_params:                         # Parameters for 'cosine' max_update schedule
+          start: 0.3                                      # Scaled down from 1.5
+          end: 0.16                                       # Scaled down from 0.8
+      intensity_min: 0.5                                  # Intensity sampling range - not used
+      intensity_max: 1.0                                  # Intensity sampling range - not used
 
     params_ranges:
       decay: 0.9
@@ -94,7 +88,7 @@ train:
     num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 4
+    threads: 20
 
     # Network structure Configuration
     network_config: default
