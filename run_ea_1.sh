@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ================================
 # run_ea_family.sh
-# GA / NSGA-II / NSGA-III runner
+# GA / NSGA-II / NSGA-III / MOEA-D runner
 # ================================
 
-# —— Which algorithms to run (choose any of: ga, nsga2, nsga3) ——
-#algos=("ga" "nsga2" "nsga3")
+# —— Which algorithms to run (choose any of: ga, nsga2, nsga3, moead) ——
+#algos=("ga" "nsga2" "nsga3" "moead")
 algos=("nsga3")
 
 # —— Experiment settings ——
@@ -21,7 +21,7 @@ fitness_metric="best_accuracy"
 # NEW: dataset YAML path derived from dataset name
 config_path_dataset="configs/${dataset}.yaml"
 
-# —— GA/NSGA hyperparameters (from your GA/NSGA scripts) ——
+# —— GA/NSGA/MOEA-D shared hyperparameters ——
 population_size=20
 num_generations=150
 max_num_nodes=20
@@ -32,12 +32,17 @@ early_stopping=false
 use_cache=false
 patience=60
 
-# —— NSGA-III specific ——
+# —— NSGA-III & MOEA-D both can use lattice divisions (Das & Dennis) ——
 ref_divisions=12           # set "" for auto
+
+# —— MOEA-D specific ——
+moead_T=20                 # neighborhood size
+moead_scalar="tchebycheff" # or "weighted_sum"
+moead_pneighbor=0.9        # prob of mating within neighborhood
 
 # —— dataset size & repeats ——
 dataset_sample_size=10000
-configs=("config0.txt")    # same shape as your originals
+configs=("config0.txt")
 exps=("exp_1")
 cuda_devices=("0")
 num_repeats=3
@@ -89,6 +94,14 @@ for ((j=0; j<${#configs[@]}; j++)); do
         CUDA_VISIBLE_DEVICES="${cuda}" python run_all_evolution.py \
           --algo nsga3 "${COMMON_ARGS[@]}" \
           $( [[ -n "${ref_divisions}" ]] && echo --ref_divisions "${ref_divisions}" )
+
+      elif [[ "${algo}" == "moead" ]]; then
+        CUDA_VISIBLE_DEVICES="${cuda}" python run_all_evolution.py \
+          --algo moead "${COMMON_ARGS[@]}" \
+          $( [[ -n "${ref_divisions}" ]] && echo --ref_divisions "${ref_divisions}" ) \
+          --moead_T "${moead_T}" \
+          --moead_scalar "${moead_scalar}" \
+          --moead_pneighbor "${moead_pneighbor}"
       fi
     done
   done
