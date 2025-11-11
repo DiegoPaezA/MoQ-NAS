@@ -46,7 +46,6 @@ continue_path=""                    # resume path, keep empty if not resuming
 configs=("config5.txt")
 exps=("exp19")
 cuda_devices=("0")
-cuda_devices=("0")
 num_repeats=3
 
 # --------------- Runner ---------------
