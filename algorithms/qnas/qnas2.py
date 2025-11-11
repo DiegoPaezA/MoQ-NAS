@@ -122,7 +122,7 @@ class QNAS(object):
         #     self.history_database = {}
 
     def initialize_qnas(self, num_quantum_ind, repetition, max_generations, update_quantum_gen,
-                        update_quantum_rate, replace_method, params_ranges, crossover_rate,
+                        quantum_update_config, replace_method, params_ranges, crossover_rate,
                         fn_list, initial_probs, max_num_nodes, reducing_fns_list, en_pop_crossover=False, 
                         pop_crossover_method=["hux"], pop_crossover_rate=0.25, crossover_frequency=5,
                         elite_mode="global_k", k_elites=5, pool_factor=2, ema_beta=0.7, rank_weighting=True,
@@ -137,7 +137,8 @@ class QNAS(object):
             repetition (int): Number of classical individuals per quantum one.
             max_generations (int): Total number of generations to run.
             update_quantum_gen (int): Frequency (in generations) for quantum updates.
-            update_quantum_rate (float): Base learning rate for quantum updates.
+            quantum_update_config (dict): Configuration for quantum updates, including
+                learning rate and scheduling.
             replace_method (str): Survivor selection method ("elitism" or "best").
             params_ranges (dict): Search space for hyperparameters, formatted as
                 `{'param_name': [lower_bound, upper_bound]}`.
@@ -226,7 +227,7 @@ class QNAS(object):
             params_ranges=params_ranges,
             repetition=repetition,
             crossover_rate=crossover_rate,
-            update_quantum_rate=update_quantum_rate,
+            update_quantum_rate=quantum_update_config.get('static_rate', 0.1),
         )
 
         rules_cfg = NetworkRulesConfig(
@@ -248,12 +249,11 @@ class QNAS(object):
             rank_weighting=rank_weighting
         )
 
-        # Now the instantiation is small and clean!
         self.qpop_net = QPopulationNetwork(
             num_quantum_ind=num_quantum_ind,
             max_num_nodes=max_num_nodes,
             repetition=repetition,
-            update_quantum_rate=update_quantum_rate,
+            quantum_update_config=quantum_update_config,
             fn_list=fn_list,
             initial_probs=initial_probs,
             experiment_path=self.experiment_path,

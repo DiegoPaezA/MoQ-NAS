@@ -186,9 +186,10 @@ class QPopulationParams(QPopulation):
 class QPopulationNetwork(QPopulation):
     """QNAS Chromosomes for the networks to be evolved."""
     def __init__(self, num_quantum_ind: int, max_num_nodes: int, repetition: int,
-                update_quantum_rate: float, fn_list: list, initial_probs: list,
+                fn_list: list, initial_probs: list,
                 rules_config: NetworkRulesConfig,
                 elite_config: EliteUpdateConfig,
+                quantum_update_config: dict,
                 moea_config: MOEAConfig = None,
                 experiment_path: str = ""):
         """Initializes the QPopulationNetwork.
@@ -202,24 +203,44 @@ class QPopulationNetwork(QPopulation):
             initial_probs (list): Defines initial probabilities for each function.
             rules_config (NetworkRulesConfig): Configuration for NAS architectural rules.
             elite_config (EliteUpdateConfig): Configuration for the elite update strategy.
+            quantum_update_config (dict): The 'quantum_update' block from the YAML.
             moea_config (MOEAConfig): Configuration for MOEA/D parameters.
             experiment_path (str, optional): Path for saving metrics. Defaults to "".
         """
         super(QPopulationNetwork, self).__init__(num_quantum_ind, repetition,
-                                                update_quantum_rate)
+                                                update_quantum_rate=quantum_update_config.get('static_rate', 0.1))
         
         # --- Store Config Objects ---
         self.rules_config = rules_config
         self.elite_config = elite_config
         self.moea_config = moea_config
+        self.update_config = quantum_update_config
 
         self.probabilities = None
         self.chromosome = QChromosomeNetwork(max_num_nodes, fn_list, self.dtype)
 
-        # --- Base probabilities ---
-        self.max_update = 0.05
-        self.max_prob = 0.90
-        self.min_prob = max(1e-8, 0.01 / self.chromosome.num_functions)
+        # --- Load NEW Update Schedule Params from Config ---
+        self.rate_schedule_type = self.update_config.get('quantum_rate_schedule', 'cosine')
+        self.max_update_schedule_type = self.update_config.get('max_update_schedule', 'cosine')
+        
+        self.static_update_rate = float(self.update_config.get('static_rate', 0.08))
+        self.static_max_update = float(self.update_config.get('static_max_update', 0.02))
+        
+        self.intensity_min = self.update_config.get('intensity_min', 0.5)
+        self.intensity_max = self.update_config.get('intensity_max', 1.0)
+        
+        rate_params = self.update_config.get('quantum_rate_schedule_params', {})
+        self.rate_sched_start = rate_params.get('start', 0.08)
+        self.rate_sched_end = rate_params.get('end', 0.002)
+        
+        max_update_params = self.update_config.get('max_update_schedule_params', {})
+        self.max_up_sched_start = max_update_params.get('start', 0.3)
+        self.max_up_sched_end = max_update_params.get('end', 0.16)
+
+        # --- Load NEW Prob Cap Params from Config ---
+        self.max_prob = self.update_config.get('max_prob_cap', 0.90)
+        min_prob_factor = self.update_config.get('min_prob_factor', 0.01)
+        self.min_prob = max(1e-8, min_prob_factor / self.chromosome.num_functions)
 
         # --- Elite Update Params ---
         self.elite_mode = self.elite_config.elite_mode
@@ -361,6 +382,39 @@ class QPopulationNetwork(QPopulation):
         w = 0.5 * (1.0 + np.cos(np.pi * t / float(T)))
         return end + (start - end) * w
 
+    def _get_rate_schedule_value(self, u: int, U_total: int) -> float:
+        """Gets the quantum rate based on the config strategy."""
+        if self.rate_schedule_type == 'static':
+            return self.static_update_rate
+        
+        elif self.rate_schedule_type == 'cosine':
+            return self._cosine_schedule(
+                u,
+                U_total,
+                self.rate_sched_start,
+                self.rate_sched_end
+            )
+        else:
+            raise ValueError(f"Unknown rate_schedule: {self.rate_schedule_type}")
+
+    def _get_max_update_schedule_value(self, u: int, U_total: int) -> float:
+        """Gets the max update value based on the config strategy."""
+        if self.max_update_schedule_type == 'static':
+            return self.static_max_update
+            
+        elif self.max_update_schedule_type == 'cosine':
+            base = self._suggest_max_update()
+            mult = self._cosine_schedule(
+                u,
+                U_total,
+                self.max_up_sched_start,
+                self.max_up_sched_end
+            )
+            return base * mult
+        else:
+            raise ValueError(f"Unknown max_update_schedule: {self.max_update_schedule_type}")
+
+
     def _update(self, chromosomes: np.ndarray, idx: np.ndarray, update_value: np.ndarray) -> np.ndarray:
         """Applies the quantum update rule to a batch of probability vectors.
 
@@ -394,81 +448,79 @@ class QPopulationNetwork(QPopulation):
         return chromosomes
 
     def update_quantum(self, intensity: float | None = None, current_gen: int | None = None):
-        """Performs the main quantum population update.
+            """Performs the main quantum population update.
 
-        This method orchestrates the entire update process:
-        1. Schedules the learning rate (`update_quantum_rate`) and max update value.
-        2. Selects a random subset of (individual, gene) pairs to update.
-        3. Based on `self.elite_mode`, constructs a target probability
+            This method orchestrates the entire update process:
+            1. Schedules the learning rate (`update_quantum_rate`) and max update value
+            based on strategies defined in the config.
+            2. Selects a random subset of (individual, gene) pairs to update.
+            3. Based on `self.elite_mode`, constructs a target probability
             distribution `q_rows` for each selected gene.
-        4. Calculates the update step size based on the target distribution's confidence.
-        5. Calls the `_update` method to apply the changes.
-        6. Enforces global constraints and logs metrics.
+            4. Calculates the update step size based on the target distribution's confidence.
+            5. Calls the `_update` method to apply the changes.
+            6. Enforces global constraints and logs metrics.
 
-        Args:
-            intensity (float | None, optional): A factor to scale the update step size.
+            Args:
+                intensity (float | None, optional): A factor to scale the update step size.
                                                 If None, it's sampled randomly. Defaults to None.
-            current_gen (int | None, optional): The current generation/epoch index, used
+                current_gen (int | None, optional): The current generation/epoch index, used
                                                 for scheduling and logging. Defaults to None.
-        """
-        u = self.logger._update_counter
-        U_total = getattr(self, "_U_total", None)
-        if U_total is None:
-            U_total = max(1, (current_gen or 0) // 1)
-        legacy = (self.elite_mode == "old")
+            """
+            u = self.logger._update_counter
+            U_total = getattr(self, "_U_total", None)
+            if U_total is None:
+                U_total = max(1, (current_gen or 0) // 1)
+            
+            # 1. Set update_quantum_rate from config-driven schedule
+            self.update_quantum_rate = self._get_rate_schedule_value(u, U_total)
 
-        if legacy:
-            self.update_quantum_rate = float(self.update_quantum_rate)
-        else:
-            self.update_quantum_rate = self._cosine_schedule(u, U_total, self.rate_boost, self.rate_end)
+            # 2. Sample intensity from config-driven range
+            if intensity is None:
+                intensity = self._sample_intensity(lo=self.intensity_min, hi=self.intensity_max)
 
-        if intensity is None:
-            intensity = self._sample_intensity(lo=0.5, hi=1.0)
+            # 3. Set max_update from config-driven schedule
+            self.max_update = self._get_max_update_schedule_value(u, U_total)
 
-        if legacy:
-            self.max_update = float(self.max_update)
-        else:
-            base = self._suggest_max_update()
-            mult = self._cosine_schedule(u, U_total, start=1.5, end=0.8)
-            self.max_update = base * mult
-        eta_base = float(intensity) * float(self.max_update)
+            # 4. Calculate final step size
+            eta_base = float(intensity) * float(self.max_update)
 
-        F = int(self.chromosome.num_functions)
+            F = int(self.chromosome.num_functions)
 
-        rand = np.random.rand(self.num_ind, self.chromosome.num_genes)
-        rows, cols = np.where(rand <= self.update_quantum_rate)
-        if rows.size == 0:
-            return
+            rand = np.random.rand(self.num_ind, self.chromosome.num_genes)
+            rows, cols = np.where(rand <= self.update_quantum_rate)
+            if rows.size == 0:
+                return
 
-        if legacy:
-            E = min(self.num_ind, self.current_pop.shape[0])
-            best_classic = self.current_pop[:E]
-            winners = best_classic[rows, cols]
-            self.probabilities[rows, cols, :] = self._update(
-                self.probabilities[rows, cols, :], winners, eta_base)
-            self.logger.log_update(self.probabilities, self.update_quantum_rate, 
+            if self.elite_mode == "old":
+                E = min(self.num_ind, self.current_pop.shape[0])
+                best_classic = self.current_pop[:E]
+                winners = best_classic[rows, cols]
+                self.probabilities[rows, cols, :] = self._update(
+                    self.probabilities[rows, cols, :], winners, eta_base)
+                
+                self.logger.log_update(self.probabilities, self.update_quantum_rate, 
                                     self.max_update, epoch_idx=current_gen)
+                self.logger.save_metrics_csv()
+                return
+
+            P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)
+            P_sel = self.rules.apply_probability_caps(P_sel, rows, cols)
+
+            q_rows = self.update_strategy.build_target_distributions(
+                self.current_pop, self.current_pop_objs, rows, cols, self.moea_helper
+            )
+
+            q_rows = self.rules.mask_noop_in_targets(q_rows, rows, cols, prior_P=P_sel)
+            winners = np.argmax(q_rows, axis=1)
+            consensus = q_rows[np.arange(q_rows.shape[0]), winners]
+            bump = eta_base * np.maximum(consensus, 1e-8)
+
+            updated = self._update(P_sel, winners, bump)
+            self.probabilities[rows, cols, :] = updated
+
+            if self.rules.enforce_noop_in_update:
+                self.probabilities = self.rules.enforce_static_mask(self.probabilities)
+
+            self.logger.log_update(self.probabilities, self.update_quantum_rate, 
+                                self.max_update, epoch_idx=current_gen)
             self.logger.save_metrics_csv()
-            return
-
-        P_sel = self.probabilities[rows, cols, :].astype(float, copy=True)
-        P_sel = self.rules.apply_probability_caps(P_sel, rows, cols)
-
-        q_rows = self.update_strategy.build_target_distributions(
-            self.current_pop, self.current_pop_objs, rows, cols, self.moea_helper
-        )
-
-        q_rows = self.rules.mask_noop_in_targets(q_rows, rows, cols, prior_P=P_sel)
-        winners = np.argmax(q_rows, axis=1)
-        consensus = q_rows[np.arange(q_rows.shape[0]), winners]
-        bump = eta_base * np.maximum(consensus, 1e-8)
-
-        updated = self._update(P_sel, winners, bump)
-        self.probabilities[rows, cols, :] = updated
-
-        if self.rules.enforce_noop_in_update:
-            self.probabilities = self.rules.enforce_static_mask(self.probabilities)
-
-        self.logger.log_update(self.probabilities, self.update_quantum_rate, 
-                            self.max_update, epoch_idx=current_gen)
-        self.logger.save_metrics_csv()
