@@ -223,7 +223,7 @@ class QPopulationNetwork(QPopulation):
         self.rate_schedule_type = self.update_config.get('quantum_rate_schedule', 'cosine')
         self.max_update_schedule_type = self.update_config.get('max_update_schedule', 'cosine')
         
-        self.static_update_rate = float(self.update_config.get('static_rate', 0.08))
+        self.static_update_rate = float(self.update_config.get('static_quantum_rate', 0.08))
         self.static_max_update = float(self.update_config.get('static_max_update', 0.02))
         
         self.intensity_min = self.update_config.get('intensity_min', 0.5)
