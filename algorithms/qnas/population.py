@@ -365,8 +365,29 @@ class QPopulationNetwork(QPopulation):
         if F <= 12: return 0.07
         if F <= 32: return 0.05
         return 0.04
+    
+    def _cosine_schedule_cyclic(self, t: float, T: float, start: float, end: float) -> float:
+        """Calculates a value based on a full cosine cycle schedule.
 
-    def _cosine_schedule(self, t: float, T: float, start: float, end: float) -> float:
+        The value oscillates between 'start' and 'end', completing one
+        full cycle every 'T' steps.
+
+        Args:
+            t (float): Current step. Can be larger than T.
+            T (float): The period, or duration, of one full cycle.
+            start (float): The value at the beginning and end of the cycle
+                        (at t=0, t=T, t=2T, etc.).
+            end (float): The value at the midpoint of the cycle
+                    (at t=T/2, t=3T/2, etc.).
+
+        Returns:
+            float: The scheduled, oscillating value.
+        """
+        t = t % float(T)
+        w = 0.5 * (1.0 + np.cos(2.0 * np.pi * t / float(T)))
+        return end + (start - end) * w
+
+    def _cosine_annealing_schedule(self, t: float, T: float, start: float, end: float) -> float:
         """Calculates a value based on a cosine annealing schedule.
 
         Args:
@@ -388,7 +409,7 @@ class QPopulationNetwork(QPopulation):
             return self.static_update_rate
         
         elif self.rate_schedule_type == 'cosine':
-            return self._cosine_schedule(
+            return self._cosine_schedule_cyclic(
                 u,
                 U_total,
                 self.rate_sched_start,
@@ -404,7 +425,7 @@ class QPopulationNetwork(QPopulation):
             
         elif self.max_update_schedule_type == 'cosine':
             base = self._suggest_max_update()
-            mult = self._cosine_schedule(
+            mult = self._cosine_annealing_schedule(
                 u,
                 U_total,
                 self.max_up_sched_start,
