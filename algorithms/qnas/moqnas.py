@@ -48,7 +48,7 @@ class MOQNAS(QNAS):
     def initialize_moqnas(self,
                         # Core EA Parameters
                         num_quantum_ind, repetition, max_generations, update_quantum_gen,
-                        update_quantum_rate,
+                        quantum_update_config,
                         # Hyperparameter Population
                         params_ranges, crossover_rate,
                         # Network Population
@@ -75,7 +75,8 @@ class MOQNAS(QNAS):
             repetition (int): Number of classical individuals per quantum one.
             max_generations (int): Total number of generations to run.
             update_quantum_gen (int): Frequency (in generations) for quantum updates.
-            update_quantum_rate (float): Base learning rate for quantum updates.
+            quantum_update_config (dict): Configuration for quantum updates, including
+                learning rate and scheduling.
             params_ranges (dict): Search space for hyperparameters.
             crossover_rate (float): Crossover rate for hyperparameter chromosomes.
             fn_list (list): List of all possible operation names for network nodes.
@@ -143,7 +144,7 @@ class MOQNAS(QNAS):
             replace_method=replace_method,
             fn_list=fn_list,
             initial_probs=initial_probs,
-            update_quantum_rate=update_quantum_rate,
+            quantum_update_config=quantum_update_config,
             max_num_nodes=max_num_nodes,
             reducing_fns_list=reducing_fns_list,
             patience=patience,
