@@ -24,7 +24,7 @@ QNAS:
     terminal_op_name: "no_op"
     pool_op_name: "pool"
     min_active_len: 5
-    truncate_after_noop: true
+    truncate_after_noop: false
     avoid_consecutive_pool: true
     enforce_noop_in_update: true
     noop_max_prob: 0.9
