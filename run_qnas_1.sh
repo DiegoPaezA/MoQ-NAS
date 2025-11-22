@@ -43,8 +43,8 @@ ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config5.txt")
-exps=("exp19")
+configs=("config0_0.txt")
+exps=("exp21")
 cuda_devices=("0")
 num_repeats=3
 
@@ -72,6 +72,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
         --network_config       "${network_config}"
         --backbone_name        "${backbone_name}"
         --log_level            "${log_level}"
+        --gpu_list             "${cuda_devices}"
         $($use_cache && echo --use_cache)
         $($early_stopping && echo --early_stopping)
         $($en_pop_crossover && echo --en_pop_crossover)
@@ -92,6 +93,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
           --save_checkpoints_epochs "${save_checkpoints_epochs}" \
           --elite_mode "${elite_mode_moqnas}" \
           --ref_dir_method "${ref_dir_method}" \
+          $($multi_objective && echo --multi_objective) \
           $( [[ -n "${continue_path}" ]] && echo --continue_path "${continue_path}" ) \
           $( $data_augmentation && echo --data_augmentation )
       fi

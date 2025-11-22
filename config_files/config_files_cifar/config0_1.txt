@@ -4,18 +4,16 @@ QNAS:
     crossover_rate: 0.5
     max_generations: 150
     max_num_nodes: 20
-    num_quantum_ind: 10
+    num_quantum_ind: 5
     penalize_number: 3
-    repetition: 2
+    repetition: 4
     replace_method: best
-    update_quantum_gen: 5
-    update_quantum_rate: 0.2
-    save_data_freq: 10
-    crossover_frequency: 5
+    update_quantum_gen: 1
+    crossover_frequency: 1
     pop_crossover_rate: 0.4 # offspring replacement proportion in the population
-    pop_crossover_method: hux # hux, uniform
+    pop_crossover_method: ['hux', 'one_point', 'two_point'] # 'hux' | 'one_point' | 'two_point'
     patience: 60
-    elite_mode: bootstrap_k # "single" | "global_k" | "bootstrap_k" | "old"
+    elite_mode: global_k # "single" | "global_k" | "bootstrap_k" | "old"
     k_elites: 5
     pool_factor: 3
     ema_beta: 0.7
@@ -26,18 +24,32 @@ QNAS:
     terminal_op_name: "no_op"
     pool_op_name: "pool"
     min_active_len: 5
-    truncate_after_noop: true
+    truncate_after_noop: false
     avoid_consecutive_pool: true
     enforce_noop_in_update: true
     noop_max_prob: 0.9
     noop_ramp_cap: true
 
+    quantum_update_config:
+      quantum_rate_schedule: 'cosine'                     # use 'cosine' schedule or 'static'
+      max_update_schedule: 'static'                       # use 'cosine' schedule or 'static'
+      static_quantum_rate: 0.1                            # (Your old 0.4 / 5)
+      static_max_update: 0.02                             # (Your old 0.105 / 5)
+      quantum_rate_schedule_params:                       # Parameters for 'cosine' rate schedule
+          start: 0.25                                      # Scaled down from 0.4
+          end: 0.01                                       # Scaled down from ~0.01
+      max_update_schedule_params:                         # Parameters for 'cosine' max_update schedule
+          start: 0.3                                      # Scaled down from 1.5
+          end: 0.16                                       # Scaled down from 0.8
+      intensity_min: 0.5                                  # Intensity sampling range - not used
+      intensity_max: 1.0                                  # Intensity sampling range - not used
+
     params_ranges:
-        decay: 0.9
-        learning_rate: 0.001
-        momentum: 0.0
-        weight_decay: 1.0e-4
-        backbone_percentage: [0.1, 0.999]
+      decay: 0.9
+      learning_rate: 0.001
+      momentum: 0.0
+      weight_decay: 1.0e-4
+      backbone_percentage: [0.1, 0.999]
 
     function_dict:  {'conv_1_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
                      'conv_1_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
@@ -83,7 +95,7 @@ train:
     backbone_name: mobilenet_v3_small
 
     # Multi-objective parameters
-    multi_objective: true
+    multi_objective: False
     num_objectives: 3
     objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
     metrics:
