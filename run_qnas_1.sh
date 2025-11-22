@@ -43,10 +43,10 @@ ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0.txt")
-exps=("exp1")
+configs=("config0_0.txt")
+exps=("exp21")
 cuda_devices=("0")
-num_repeats=1
+num_repeats=3
 
 # --------------- Runner ---------------
 for ((j=0; j<${#configs[@]}; j++)); do
