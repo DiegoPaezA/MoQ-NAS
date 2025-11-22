@@ -94,9 +94,9 @@ class ConfigParameters(object):
         vars_dict = {
             'QNAS': [('crossover_rate', float), ('max_generations', int), ('max_num_nodes', int),
                     ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
-                    ('replace_method', str), ('update_quantum_rate', float), ('update_quantum_gen', int),
-                    ('save_data_freq', int), ('params_ranges', dict), ('patience', int),
-                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', str),
+                    ('replace_method', str), ('quantum_update_config', dict), ('update_quantum_gen', int),
+                    ('params_ranges', dict), ('patience', int),
+                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', list),
                     ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
                     ('ema_beta', float), ('rank_weighting', bool),
                     ('initial_prob_distribution', str), ('function_dict', dict),
@@ -154,7 +154,7 @@ class ConfigParameters(object):
         train_override_keys = [
             'optimizer', 'data_augmentation', 'network_config',
             'backbone_name', 'dataset', 'data_path', 'limit_data_value',
-            'multi_objective', 'objectives', 'config_path_dataset'
+            'multi_objective', 'objectives', 'config_path_dataset', 'gpu_list'
         ]
         for key in train_override_keys:
             val = self.args.get(key)

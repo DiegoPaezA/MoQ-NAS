@@ -13,6 +13,7 @@ import pickle
 import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from .qnas2 import QNAS
+from .helpers.configs import MOEAConfig
 from utils.helpers import calculate_time, delete_old_dirs_v2
 
 
@@ -47,7 +48,7 @@ class MOQNAS(QNAS):
     def initialize_moqnas(self,
                         # Core EA Parameters
                         num_quantum_ind, repetition, max_generations, update_quantum_gen,
-                        update_quantum_rate,
+                        quantum_update_config,
                         # Hyperparameter Population
                         params_ranges, crossover_rate,
                         # Network Population
@@ -74,7 +75,8 @@ class MOQNAS(QNAS):
             repetition (int): Number of classical individuals per quantum one.
             max_generations (int): Total number of generations to run.
             update_quantum_gen (int): Frequency (in generations) for quantum updates.
-            update_quantum_rate (float): Base learning rate for quantum updates.
+            quantum_update_config (dict): Configuration for quantum updates, including
+                learning rate and scheduling.
             params_ranges (dict): Search space for hyperparameters.
             crossover_rate (float): Crossover rate for hyperparameter chromosomes.
             fn_list (list): List of all possible operation names for network nodes.
@@ -142,7 +144,7 @@ class MOQNAS(QNAS):
             replace_method=replace_method,
             fn_list=fn_list,
             initial_probs=initial_probs,
-            update_quantum_rate=update_quantum_rate,
+            quantum_update_config=quantum_update_config,
             max_num_nodes=max_num_nodes,
             reducing_fns_list=reducing_fns_list,
             patience=patience,
@@ -179,17 +181,19 @@ class MOQNAS(QNAS):
         self.pareto_global_ids = []
         self.fronts_history = {}
 
-        # load config objective sense
+        # --- MOO Setup ---
+        
+        # 1. Load objective config from JSON
+        self.logger.info("Loading objective config from 'configs/cfg_obj.json'")
         try:
             with open("configs/cfg_obj.json", "r") as f:
                 self.objectives_info = json.load(f)["objectives"]
         except Exception as e:
             raise RuntimeError(f"Failed to load objective config: {e}")
 
+        # 2. Build objective lists
         self.objective_names = []
         self.objective_senses = []
-        # Ensure all specified objectives have corresponding info
-        # Map the active objectives to their information
         for active_obj in self.objectives:
             match_found = False
             for key, info in self.objectives_info.items():
@@ -198,23 +202,33 @@ class MOQNAS(QNAS):
                     sense = 'max' if info['goal'] == 'maximize' else 'min'
                     self.objective_senses.append(sense)
                     match_found = True
-                    break # Move to the next active_obj
+                    break
             if not match_found:
-                print(f"Warning: Could not find a rule for '{active_obj}'")
+                self.logger.warning(f"Could not find a rule for '{active_obj}'")
         
-        # moead_topk
-        self.qpop_net.ref_dir_method = ref_dir_method
-        print(f"Reference direction method set to: {self.qpop_net.ref_dir_method}")
-        self.qpop_net.set_objective_directions(names=self.objective_names, sense=self.objective_senses)
-        print(f"Set objective directions: {list(zip(self.objective_names, self.objective_senses))}")
-        if self.qpop_net._ref_dirs is not None and self.qpop_net._ind_to_dir is not None:
-            for i in range(self.qpop_net.num_ind):
-                dir_index = self.qpop_net._ind_to_dir[i]
-                direction_vector = self.qpop_net._ref_dirs[dir_index]
-                direction_str = ", ".join([f"{val:.3f}" for val in direction_vector])
-                print(f"Quantum Individual {i}: Direction -> [{direction_str}]")
-        else:
-            print("Quantum directions have not been assigned yet. Please call 'set_objective_directions'.")
+        # 3. Create the MOEAConfig object
+        # (You can pull these values from self.args or config files)
+        moea_cfg = MOEAConfig(
+            moead_q_low=0.30,   # Or self.args.moead_q_low
+            moead_q_high=0.90,  # Or self.args.moead_q_high
+            topP_mult=5,        # Or self.args.topP_mult
+            ref_dir_method=ref_dir_method # This was already a var in your code
+        )
+        
+        # 4. Initialize the MOEAD helper on the quantum population
+        self.qpop_net.set_objective_directions(
+            names=self.objective_names, 
+            sense=self.objective_senses,
+            moea_config=moea_cfg
+        )
+        
+        self.logger.info(f"Reference direction method set to: {moea_cfg.ref_dir_method}")
+        self.logger.info(f"Set objective directions: {list(zip(self.objective_names, self.objective_senses))}")
+
+        # 5. Log the directions
+        log_data = self.qpop_net.moea_helper.get_directions_for_logging()
+        for i, log_str in log_data.items():
+            self.logger.info(f"Quantum Individual {i}: {log_str}")
         
     def multiobjective_fitness(self) -> np.ndarray:
         """
