@@ -10,7 +10,7 @@ algos=("moqnas")
 # —— Experiment settings ——
 dataset="cifar10"
 data_path="datasets/${dataset}_data"
-config_dir="config_files/config_files_cifar"
+config_dir="config_files/config_files_cifar_mo"
 exp_root="experiment_${dataset}_qfamily"
 log_level="INFO"
 network_config="default"
@@ -31,7 +31,7 @@ elite_mode_qnas="global_k"          # "single" | "global_k" | "bootstrap_k" | "o
 # Architecture rule toggles (enabled by default in your repo).
 # Set to false to APPEND the corresponding '--no-...' flag (matching your scripts).
 truncate_after_noop=false           
-avoid_consecutive_pool=true         
+avoid_consecutive_pool=false         
 enforce_noop_in_update=true         
 
 # —— MO-QNAS-specific ——
@@ -44,10 +44,10 @@ multi_objective=true               # true | false
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0.txt")
-exps=("exp1")
+configs=("config0_2.txt")
+exps=("exp10")
 cuda_devices=("0")
-num_repeats=1
+num_repeats=3
 
 # --------------- Runner ---------------
 for ((j=0; j<${#configs[@]}; j++)); do
