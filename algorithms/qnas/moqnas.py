@@ -14,6 +14,7 @@ import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from .qnas2 import QNAS
 from .helpers.configs import MOEAConfig
+from .helpers.operators import apply_crossover
 from utils.helpers import calculate_time, delete_old_dirs_v2
 
 
@@ -484,6 +485,86 @@ class MOQNAS(QNAS):
                 mixed[i] = np.where(mask, parent, child)
         return mixed
 
+    def crossover_network(self, new_pop_net: np.ndarray) -> np.ndarray:
+        """
+        Overrides QNAS.crossover_network to implement Directional Crossover.
+        
+        Instead of crossing with the generic 'best', this method:
+        1. Identifies the Quantum Parent for each child using `qpop_net._parent_map`.
+        2. Retrieves the Reference Direction assigned to that Quantum Parent.
+        3. Selects the Elite from the Global Pareto Archive that is best aligned with that direction.
+        4. Uses that Directional Elite as the crossover partner.
+        5. Delegates the actual gene swapping to `helpers.operators.apply_crossover`.
+        """
+        # 1. Standard checks (generation 0, flag enabled, frequency)
+        if not (self.current_gen > 0 and getattr(self, "en_pop_crossover", False)):
+            return new_pop_net
+        
+        if self.current_gen % self.crossover_frequency != 0:
+            return new_pop_net
+
+        # 2. Determine number of individuals to replace
+        num_off = int(len(new_pop_net) * self.pop_crossover_rate)
+        if num_off <= 0:
+            return new_pop_net
+
+        # 3. Ensure we have an archive to pick parents from
+        if self.pareto_global_population is None or len(self.pareto_global_population) == 0:
+            self.logger.warning("Pareto global population is empty. Skipping directional crossover.")
+            return new_pop_net
+            
+        # 4. Select random children indices to be replaced by offspring
+        replace_indices = np.random.choice(len(new_pop_net), num_off, replace=False)
+        children_selection = new_pop_net[replace_indices]
+
+        # 5. Build the list of Elite Parents based on Directions
+        moea = self.qpop_net.moea_helper
+        archive_pop = self.pareto_global_population
+        archive_fits = self.pareto_global_fitnesses
+        
+        # Normalize archive objectives for fair scalarization (Weighted Sum)
+        norm_objs = moea._normalize_objectives_01(archive_fits)
+        
+        elite_parents = []
+        
+        # --- ACCESS PARENT MAP FROM QPOPULATION FOR MODULARITY ---
+        parent_map = self.qpop_net._parent_map
+        
+        for child_idx in replace_indices:
+            # A. Find the Quantum Parent ID
+            q_idx = parent_map[child_idx]
+            
+            # B. Get the Direction assigned to this Quantum Parent
+            dir_idx = moea._ind_to_dir[q_idx]
+            lam = moea._ref_dirs[dir_idx]
+            
+            # C. Find the Best Elite along this direction (Scalarization)
+            scores = moea._score_weighted_sum(norm_objs, lam)
+            best_idx = np.argmax(scores)
+            
+            elite_parents.append(archive_pop[best_idx])
+            
+        elite_parents = np.array(elite_parents)
+        
+        # 6. Apply Crossover using the helper module
+        try:
+            # We pass the custom list of 'elite_parents' (directional bests)
+            # and the 'children_selection' (the random new architectures)
+            offspring = apply_crossover(
+                elite_parents,
+                children_selection,
+                method_keys=self.crossover_methods # e.g. ['hux']
+            )
+            
+            # 7. Replace in population
+            new_pop_net[replace_indices] = offspring
+            self.logger.info(f"Directional Crossover applied. Replaced {num_off} individuals using directional elites.")
+            
+        except Exception as e:
+            self.logger.error(f"Directional Crossover failed: {e}")
+            
+        return new_pop_net
+    
     def record_and_save_history(self):
             """
             Records the current global Pareto front, calculates its hypervolume,
