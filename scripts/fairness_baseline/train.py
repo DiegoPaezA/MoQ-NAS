@@ -1,83 +1,154 @@
-# moq-nas/scripts/fairness_baseline/train.py
 import csv
 import sys
 import argparse
+import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from pathlib import Path
 from tqdm import tqdm
 import random
+
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(project_root))
 
-# --- Step 1: Import the shared components from your core library ---
-from core.fairness.data import create_binary_loaders, get_default_transforms
+from core.cnn import input as cnn_input
 from core.fairness.models import make_baseline_model, REGISTRY
 
 def set_seed(seed: int = 42):
-    """Sets the seed for reproducibility."""
     random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-def train_one_model(
-    arch: str,
-    data_root: str,
-    device: torch.device,
-    args: argparse.Namespace
-):
+def load_config_robust(args):
     """
-    This function contains the logic to train a single model architecture.
-    It's called in a loop by the main function.
+    Manually build the train_spec dictionary to avoid QNAS-specific dependencies
+    that cause crashes when running simple baselines.
     """
+    # 1. Default Defaults
+    train_spec = {
+        'batch_size': 128,
+        'eval_batch_size': 128,
+        'learning_rate': 1e-3,
+        'weight_decay': 1e-4,
+        'max_epochs': 10,
+        'num_workers': 4,
+        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+        'data_augmentation': True,
+        'split_seed': 2025,
+        'loader_seed': 777,
+        'train_split': 0.9,
+        'dataset': 'custom_baseline', # Placeholder, will be updated by loader
+    }
+
+    # 2. Try to load the config file
+    config_path = Path(args.config_file)
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                loaded_yaml = yaml.safe_load(f)
+                
+            # Case A: It's a full QNAS experiment config (has 'train' key)
+            if loaded_yaml and 'train' in loaded_yaml:
+                print(f"Loaded experiment config from {config_path}")
+                train_spec.update(loaded_yaml['train'])
+                # If QNAS config refers to a dataset config, ensure we point to it
+                if 'config_path_dataset' not in train_spec:
+                    # Some QNAS configs might not have this, so we might need to assume
+                    # the user passed the dataset config in CLI if this is missing.
+                    pass
+            # Case B: It's just a Dataset Spec (no 'train' key)
+            else:
+                print(f"Loaded dataset spec from {config_path}")
+                # We assume the file passed IS the dataset config
+                train_spec['config_path_dataset'] = str(config_path)
+                
+        except Exception as e:
+            print(f"Warning: Could not parse config file as YAML ({e}). Assuming it is a dataset path.")
+            train_spec['config_path_dataset'] = str(config_path)
+    else:
+        raise FileNotFoundError(f"Config file not found: {args.config_file}")
+
+    # 3. Apply CLI Overrides (Highest Priority)
+    if args.data_path:
+        train_spec['data_path'] = args.data_path
+    if args.batch_size:
+        train_spec['batch_size'] = args.batch_size
+    if args.max_epochs:
+        train_spec['max_epochs'] = args.max_epochs
+    if args.learning_rate:
+        train_spec['learning_rate'] = args.learning_rate
+    if args.device:
+        train_spec['device'] = args.device
+    if args.num_workers:
+        train_spec['num_workers'] = args.num_workers
+    if args.dataset:
+        train_spec['dataset'] = args.dataset
+    if args.limit_data:
+        train_spec['limit_data'] = True
+    if args.limit_data_value:
+        train_spec['limit_data_value'] = args.limit_data_value
+        train_spec['limit_data'] = True
+    if args.results_csv:
+        train_spec['results_csv'] = args.results_csv
+    
+    # Store other flags
+    train_spec['freeze_backbone'] = args.freeze_backbone
+    train_spec['experiment_path'] = args.experiment_path
+
+    return train_spec
+
+def train_one_model(arch, train_loader, val_loader, device, params, results_csv=None):
     print(f"\n--- Starting Training for [{arch}] ---")
     
-    # --- Get components from core modules ---
-    transforms = get_default_transforms(img_size=args.img_size)
-    train_loader, val_loader = create_binary_loaders(
-        data_root=data_root,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        img_size=args.img_size,
-        tf_train=transforms['train'],
-        tf_val=transforms['val']
-    )
-    model = make_baseline_model(arch, num_classes=2).to(device)
+    num_classes = params.get('num_classes', 2)
+    model = make_baseline_model(arch, num_classes=num_classes).to(device)
     
-    # --- Logic to handle freezing the backbone ---
-    if args.freeze_backbone:
+    if params.get('freeze_backbone', False):
         print(f"[{arch}] Freezing backbone and training only the head.")
         for param in model.parameters():
             param.requires_grad = False
-        
-        # Unfreeze the final layer (head)
-        if hasattr(model, 'fc'): # For ResNets
+        if hasattr(model, 'fc'):
             for param in model.fc.parameters():
                 param.requires_grad = True
-        elif hasattr(model, 'classifier'): # For others like MobileNet, EffNet, ConvNeXt
+        elif hasattr(model, 'classifier'):
             for param in model.classifier.parameters():
                 param.requires_grad = True
     
-    # The optimizer will only receive parameters that require gradients
+    lr = float(params.get('learning_rate', 1e-3))
+    wd = float(params.get('weight_decay', 1e-4))
+    
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=args.wd)
-
+    optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=wd)
     criterion = nn.CrossEntropyLoss()
     
-    output_dir = Path(args.out_dir)
+    output_dir = Path(params['experiment_path'])
     output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = output_dir / f"{Path(data_root).name}_{arch}.pt"
+    
+    dataset_name = params.get('dataset', 'dataset')
+    checkpoint_path = output_dir / f"{dataset_name}_{arch}.pt"
+    
     best_val_acc = 0.0
+    max_epochs = int(params.get('max_epochs', 10))
 
-    # --- Training Loop ---
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, max_epochs + 1):
         model.train()
         train_loss, train_correct, train_total = 0, 0, 0
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs} [{arch} Train]")
-        for inputs, labels in pbar:
+        
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{max_epochs} [{arch} Train]")
+        for batch in pbar:
+            if len(batch) == 3:
+                inputs, labels, _ = batch
+            else:
+                inputs, labels = batch
+            
             inputs, labels = inputs.to(device), labels.to(device)
+            
+            if len(labels.shape) > 1 and labels.shape[1] == 1:
+                labels = labels.squeeze()
+            labels = labels.long()
+
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels)
@@ -93,15 +164,25 @@ def train_one_model(
         model.eval()
         val_correct, val_total = 0, 0
         with torch.no_grad():
-            for inputs, labels in val_loader:
+            for batch in val_loader:
+                if len(batch) == 3:
+                    inputs, labels, _ = batch
+                else:
+                    inputs, labels = batch
+                
                 inputs, labels = inputs.to(device), labels.to(device)
+                if len(labels.shape) > 1 and labels.shape[1] == 1:
+                    labels = labels.squeeze()
+                labels = labels.long()
+                
                 outputs = model(inputs)
                 _, predicted = outputs.max(1)
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
         
-        val_acc = 100. * val_correct / val_total
-        print(f"Epoch {epoch} [{arch}]: Train Loss: {train_loss/train_total:.4f} | Val Acc: {val_acc:.2f}%")
+        val_acc = 100. * val_correct / max(1, val_total)
+        avg_train_loss = train_loss / max(1, train_total)
+        print(f"Epoch {epoch} [{arch}]: Train Loss: {avg_train_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -109,80 +190,88 @@ def train_one_model(
             torch.save(model.state_dict(), checkpoint_path)
 
     print(f"--- Finished Training for [{arch}]. Best model saved to {checkpoint_path} ---")
-    if args.results_csv:
-        results_path = Path(args.results_csv)
+    
+    if results_csv:
+        results_path = Path(results_csv)
         results_path.parent.mkdir(parents=True, exist_ok=True)
-        # Check if file exists to write header only once
         write_header = not results_path.exists()
         
         with open(results_path, 'a', newline='') as f:
             writer = csv.writer(f)
             if write_header:
                 writer.writerow(['arch', 'dataset', 'best_val_acc', 'checkpoint_path'])
-            
-            writer.writerow([
-                arch,
-                Path(data_root).name,
-                f"{best_val_acc:.4f}",
-                str(checkpoint_path.resolve())
-            ])
+            writer.writerow([arch, dataset_name, f"{best_val_acc:.4f}", str(checkpoint_path.resolve())])
         print(f"Saved best accuracy result to {results_path}")
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train multiple baseline models for fairness evaluation.",
+        description="Train baseline models using QNAS GenericDataLoader and Config.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    # --- Command-Line Arguments ---
-    parser.add_argument('--data_root', required=True, help="Root with train/ and val/ subfolders")
-    parser.add_argument('--archs', type=str,
-                        default="resnet18,resnet50,efficientnet_v2_s",
+    
+    # --- Arguments ---
+    parser.add_argument('--config_file', required=True, help="Path to the YAML config file")
+    parser.add_argument('--experiment_path', required=True, help="Root directory for logs")
+    parser.add_argument('--data_path', required=True, help="Root directory containing the datasets")
+    
+    parser.add_argument('--archs', type=str, default="resnet18,resnet50,efficientnet_v2_s",
                         help="Comma-separated torchvision archs to train.")
-    parser.add_argument('--epochs', type=int, default=10)
-    parser.add_argument('--batch_size', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--wd', type=float, default=1e-4, help="Weight decay")
-    parser.add_argument('--img_size', type=int, default=224)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--out_dir', type=str, default="checkpoints/baselines")
-    parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--device', type=str, default=None, help="e.g., 'cuda:0'. Default picks best available.")
     parser.add_argument('--freeze_backbone', action='store_true',
                         help="If set, train only the final classification head.")
-    
     parser.add_argument('--results_csv', type=str, default="checkpoints/baselines/baseline_results.csv",
-                        help="Path to CSV file to save the best validation accuracy for each model.")
+                        help="Path to CSV file to save results.")
+    
+    # --- Data Limiting ---
+    parser.add_argument('--limit_data', action='store_true', help="If set, enables dataset limiting.")
+    parser.add_argument('--limit_data_value', type=int, default=None, help="Number of images to use.")
+
+    # --- Overrides ---
+    parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--max_epochs', type=int, default=None)
+    parser.add_argument('--learning_rate', type=float, default=None)
+    parser.add_argument('--device', type=str, default=None)
+    parser.add_argument('--num_workers', type=int, default=None)
+    parser.add_argument('--dataset', type=str, default=None)
+
     args = parser.parse_args()
 
-    set_seed(args.seed)
+    print("Loading configuration...")
+    # Use Robust Loader instead of core.config.ConfigParameters
+    train_spec = load_config_robust(args)
     
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # --- Logic to handle multiple architectures ---
-    requested_archs = [a.strip() for a in args.archs.split(',') if a.strip()]
+    device_str = train_spec.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(device_str)
+    set_seed(train_spec.get('split_seed', 42))
     
-    # Check which of the requested models are available in your models.py registry
-    available_archs = [arch for arch in requested_archs if arch in REGISTRY]
-    unavailable = set(requested_archs) - set(available_archs)
-    if unavailable:
-        print(f"[Warning] Skipping unavailable architectures: {sorted(list(unavailable))}")
-
-    if not available_archs:
-        raise SystemExit("No requested architectures are available in core/fairness/models.py.")
-
     print(f"Device: {device}")
-    print(f"Architectures to train: {available_archs}")
+    print(f"Dataset config: {train_spec.get('config_path_dataset')}")
+    if train_spec.get('limit_data'):
+        print(f"Data Limiting Enabled: {train_spec.get('limit_data_value')} samples")
 
-    # --- Loop through and train each model ---
+    print("Initializing GenericDataLoader...")
+    data_loader = cnn_input.GenericDataLoader(params=train_spec)
+    train_loader, val_loader = data_loader.get_loader(for_train=True, pin_memory_device=device_str)
+    
+    train_spec['num_classes'] = data_loader.spec.num_classes
+    # Ensure dataset name is set correctly for filenames
+    if train_spec['dataset'] == 'custom_baseline':
+        train_spec['dataset'] = data_loader.spec.name
+
+    requested_archs = [a.strip() for a in args.archs.split(',') if a.strip()]
+    available_archs = [arch for arch in requested_archs if arch in REGISTRY]
+    
+    if not available_archs:
+        print("No requested architectures are available.")
+        sys.exit(1)
+
     for arch in available_archs:
         train_one_model(
             arch=arch,
-            data_root=args.data_root,
+            train_loader=train_loader,
+            val_loader=val_loader,
             device=device,
-            args=args
+            params=train_spec,
+            results_csv=args.results_csv
         )
 
 if __name__ == "__main__":

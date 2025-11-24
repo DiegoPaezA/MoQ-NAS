@@ -1,88 +1,149 @@
 #!/bin/bash
 
-# This script trains models for multiple architectures, running only two jobs
-# (one for each dataset) in parallel at a time to avoid memory issues.
+# --- 🎮 GPU SELECTION ---
+# Define your GPUs here.
+# Case A: One GPU -> Runs SEQUENTIALLY (safe for single GPU)
+CUDA_DEVICES=("1") 
 
+# # Case B: Two GPUs -> Runs in PARALLEL (faster)
+# CUDA_DEVICES=("0" "1")
+
+# --- CONFIGURATION ---
 # Define the architectures to train
 ARCHS="resnet18 resnet50 efficientnet_v2_s convnext_tiny mobilenet_v3_large mnasnet1_0"
 
-# --- MODIFICATION START ---
+# Image settings (Must match your prepared data)
+IMG_SIZE=96
+RESIZE_MODE="letterbox" # or "center_crop"
+
+# Config files (Ensure these exist)
+CONFIG_PERSON="configs/person_bin_96.yaml"
+CONFIG_FACE="configs/face_bin_96.yaml"
+
+# Data paths (Root directory of the specific dataset)
+DATA_PERSON="datasets/personbin_data_96"
+DATA_FACE="datasets/facebin_data_96"
+
+# ---------------------
+
 # Define an empty variable for our optional arguments
 OPTIONAL_ARGS=""
-OUTPUT_DIR="checkpoints/baselines"
+OUTPUT_DIR="checkpoints/baseline_limit_96"
 
-# Check if the first command-line argument is "head_only"
+# Check if the first command-line argument is "--head_only"
 if [[ "$1" == "--head_only" ]]; then
     echo "✅ Running in HEAD-ONLY mode: Backbone will be frozen."
-    # If it is, populate the variable with the flags you want
     OPTIONAL_ARGS="--freeze_backbone"
-    OUTPUT_DIR="checkpoints/baselines_head_only"
+    OUTPUT_DIR="checkpoints/baseline_freeze_limit_96"
 else
     echo "✅ Running in FULL-TRAINING mode: The entire model will be trained."
 fi
-# --- MODIFICATION END ---
 
 # Create a directory to store log files
 LOG_DIR="logs"
+NUM_GPUS=${#CUDA_DEVICES[@]}
 mkdir -p $LOG_DIR
 mkdir -p $OUTPUT_DIR
 echo "✅ Log files will be saved in the '$LOG_DIR' directory."
+echo "✅ Checkpoints will be saved in '$OUTPUT_DIR'"
+echo "✅ GPU Setup: Defined ${NUM_GPUS} device(s): ${CUDA_DEVICES[*]}"
 echo "------------------------------------------------------"
 
-# --- Main Training Loop ---
-# This loop processes one architecture at a time.
+
 for arch in $ARCHS; do
-    echo "🚀 Starting parallel training for ARCHITECTURE: $arch"
-
-    # --- Launch the facebin training job in the background ---
+    echo "🚀 Processing ARCHITECTURE: $arch"
+    
     LOG_FILE_FACEBIN="$LOG_DIR/facebin_${arch}.log"
-    echo "--> Starting facebin training... Log: $LOG_FILE_FACEBIN"
-    CUDA_VISIBLE_DEVICES=0 python scripts/fairness_baseline/train.py \
-        --data_root datasets/facebin_data \
-        --archs $arch \
-        --out_dir $OUTPUT_DIR \
-        --epochs 10 \
-        $OPTIONAL_ARGS > "$LOG_FILE_FACEBIN" 2>&1 & # <-- VARIABLE ADDED
-
-    # --- Launch the personbin training job in the background ---
     LOG_FILE_PERSONBIN="$LOG_DIR/personbin_${arch}.log"
-    echo "--> Starting personbin training... Log: $LOG_FILE_PERSONBIN"
-    CUDA_VISIBLE_DEVICES=1 python scripts/fairness_baseline/train.py \
-        --data_root datasets/personbin_data \
-        --archs $arch \
-        --out_dir $OUTPUT_DIR \
-        --epochs 10 \
-        $OPTIONAL_ARGS > "$LOG_FILE_PERSONBIN" 2>&1 & # <-- VARIABLE ADDED
 
-    # --- Wait for ONLY the two jobs above to complete ---
-    echo "⏳ Waiting for $arch training (facebin & personbin) to complete..."
-    wait
-    echo "✅ Finished training for ARCHITECTURE: $arch"
+    if [ "$NUM_GPUS" -ge 2 ]; then
+        # ================= PARALLEL MODE =================
+        GPU_A=${CUDA_DEVICES[0]}
+        GPU_B=${CUDA_DEVICES[1]}
+
+        echo "⚡ Mode: PARALLEL"
+        echo "   --> [GPU $GPU_A] Facebin training..."
+        CUDA_VISIBLE_DEVICES="$GPU_A" python scripts/fairness_baseline/train.py \
+            --config_file $CONFIG_FACE \
+            --data_path $DATA_FACE \
+            --experiment_path $OUTPUT_DIR \
+            --archs $arch \
+            --max_epochs 10 \
+            --limit_data \
+            --limit_data_value 10000\
+            $OPTIONAL_ARGS > "$LOG_FILE_FACEBIN" 2>&1 &
+            
+        echo "   --> [GPU $GPU_B] Personbin training..."
+        CUDA_VISIBLE_DEVICES="$GPU_B" python scripts/fairness_baseline/train.py \
+            --config_file $CONFIG_PERSON \
+            --data_path $DATA_PERSON \
+            --experiment_path $OUTPUT_DIR \
+            --archs $arch \
+            --max_epochs 10 \
+            --limit_data \
+            --limit_data_value 10000\
+            $OPTIONAL_ARGS > "$LOG_FILE_PERSONBIN" 2>&1 &
+            
+        wait
+    else
+        # ================= SEQUENTIAL MODE =================
+        GPU_A=${CUDA_DEVICES[0]}
+        
+        echo "🐢 Mode: SEQUENTIAL (using GPU $GPU_A)"
+        
+        echo "   --> [1/2] Facebin training..."
+        CUDA_VISIBLE_DEVICES="$GPU_A" python scripts/fairness_baseline/train.py \
+            --config_file $CONFIG_FACE \
+            --data_path $DATA_FACE \
+            --experiment_path $OUTPUT_DIR \
+            --archs $arch \
+            --max_epochs 10 \
+            --limit_data \
+            --limit_data_value 10000\
+            $OPTIONAL_ARGS > "$LOG_FILE_FACEBIN" 2>&1
+            
+        echo "   --> [2/2] Personbin training..."
+        CUDA_VISIBLE_DEVICES="$GPU_A" python scripts/fairness_baseline/train.py \
+            --config_file $CONFIG_PERSON \
+            --data_path $DATA_PERSON \
+            --experiment_path $OUTPUT_DIR \
+            --archs $arch \
+            --max_epochs 10 \
+            --limit_data \
+            --limit_data_value 10000\
+            $OPTIONAL_ARGS > "$LOG_FILE_PERSONBIN" 2>&1
+    fi
+
+    echo "✅ Finished ARCHITECTURE: $arch"
     echo "------------------------------------------------------"
 done
 
-echo "✅ All architectures have been trained successfully."
-echo "------------------------------------------------------"
-
-
-# --- Proceed with Evaluation sequentially ---
+# --- Evaluation ---
 echo "🚀 Starting evaluation..."
+CKPT_DIR="$OUTPUT_DIR/baselines"
 
-# Evaluate for FairFace
-echo "Evaluating model on FairFace dataset..."
-python scripts/fairness_baseline/evaluate.py \
-    --ckpt_dir $OUTPUT_DIR \
+# We use the first defined GPU for evaluation
+EVAL_GPU=${CUDA_DEVICES[0]}
+
+echo "Evaluating on FairFace..."
+CUDA_VISIBLE_DEVICES="$EVAL_GPU" python scripts/fairness_baseline/evaluate.py \
+    --ckpt_dir $CKPT_DIR \
     --dataset_name fairface \
     --csv_path datasets/FairFace/0.25/fairface_val.csv \
-    --filter facebin
+    --filter face \
+    --img_size $IMG_SIZE \
+    --resize_mode $RESIZE_MODE \
+    --beta 0.2
 
-# Evaluate for FACET
-echo "Evaluating model on FACET dataset..."
-python scripts/fairness_baseline/evaluate.py \
-    --ckpt_dir $OUTPUT_DIR \
+echo "Evaluating on FACET..."
+CUDA_VISIBLE_DEVICES="$EVAL_GPU" python scripts/fairness_baseline/evaluate.py \
+    --ckpt_dir $CKPT_DIR \
     --dataset_name facet \
     --csv_path datasets/facet_data/facet_eval.csv \
-    --filter personbin \
+    --filter person \
+    --img_size $IMG_SIZE \
+    --resize_mode $RESIZE_MODE \
+    --beta 0.2 \
     --cache_dir .cache/facet_crops
 
-echo "🎉 Evaluation complete. All tasks finished."
+echo "✅ Evaluation complete."

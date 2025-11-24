@@ -82,7 +82,7 @@ def main():
                         help="Generate a square resized mirrored version of the FACE dataset (default 96x96).")
     parser.add_argument('--resize_target', type=int, default=96,
                         help="Target side length for the resized mirror (e.g., 64, 96, 128).")
-    parser.add_argument('--resize_mode', type=str, default='center_crop', choices=['center_crop', 'letterbox'],
+    parser.add_argument('--resize_mode', type=str, default='letterbox', choices=['center_crop', 'letterbox'],
                         help="Square strategy: crop center or pad (letterbox).")
     parser.add_argument('--jpg_quality', type=int, default=90,
                         help="JPEG quality for resized images (1-100).")
