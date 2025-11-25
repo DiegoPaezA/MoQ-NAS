@@ -97,7 +97,7 @@ class GA(object):
         
     
     def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list, params_ranges,
-                    crossover_rate, mutation_rate, early_stopping, elitism=False, patience=60):
+                    crossover_rate, mutation_rate, early_stopping, elitism=False, patience=60, mutation_strategy="random"):
         """
         Initialize GA parameters and create the initial random population.
 
@@ -111,6 +111,7 @@ class GA(object):
             elitism: (bool) whether to keep the best individual in the next generation.
             patience: (int) number of generations with little/no improvement to trigger early stopping.
             params_ranges: (dict) dictionary with min/max values for continuous parameters.
+            mutation_strategy: (str) strategy for mutation ("swap", "block", "neighbor", "standard", "random").
         """
         self.population_size = population_size
         self.num_generations = num_generations
@@ -156,6 +157,17 @@ class GA(object):
         self.cont_mut_sigma = 0.05
         # self.logger.info("Initial population created with size: %d", population_size)
         # self.logger.info("Population: %s", str(self.population))
+        
+        self.mutation_strategy = mutation_strategy  # <--- Store the preference
+
+        # Define available strategies mapping
+        self.mutation_map = {
+            "swap": self.mutate_swap,
+            "block": self.mutate_block,
+            "neighbor": self.mutate_neighbor,
+            "standard": self.mutate_gen,  # 'standard' as mutate_gen
+            "random": None
+        }
         
     def decode_net(self, chromosome):
         """
@@ -422,9 +434,19 @@ class GA(object):
 
     def mutate(self, individual: np.ndarray) -> np.ndarray:
         """
-        Select one mutation strategy at random and apply it to the individual.
-        Ensure that the returned mutated individual is a NumPy array.
+        Apply mutation based on the configured strategy.
         """
+        # 1. Check if we should use a specific fixed strategy
+        if self.mutation_strategy != "random":
+            if self.mutation_strategy in self.mutation_map:
+                strategy_func = self.mutation_map[self.mutation_strategy]
+                return strategy_func(individual)
+            else:
+                # Fallback or error logging
+                self.logger.warning(f"Unknown mutation strategy '{self.mutation_strategy}'. Defaulting to standard.")
+                return self.mutate_gen(individual)
+
+        # 2. Original behavior: Randomly select one strategy
         mutation_strategies = [self.mutate_swap, self.mutate_block, self.mutate_neighbor, self.mutate_gen]
         strategy = np.random.choice(mutation_strategies)
         return strategy(individual)
