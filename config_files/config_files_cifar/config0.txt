@@ -13,7 +13,7 @@ QNAS:
     save_data_freq: 10
     crossover_frequency: 5
     pop_crossover_rate: 0.4 # offspring replacement proportion in the population
-    pop_crossover_method: hux # hux, uniform
+    pop_crossover_method: ['hux', 'one_point', 'two_point'] # 'hux' | 'one_point' | 'two_point'
     patience: 60
     elite_mode: bootstrap_k # "single" | "global_k" | "bootstrap_k" | "old"
     k_elites: 5
@@ -31,7 +31,21 @@ QNAS:
     enforce_noop_in_update: true
     noop_max_prob: 0.9
     noop_ramp_cap: true
-
+  
+    quantum_update_config:
+      quantum_rate_schedule: 'cosine'                     # use 'cosine' schedule or 'static'
+      max_update_schedule: 'cosine'                       # use 'cosine' schedule or 'static'
+      static_quantum_rate: 0.1                            # (Your old 0.4 / 5)
+      static_max_update: 0.05                             # (Your old 0.105 / 5)
+      quantum_rate_schedule_params:                       # Parameters for 'cosine cyclic' rate schedule
+          start: 0.4                                      # Scaled down from 0.4
+          end: 0.1                                        # Scaled down from ~0.1
+      max_update_schedule_params:                         # Parameters for 'cosine annealing' max_update schedule
+          start: 1.5                                      # if F <= 12: start * 0.07 ; if F <= 32: start * 0.05
+          end: 0.8                                       
+      intensity_min: 0.5                                  # Intensity sampling range - not used
+      intensity_max: 1.0                                  # Intensity sampling range - not used
+    
     params_ranges:
         decay: 0.9
         learning_rate: 0.001
