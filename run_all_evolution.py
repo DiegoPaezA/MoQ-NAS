@@ -184,6 +184,7 @@ def main(**args):
         elitism=args['elitism'],
         patience=args['patience'],
         params_ranges=config.QNAS_spec['params_ranges'],
+        mutation_strategy=args['mutation_strategy']
     )
 
     # -------- Run evolution --------
@@ -253,6 +254,10 @@ if __name__ == '__main__':
     parser.add_argument('--mutation_rate', type=float, default=0.05)
     parser.add_argument('--elitism', action='store_true')
     parser.add_argument('--patience', type=int, default=60)
+    parser.add_argument('--mutation_strategy', type=str, default='random',
+                        choices=['random', 'standard', 'swap', 'block', 'neighbor'],
+                        help='Strategy for mutation: random (mixed), standard (gene replacement), swap, block, or neighbor.')
+    # ---------------------------
 
     # NSGA-III specific
     parser.add_argument('--ref_divisions', type=int, default=None,
