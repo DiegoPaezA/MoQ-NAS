@@ -6,12 +6,12 @@
 
 # —— Which algorithms to run (choose any of: ga, nsga2, nsga3, moead) ——
 #algos=("ga" "nsga2" "nsga3" "moead")
-algos=("nsga3")
+algos=("ga")
 
 # —— Experiment settings ——
 dataset="cifar10"
-data_path="${dataset}_data"
-config_dir="config_files_cifar"
+data_path="datasets/${dataset}_data"
+config_dir="config_files/config_files_cifar"
 exp_root="experiment_${dataset}_ea"
 log_level="INFO"
 network_config="default"
@@ -27,6 +27,7 @@ num_generations=150
 max_num_nodes=20
 crossover_rate=0.5
 mutation_rate=0.2
+mutation_strategy="standard" # options: random, standard, swap, block, neighbor
 elitism=true
 early_stopping=false
 use_cache=false
@@ -43,8 +44,8 @@ moead_pneighbor=0.9        # prob of mating within neighborhood
 # —— dataset size & repeats ——
 dataset_sample_size=10000
 configs=("config0.txt")
-exps=("exp_1")
-cuda_devices=("0")
+exps=("exp4")
+cuda_devices=("1")
 num_repeats=3
 
 # --------------- Runner ---------------
@@ -71,6 +72,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
         --patience             "${patience}"
         --crossover_rate       "${crossover_rate}"
         --mutation_rate        "${mutation_rate}"
+        --mutation_strategy    "${mutation_strategy}"
         --population_size      "${population_size}"
         --num_generations      "${num_generations}"
         --max_num_nodes        "${max_num_nodes}"
