@@ -97,7 +97,7 @@ class ConfigParameters(object):
                     ('replace_method', str), ('quantum_update_config', dict), ('update_quantum_gen', int),
                     ('params_ranges', dict), ('patience', int),
                     ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', list),
-                    ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
+                    ('mo_crossover_strategy', str), ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
                     ('ema_beta', float), ('rank_weighting', bool),
                     ('initial_prob_distribution', str), ('function_dict', dict),
                     ('terminal_op_name', str), ('pool_op_name', str), ('min_active_len', int),
