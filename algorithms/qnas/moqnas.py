@@ -45,30 +45,52 @@ class MOQNAS(QNAS):
         self.data_file = data_file
         self.pop_size = None
         self.max_generations = None
+        self.mo_crossover_strategy = "directional"  # Default crossover strategy
 
-    def initialize_moqnas(self,
-                        # Core EA Parameters
-                        num_quantum_ind, repetition, max_generations, update_quantum_gen,
-                        quantum_update_config,
-                        # Hyperparameter Population
-                        params_ranges, crossover_rate,
-                        # Network Population
-                        fn_list, initial_probs, max_num_nodes, reducing_fns_list,
-                        # Network Crossover
-                        en_pop_crossover=False, pop_crossover_method="hux",
-                        pop_crossover_rate=0.25, crossover_frequency=5,
-                        # Elite Selection & MOEA/D
-                        elite_mode="moead_topk", k_elites=5, pool_factor=2,
-                        ema_beta=0.7, rank_weighting=True, ref_dir_method="das-dennis",
-                        # Network Architecture Rules
-                        terminal_op_name="no_op", pool_op_name="pool", min_active_len=5,
-                        truncate_after_noop=True, avoid_consecutive_pool=True,
-                        # No-Op Probability Management
-                        enforce_noop_in_update=True, noop_max_prob=0.90, noop_ramp_cap=True,
-                        # Stopping & Penalties
-                        early_stopping=True, patience=10, penalize_number=0,
-                        # Misc
-                        save_data_freq=1, replace_method="best"):
+    def initialize_moqnas(self, num_quantum_ind: int, repetition: int, max_generations: int,
+                        update_quantum_gen: int, quantum_update_config: dict, params_ranges: dict,
+                        # --- Network Population ---
+                        fn_list: list,
+                        initial_probs: list,
+                        max_num_nodes: int,
+                        reducing_fns_list: list,
+                        
+                        # --- Network Crossover ---
+                        crossover_rate: float,
+                        en_pop_crossover: bool = False,
+                        pop_crossover_method: list = ["hux"],
+                        mo_crossover_strategy: str = "directional",
+                        pop_crossover_rate: float = 0.25,
+                        crossover_frequency: int = 5,
+                        
+                        # --- Elite Selection & MOEA/D ---
+                        elite_mode: str = "moead_topk",
+                        k_elites: int = 5,
+                        pool_factor: int = 2,
+                        ema_beta: float = 0.7,
+                        rank_weighting: bool = True,
+                        ref_dir_method: str = "das-dennis",
+                        
+                        # --- Network Architecture Rules ---
+                        terminal_op_name: str = "no_op",
+                        pool_op_name: str = "pool",
+                        min_active_len: int = 5,
+                        truncate_after_noop: bool = True,
+                        avoid_consecutive_pool: bool = True,
+                        
+                        # --- No-Op Probability Management ---
+                        enforce_noop_in_update: bool = True,
+                        noop_max_prob: float = 0.90,
+                        noop_ramp_cap: bool = True,
+                        
+                        # --- Stopping & Penalties ---
+                        early_stopping: bool = True,
+                        patience: int = 10,
+                        penalize_number: float = 0,
+                        
+                        # --- Misc ---
+                        save_data_freq: int = 1,
+                        replace_method: str = "best"):
         """Configures the MOQNAS populations and evolutionary hyperparameters.
 
         Args:
@@ -86,8 +108,10 @@ class MOQNAS(QNAS):
             reducing_fns_list (list): List of operation names that are penalized.
             en_pop_crossover (bool, optional): If True, enables network crossover.
                 Defaults to False.
-            pop_crossover_method (str, optional): Crossover type for networks
-                ("hux" or "uniform"). Defaults to "hux".
+            pop_crossover_method (list, optional): Crossover types for networks
+                ["hux", "uniform", "one_point", "two_point"]. Defaults to ["hux"].
+            mo_crossover_strategy (str, optional): Strategy for multi-objective crossover.
+                Defaults to "directional".
             pop_crossover_rate (float, optional): Fraction of the population to
                 be replaced by crossover offspring. Defaults to 0.25.
             crossover_frequency (int, optional): Apply network crossover every N
@@ -133,6 +157,7 @@ class MOQNAS(QNAS):
         self.pop_size = num_quantum_ind * repetition
         self.max_generations = max_generations
         self.hyperparam_crossover_rate = crossover_rate
+        self.mo_crossover_strategy = mo_crossover_strategy
 
         # Initialize the base QNAS class, which sets up the quantum populations
         super().initialize_qnas(
@@ -485,18 +510,49 @@ class MOQNAS(QNAS):
                 mixed[i] = np.where(mask, parent, child)
         return mixed
 
+
+    def _get_directional_parents(self, replace_indices):
+        """Helper: Selects elite parents based on direction alignment."""
+        moea = self.qpop_net.moea_helper
+        archive_pop = self.pareto_global_population
+        archive_fits = self.pareto_global_fitnesses
+        parent_map = self.qpop_net._parent_map
+        
+        norm_objs = moea._normalize_objectives_01(archive_fits)
+        elite_parents = []
+        
+        for child_idx in replace_indices:
+            q_idx = parent_map[child_idx]
+            dir_idx = moea._ind_to_dir[q_idx]
+            lam = moea._ref_dirs[dir_idx]
+            scores = moea._score_weighted_sum(norm_objs, lam)
+            best_idx = np.argmax(scores)
+            elite_parents.append(archive_pop[best_idx])
+            
+        return np.array(elite_parents)
+
+    def _get_random_elite_parents(self, num_off):
+        """Helper: Selects elite parents randomly from the global archive."""
+        archive_pop = self.pareto_global_population
+        indices = np.random.choice(len(archive_pop), size=num_off, replace=True)
+        return archive_pop[indices]
+
     def crossover_network(self, new_pop_net: np.ndarray) -> np.ndarray:
         """
-        Overrides QNAS.crossover_network to implement Directional Crossover.
+        Applies crossover to the network population.
+        Strategy depends on self.mo_crossover_strategy ('directional' or 'random_elite').
         
-        Instead of crossing with the generic 'best', this method:
-        1. Identifies the Quantum Parent for each child using `qpop_net._parent_map`.
-        2. Retrieves the Reference Direction assigned to that Quantum Parent.
-        3. Selects the Elite from the Global Pareto Archive that is best aligned with that direction.
-        4. Uses that Directional Elite as the crossover partner.
-        5. Delegates the actual gene swapping to `helpers.operators.apply_crossover`.
+        Directional Crossover.
+        
+            Instead of crossing with the generic 'best', this method:
+            1. Identifies the Quantum Parent for each child using `qpop_net._parent_map`.
+            2. Retrieves the Reference Direction assigned to that Quantum Parent.
+            3. Selects the Elite from the Global Pareto Archive that is best aligned with that direction.
+            4. Uses that Directional Elite as the crossover partner.
+            5. Delegates the actual gene swapping to `helpers.operators.apply_crossover`.
+        
         """
-        # 1. Standard checks (generation 0, flag enabled, frequency)
+        # 1. Standard checks
         if not (self.current_gen > 0 and getattr(self, "en_pop_crossover", False)):
             return new_pop_net
         
@@ -508,60 +564,36 @@ class MOQNAS(QNAS):
         if num_off <= 0:
             return new_pop_net
 
-        # 3. Ensure we have an archive to pick parents from
+        # 3. Check archive
         if self.pareto_global_population is None or len(self.pareto_global_population) == 0:
-            self.logger.warning("Pareto global population is empty. Skipping directional crossover.")
+            self.logger.warning("Pareto global population empty. Skipping crossover.")
             return new_pop_net
             
-        # 4. Select random children indices to be replaced by offspring
+        # 4. Select children to be replaced
         replace_indices = np.random.choice(len(new_pop_net), num_off, replace=False)
         children_selection = new_pop_net[replace_indices]
 
-        # 5. Build the list of Elite Parents based on Directions
-        moea = self.qpop_net.moea_helper
-        archive_pop = self.pareto_global_population
-        archive_fits = self.pareto_global_fitnesses
-        
-        # Normalize archive objectives for fair scalarization (Weighted Sum)
-        norm_objs = moea._normalize_objectives_01(archive_fits)
-        
-        elite_parents = []
-        
-        # --- ACCESS PARENT MAP FROM QPOPULATION FOR MODULARITY ---
-        parent_map = self.qpop_net._parent_map
-        
-        for child_idx in replace_indices:
-            # A. Find the Quantum Parent ID
-            q_idx = parent_map[child_idx]
-            
-            # B. Get the Direction assigned to this Quantum Parent
-            dir_idx = moea._ind_to_dir[q_idx]
-            lam = moea._ref_dirs[dir_idx]
-            
-            # C. Find the Best Elite along this direction (Scalarization)
-            scores = moea._score_weighted_sum(norm_objs, lam)
-            best_idx = np.argmax(scores)
-            
-            elite_parents.append(archive_pop[best_idx])
-            
-        elite_parents = np.array(elite_parents)
-        
-        # 6. Apply Crossover using the helper module
+        # 5. Select Parents based on Strategy
         try:
-            # We pass the custom list of 'elite_parents' (directional bests)
-            # and the 'children_selection' (the random new architectures)
+            if self.mo_crossover_strategy == "directional":
+                elite_parents = self._get_directional_parents(replace_indices)
+            else:
+                # Fallback to random elite (standard MOEA behavior)
+                elite_parents = self._get_random_elite_parents(num_off)
+                
+            # 6. Apply Crossover
             offspring = apply_crossover(
                 elite_parents,
                 children_selection,
-                method_keys=self.crossover_methods # e.g. ['hux']
+                method_keys=self.crossover_methods
             )
             
-            # 7. Replace in population
+            # 7. Replace
             new_pop_net[replace_indices] = offspring
-            self.logger.info(f"Directional Crossover applied. Replaced {num_off} individuals using directional elites.")
+            self.logger.info(f"Crossover applied ({self.mo_crossover_strategy}). Replaced {num_off} individuals.")
             
         except Exception as e:
-            self.logger.error(f"Directional Crossover failed: {e}")
+            self.logger.error(f"Crossover failed: {e}")
             
         return new_pop_net
     
