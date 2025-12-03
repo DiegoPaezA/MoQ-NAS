@@ -1,52 +1,83 @@
 #!/bin/bash
 
 # --- 🎮 GPU SELECTION ---
-# Define your GPUs here.
-# Case A: One GPU -> Runs SEQUENTIALLY (safe for single GPU)
+# Case A: One GPU -> Runs SEQUENTIALLY
 CUDA_DEVICES=("1") 
 
-# # Case B: Two GPUs -> Runs in PARALLEL (faster)
+# Case B: Two GPUs -> Runs in PARALLEL
 # CUDA_DEVICES=("0" "1")
 
 # --- CONFIGURATION ---
-# Define the architectures to train
 ARCHS="resnet18 resnet50 efficientnet_v2_s convnext_tiny mobilenet_v3_large mnasnet1_0"
 
-# Image settings (Must match your prepared data)
+# Image settings
 IMG_SIZE=96
-RESIZE_MODE="letterbox" # or "center_crop"
+RESIZE_MODE="letterbox"
 
-# Config files (Ensure these exist)
+# Config files
 CONFIG_PERSON="configs/person_bin_96.yaml"
 CONFIG_FACE="configs/face_bin_96.yaml"
 
-# Data paths (Root directory of the specific dataset)
+# Data paths
 DATA_PERSON="datasets/personbin_data_96"
 DATA_FACE="datasets/facebin_data_96"
 
 # ---------------------
 
-# Define an empty variable for our optional arguments
+# 1. Define Defaults
 OPTIONAL_ARGS=""
 OUTPUT_DIR="checkpoints/baseline_limit_96"
+MODE_DESC="FULL-TRAINING (Pretrained)"
 
-# Check if the first command-line argument is "--head_only"
-if [[ "$1" == "--head_only" ]]; then
-    echo "✅ Running in HEAD-ONLY mode: Backbone will be frozen."
-    OPTIONAL_ARGS="--freeze_backbone"
-    OUTPUT_DIR="checkpoints/baseline_freeze_limit_96"
-else
-    echo "✅ Running in FULL-TRAINING mode: The entire model will be trained."
-fi
+# Default Epochs (Standard Fine-tuning / Head Only)
+MAX_EPOCHS=10
 
-# Create a directory to store log files
+# --- 🔄 ARGUMENT PARSING ---
+for arg in "$@"; do
+    case $arg in
+        --head_only)
+            OPTIONAL_ARGS="$OPTIONAL_ARGS --freeze_backbone"
+            # Update directory logic
+            if [[ "$OUTPUT_DIR" == *"scratch"* ]]; then
+                OUTPUT_DIR="checkpoints/baseline_scratch_freeze_limit_96"
+            else
+                OUTPUT_DIR="checkpoints/baseline_freeze_limit_96"
+            fi
+            MODE_DESC="HEAD-ONLY (Frozen Backbone)"
+            
+            # Set Epochs for Head Only
+            MAX_EPOCHS=10
+            ;;
+            
+        --from_scratch)
+            OPTIONAL_ARGS="$OPTIONAL_ARGS --from_scratch"
+            # Update directory logic
+            if [[ "$OUTPUT_DIR" == *"freeze"* ]]; then
+                OUTPUT_DIR="checkpoints/baseline_scratch_freeze_limit_96"
+            else
+                OUTPUT_DIR="checkpoints/baseline_scratch_limit_96"
+            fi
+            MODE_DESC="FULL-TRAINING (From Scratch)"
+            
+            # Set Epochs for From Scratch
+            MAX_EPOCHS=50
+            ;;
+    esac
+done
+
+echo "✅ Running Mode: $MODE_DESC"
+echo "✅ Max Epochs: $MAX_EPOCHS"
+echo "✅ Optional Args: $OPTIONAL_ARGS"
+
+# Create directories
 LOG_DIR="logs"
 NUM_GPUS=${#CUDA_DEVICES[@]}
 mkdir -p $LOG_DIR
 mkdir -p $OUTPUT_DIR
-echo "✅ Log files will be saved in the '$LOG_DIR' directory."
+
+echo "✅ Log files will be saved in '$LOG_DIR'"
 echo "✅ Checkpoints will be saved in '$OUTPUT_DIR'"
-echo "✅ GPU Setup: Defined ${NUM_GPUS} device(s): ${CUDA_DEVICES[*]}"
+echo "✅ GPU Setup: ${NUM_GPUS} device(s): ${CUDA_DEVICES[*]}"
 echo "------------------------------------------------------"
 
 
@@ -67,10 +98,11 @@ for arch in $ARCHS; do
             --config_file $CONFIG_FACE \
             --data_path $DATA_FACE \
             --experiment_path $OUTPUT_DIR \
+            --results_csv "$OUTPUT_DIR/facebin_results_acc.csv" \
             --archs $arch \
-            --max_epochs 10 \
+            --max_epochs $MAX_EPOCHS \
             --limit_data \
-            --limit_data_value 10000\
+            --limit_data_value 10000 \
             $OPTIONAL_ARGS > "$LOG_FILE_FACEBIN" 2>&1 &
             
         echo "   --> [GPU $GPU_B] Personbin training..."
@@ -78,10 +110,11 @@ for arch in $ARCHS; do
             --config_file $CONFIG_PERSON \
             --data_path $DATA_PERSON \
             --experiment_path $OUTPUT_DIR \
+            --results_csv "$OUTPUT_DIR/personbin_results_acc.csv" \
             --archs $arch \
-            --max_epochs 10 \
+            --max_epochs $MAX_EPOCHS \
             --limit_data \
-            --limit_data_value 10000\
+            --limit_data_value 10000 \
             $OPTIONAL_ARGS > "$LOG_FILE_PERSONBIN" 2>&1 &
             
         wait
@@ -96,10 +129,11 @@ for arch in $ARCHS; do
             --config_file $CONFIG_FACE \
             --data_path $DATA_FACE \
             --experiment_path $OUTPUT_DIR \
+            --results_csv "$OUTPUT_DIR/facebin_results_acc.csv" \
             --archs $arch \
-            --max_epochs 10 \
+            --max_epochs $MAX_EPOCHS \
             --limit_data \
-            --limit_data_value 10000\
+            --limit_data_value 10000 \
             $OPTIONAL_ARGS > "$LOG_FILE_FACEBIN" 2>&1
             
         echo "   --> [2/2] Personbin training..."
@@ -107,10 +141,11 @@ for arch in $ARCHS; do
             --config_file $CONFIG_PERSON \
             --data_path $DATA_PERSON \
             --experiment_path $OUTPUT_DIR \
+            --results_csv "$OUTPUT_DIR/personbin_results_acc.csv" \
             --archs $arch \
-            --max_epochs 10 \
+            --max_epochs $MAX_EPOCHS \
             --limit_data \
-            --limit_data_value 10000\
+            --limit_data_value 10000 \
             $OPTIONAL_ARGS > "$LOG_FILE_PERSONBIN" 2>&1
     fi
 
@@ -120,9 +155,7 @@ done
 
 # --- Evaluation ---
 echo "🚀 Starting evaluation..."
-CKPT_DIR="$OUTPUT_DIR/baselines"
-
-# We use the first defined GPU for evaluation
+CKPT_DIR="$OUTPUT_DIR"
 EVAL_GPU=${CUDA_DEVICES[0]}
 
 echo "Evaluating on FairFace..."

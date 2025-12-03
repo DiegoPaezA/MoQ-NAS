@@ -55,8 +55,6 @@ def load_config_robust(args):
                 train_spec.update(loaded_yaml['train'])
                 # If QNAS config refers to a dataset config, ensure we point to it
                 if 'config_path_dataset' not in train_spec:
-                    # Some QNAS configs might not have this, so we might need to assume
-                    # the user passed the dataset config in CLI if this is missing.
                     pass
             # Case B: It's just a Dataset Spec (no 'train' key)
             else:
@@ -95,6 +93,7 @@ def load_config_robust(args):
     
     # Store other flags
     train_spec['freeze_backbone'] = args.freeze_backbone
+    train_spec['from_scratch'] = args.from_scratch  # <--- NEW: Store flag in spec
     train_spec['experiment_path'] = args.experiment_path
 
     return train_spec
@@ -103,7 +102,18 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
     print(f"\n--- Starting Training for [{arch}] ---")
     
     num_classes = params.get('num_classes', 2)
-    model = make_baseline_model(arch, num_classes=num_classes).to(device)
+    
+    # --- NEW: Check if we are training from scratch ---
+    from_scratch = params.get('from_scratch', False)
+    use_pretrained = not from_scratch
+    
+    if from_scratch:
+        print(f"[{arch}] INITIALIZATION: Random Weights (Training from Scratch)")
+    else:
+        print(f"[{arch}] INITIALIZATION: ImageNet Pre-trained Weights")
+
+    # Pass the pretrained argument to the factory function
+    model = make_baseline_model(arch, num_classes=num_classes, pretrained=use_pretrained).to(device)
     
     if params.get('freeze_backbone', False):
         print(f"[{arch}] Freezing backbone and training only the head.")
@@ -127,7 +137,10 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
     output_dir.mkdir(parents=True, exist_ok=True)
     
     dataset_name = params.get('dataset', 'dataset')
-    checkpoint_path = output_dir / f"{dataset_name}_{arch}.pt"
+    
+    # Modify filename if training from scratch to avoid overwriting
+    scratch_suffix = "_scratch" if from_scratch else ""
+    checkpoint_path = output_dir / f"{dataset_name}_{arch}{scratch_suffix}.pt"
     
     best_val_acc = 0.0
     max_epochs = int(params.get('max_epochs', 10))
@@ -218,6 +231,11 @@ def main():
                         help="Comma-separated torchvision archs to train.")
     parser.add_argument('--freeze_backbone', action='store_true',
                         help="If set, train only the final classification head.")
+    
+    # --- NEW: Argument to disable pretrained weights ---
+    parser.add_argument('--from_scratch', action='store_true',
+                        help="If set, initializes models with random weights instead of ImageNet.")
+                        
     parser.add_argument('--results_csv', type=str, default="checkpoints/baselines/baseline_results.csv",
                         help="Path to CSV file to save results.")
     
