@@ -2,7 +2,7 @@
 
 import torch.nn as nn
 from torchvision import models
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Tuple, Optional
 
 # --- Helper functions to modify model heads ---
 
@@ -52,16 +52,16 @@ except Exception: pass
 
 
 # --- Main Factory Function ---
-# This is the primary function you will import into your training scripts.
 
-def make_baseline_model(arch: str, num_classes: int = 2) -> nn.Module:
+def make_baseline_model(arch: str, num_classes: int = 2, pretrained: bool = True) -> nn.Module:
     """
-    Builds a torchvision model with pre-trained ImageNet weights and replaces 
-    the final classification layer.
+    Builds a torchvision model. Can optionally load ImageNet weights or initialize 
+    from scratch, then replaces the final classification layer.
 
     Args:
         arch (str): The name of the architecture (e.g., 'resnet18').
-        num_classes (int): The number of output classes (should be 2 for your use case).
+        num_classes (int): The number of output classes.
+        pretrained (bool): If True, load ImageNet weights. If False, train from scratch.
 
     Returns:
         torch.nn.Module: The ready-to-train baseline model.
@@ -72,15 +72,25 @@ def make_baseline_model(arch: str, num_classes: int = 2) -> nn.Module:
 
     ctor, weights_enum, head_setter = REGISTRY[arch]
 
-    # Instantiate the model with the best available pre-trained weights
-    try:
-        weights = getattr(weights_enum, "DEFAULT", weights_enum)
-        model = ctor(weights=weights)
-    except Exception:
-        # Fallback for older torchvision versions or other issues
-        model = ctor(pretrained=True)
+    # Instantiate the model
+    if pretrained:
+        # Load Pre-trained ImageNet Weights
+        try:
+            weights = getattr(weights_enum, "DEFAULT", weights_enum)
+            model = ctor(weights=weights)
+        except Exception:
+            # Fallback for older torchvision versions
+            model = ctor(pretrained=True)
+    else:
+        # Initialize Randomly (From Scratch)
+        try:
+            model = ctor(weights=None)
+        except Exception:
+            # Fallback for older torchvision versions
+            model = ctor(pretrained=False)
     
     # Replace the final layer for your binary classification task
+    # This must happen regardless of initialization to ensure output dims are correct
     head_setter(model, num_classes)
     
     return model
