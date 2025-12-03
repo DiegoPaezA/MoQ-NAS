@@ -350,9 +350,9 @@ class BaseTrainer:
         # 2. Combine all intermediate results into one dictionary
         combined_final_results = {**val_results, **test_results}
         # 3. Run all post-processing metrics ONCE, using the combined results
-        if self.post_processing_metrics:
+        if self.post_processing_metrics and phase == 'evolution':
             # Load the best model before running expensive metrics
-            if phase == 'evolution' and self.best_model_state_dict is not None:
+            if self.best_model_state_dict is not None:
                 self.model.load_state_dict(self.best_model_state_dict)
                 self.model.eval()
             
@@ -377,7 +377,7 @@ class BaseTrainer:
         }
         
         # Add all other computed metrics from test and post-processing
-        final_output.update(test_results)
+        #final_output.update(test_results)
         final_output.update(combined_final_results)
         
         pack = {
