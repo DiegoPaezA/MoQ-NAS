@@ -8,7 +8,7 @@ def fairness_worker_cuda(
     shard: List[Tuple[int, dict]],
     parallel_train_params: dict,
     fn_dict: dict,
-    fairness_metric_name: str,
+    fairness_metric_names: List[str],
     fairness_params: dict | None,
     device_idx: int | None,
 ) -> Dict[int, Dict[str, float]]:
@@ -20,16 +20,12 @@ def fairness_worker_cuda(
     os.environ.setdefault("MKL_NUM_THREADS", "1")
     torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
 
-    # Optional perf tuning (toggle as you prefer)
-    # torch.backends.cudnn.benchmark = True  # speed if shapes are constant
-
     # Select device inside the spawned child (safe)
     if torch.cuda.is_available() and torch.cuda.device_count() > 0:
         if device_idx is None:
             device_idx = 0
         device_idx = device_idx % torch.cuda.device_count()
         device = f"cuda:{device_idx}"
-        # Bind current device for libs that query implicit device
         torch.cuda.set_device(device_idx)
     else:
         device = "cpu"
@@ -38,8 +34,11 @@ def fairness_worker_cuda(
     fairness_params = fairness_params or {}
 
     for i, spec in shard:
+        # Default fallback for this candidate
+        fallback_result = {name: 0.0 for name in fairness_metric_names}
+
         if not spec:
-            results[i] = {fairness_metric_name: 0.0}
+            results[i] = fallback_result
             continue
 
         net = None
@@ -60,9 +59,12 @@ def fairness_worker_cuda(
             net.load_state_dict(state)
 
             evaluator = FairnessMetric(model=net, device=device, **fairness_params)
+            
+            # Compute returns a dict with keys like 'spd_sum', 'mean_tpr', 'fairness_raw'
             metrics_fairness = evaluator.compute()
-            score = metrics_fairness.get("fairness_score", 0.0)
-            results[i] = {fairness_metric_name: score}
+            
+            # Return the WHOLE dictionary so evaluation.py can pick what it wants
+            results[i] = metrics_fairness
             
             patch = {
                 "per_group_tpr": metrics_fairness.get("per_group_tpr", {}),
@@ -75,34 +77,25 @@ def fairness_worker_cuda(
             update_yaml_file(file_path, patch)
 
         except Exception as e:
-            # Optional: print a short traceback for debugging
             print(f"[fairness_worker_cuda] Model {i} failed: {e}")
             traceback.print_exc()
-            results[i] = {fairness_metric_name: 0.0}
+            results[i] = fallback_result
 
         finally:
-            # Remove temporary model file if present
             try:
                 mpth = spec.get("model_path")
                 if mpth and os.path.exists(mpth):
                     os.remove(mpth)
             except Exception:
                 pass
-
-            # Proactively free large tensors before empty_cache
-            try:
-                del evaluator
-            except Exception:
-                pass
-            try:
-                del state
-            except Exception:
-                pass
-            try:
-                del net
-            except Exception:
-                pass
-
+            
+            # Cleanup
+            try: del evaluator
+            except: pass
+            try: del state
+            except: pass
+            try: del net
+            except: pass
             if str(device).startswith("cuda"):
                 torch.cuda.empty_cache()
 
@@ -110,23 +103,21 @@ def fairness_worker_cuda(
 
 
 def device_count_probe() -> int:
-    """Called inside a spawned child so the parent stays CUDA-free."""
     try:
         return torch.cuda.device_count()
     except Exception:
         return 0
 
 def device_count_probe_runner(q):
-    """Top-level picklable runner that puts the GPU count on a Queue."""
     q.put(device_count_probe())
 
-def fairness_queue_runner(q, shard, parallel_train_params, fn_dict, fairness_metric_name, fairness_params, device_idx):
+def fairness_queue_runner(q, shard, parallel_train_params, fn_dict, fairness_metric_names, fairness_params, device_idx):
     """Top-level picklable runner that executes the worker and puts results on a Queue."""
     res = fairness_worker_cuda(
         shard=shard,
         parallel_train_params=parallel_train_params,
         fn_dict=fn_dict,
-        fairness_metric_name=fairness_metric_name,
+        fairness_metric_names=fairness_metric_names, # Passed as list
         fairness_params=fairness_params,
         device_idx=device_idx,
     )
