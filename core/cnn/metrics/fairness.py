@@ -78,31 +78,29 @@ class FairnessMetric(BaseMetric):
         tpr_ = {}
         counts_ = {}
 
+        # 1. Determine TPR and Counts based on the dataset
         if self.eval_dataset_name.lower() == 'facet':
             if self.eval_skintone_method == 'soft':
                 tpr_, counts_ = self._compute_tpr_per_skintone_soft(dataloader)
             elif self.eval_skintone_method == 'hard':
                 tpr_, counts_ = self._compute_tpr_per_skintone_hard(dataloader)
             else:
-                raise ValueError(f"Unknown eval_skintone_method: {self.eval_skintone_method}. Choose 'soft' or 'hard'.")
-            
-            # Compute summary passing BOTH TPR and Counts
-            summary_metrics = self._compute_summary_metrics(tpr_, counts_)
-            
-            self._results["per_group_tpr"] = tpr_
-            self._results["metrics"] = summary_metrics
-            self._results["fairness_score"] = summary_metrics.get(self.optimization_objective, 0.0)
-
+                raise ValueError(f"Unknown eval_skintone_method: {self.eval_skintone_method}")
+        
         elif self.eval_dataset_name.lower() == 'fairface':
             tpr_, counts_ = self._compute_tpr_per_group(dataloader)
             
-            # Compute summary passing BOTH TPR and Counts
-            summary_metrics = self._compute_summary_metrics(tpr_, counts_)
-            
-            self._results["per_group_tpr"] = tpr_
-            self._results["metrics"] = summary_metrics
-            self._results["fairness_score"] = summary_metrics.get(self.optimization_objective, 0.0)
-            
+        else:
+            raise ValueError(f"Unknown evaluation dataset: {self.eval_dataset_name}")
+
+        # 2. Common Result Processing (Written only once)
+        summary_metrics = self._compute_summary_metrics(tpr_, counts_)
+        
+        self._results["per_group_tpr"] = tpr_
+        self._results["metrics"] = summary_metrics       # Nested (for your file output)
+        self._results.update(summary_metrics)            # Flattened (for the optimizer)
+        self._results["fairness_score"] = summary_metrics.get(self.optimization_objective, 0.0)
+
         del dataloader
         return self._results
 
