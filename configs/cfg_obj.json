@@ -15,8 +15,11 @@
         "energy": {
             "goal": "minimize"
         },
-        "fairness": {
+        "fairness_spd": {
             "goal": "minimize"
+        },
+        "fairness_mean_tpr": {
+            "goal": "maximize"
         }
     }
 }
