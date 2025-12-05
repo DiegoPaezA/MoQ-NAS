@@ -74,15 +74,12 @@ class MOEADHelper:
 
         Tries to use the systematic Das-Dennis method first, falling back to a
         Dirichlet distribution if a suitable number of points cannot be generated.
-
-        Args:
-            M (int): Number of objectives.
-            D (int): Number of directions to generate.
-
-        Returns:
-            np.ndarray: Array of shape (D, M) containing the direction vectors.
+        
+        Explicitly prioritizes extreme points to ensure boundary coverage.
         """
         rng = np.random.default_rng(12345)
+        
+        # 1. Fallback / Random Method
         if method == 'dirichlet':
             if M > D:
                 return rng.dirichlet(alpha=np.ones(M), size=D)
@@ -96,12 +93,36 @@ class MOEADHelper:
             rng.shuffle(all_dirs)
             return all_dirs
 
+        # 2. Das-Dennis Method
         for H in range(1, 10):
             dirs = self._das_dennis(M, H)
+            
+            # If we found a partition size that generates enough points...
             if dirs.shape[0] >= D:
-                return dirs[:D, :]
-        
-        # Fallback for das-dennis if not enough points
+                
+                # Identify extreme points (those with 1.0 on any axis)
+                is_extreme = np.any(dirs >= (1.0 - 1e-6), axis=1)
+                
+                extremes = dirs[is_extreme]
+                others = dirs[~is_extreme]
+                
+                # Case A: We have more extremes than D (rare, but possible if D < M)
+                if len(extremes) >= D:
+                    # Just take the first D extremes (or shuffle them)
+                    return extremes[:D]
+                
+                # Case B: We need all extremes + some intermediates
+                selected = [extremes]
+                needed = D - len(extremes)
+                
+                if needed > 0:
+                    # Shuffle the 'others' to avoid bias (since Das-Dennis is ordered)
+                    # We use the fixed seed rng defined above
+                    rng.shuffle(others)
+                    selected.append(others[:needed])
+                    
+                final_dirs = np.vstack(selected)
+                return final_dirs
         return rng.dirichlet(alpha=np.ones(M), size=D)
 
     def _normalize_objectives_01(self, objs: np.ndarray) -> np.ndarray:
