@@ -15,7 +15,7 @@ from pymoo.indicators.hv import Hypervolume
 from .qnas2 import QNAS
 from .helpers.configs import MOEAConfig
 from .helpers.operators import apply_crossover
-from utils.helpers import calculate_time, delete_old_dirs_v2
+from utils.helpers import calculate_time, delete_old_dirs_v2, load_pkl, save_pkl
 
 
 class MOQNAS(QNAS):
@@ -46,6 +46,12 @@ class MOQNAS(QNAS):
         self.pop_size = None
         self.max_generations = None
         self.mo_crossover_strategy = "directional"  # Default crossover strategy
+        self.unique_networks_path = os.path.join(self.experiment_path, "unique_networks.pkl")
+        self.unique_networks_db = (
+            load_pkl(self.unique_networks_path)
+            if os.path.exists(self.unique_networks_path)
+            else {}
+        )
 
     def initialize_moqnas(self, num_quantum_ind: int, repetition: int, max_generations: int,
                         update_quantum_gen: int, quantum_update_config: dict, params_ranges: dict,
@@ -258,45 +264,94 @@ class MOQNAS(QNAS):
         
     def multiobjective_fitness(self) -> np.ndarray:
         """
-        Evaluate the current classical population on all objectives.
+        Evaluate the current classical population on all objectives, while recording
+        a persistent registry of unique evaluated networks.
 
         Steps:
             1. Decode classical_params and classical_nets via QNAS.decode_pop.
-            2. Call self.eval_func(list_of_param_dicts, list_of_net_structures, generation)
-                which returns a list (length=pop_size) of dicts, each mapping metric_name→value.
-            3. Build a (pop_size × n_obj) array, selecting metrics in the order of self.objectives.
-            4. Apply the same “penalty” from QNAS to the first objective column (if penalize_number>0).
-        
+            2. Call self.eval_func(...) which returns a mapping from candidate_id
+            to a metrics dictionary.
+            3. Build (pop_size x n_obj) arrays for raw and penalized fitness.
+            4. Record each unique network only once in self.unique_networks_db.
+            5. Persist the registry every 5 generations using save_pkl(...).
+
         Returns:
-            fits (np.ndarray): shape=(pop_size, n_obj) of penalized objective values.
+            np.ndarray: Penalized fitness array of shape (pop_size, n_obj).
         """
-        # 1) Decode current classical to human‐readable
         decoded_params, decoded_nets = self.decode_pop(
-            self.classical_params, self.classical_nets
+            self.classical_params,
+            self.classical_nets
         )
 
-        # 2) Evaluate all individuals: eval_func returns list/array of dicts
-        raw_results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
-        # raw_results[i] is a dict of metric_name→value for individual i
+        raw_results = self.eval_func(
+            decoded_params,
+            decoded_nets,
+            generation=self.current_gen
+        )
 
         N = len(decoded_nets)
-        fits = np.zeros((N, self.num_objectives), dtype=float)
-        raw_fits = np.zeros((N, self.num_objectives), dtype=float)
+        fits = np.full((N, self.num_objectives), np.nan, dtype=float)
+        raw_fits = np.full((N, self.num_objectives), np.nan, dtype=float)
 
-        # 3) Fill each column j with metric self.objectives[j]
+        if not raw_results:
+            self.logger.warning("Evaluation function returned no results.")
+            self.raw_fits = raw_fits
+            self.fits = fits
+            return fits
+
+        new_unique_count = 0
+        repeated_count = 0
+
         for i in range(N):
-            metrics = raw_results[i]
-            for j, obj_name in enumerate(self.objectives[: self.num_objectives]):
-                val = metrics[obj_name]
-                raw_fits[i, j] = val
-                fits[i, j] = val
+            candidate_id = decoded_params[i].get("candidate_id")
 
-        # 4) Apply penalty to first objective if needed (QNAS.get_penalties uses network topology)
+            if candidate_id not in raw_results:
+                self.logger.warning(
+                    "Candidate %s was not found in results.", candidate_id
+                )
+                continue
+
+            metrics = raw_results[candidate_id]
+            metric_vals = [
+                float(metrics.get(obj_name, np.nan))
+                for obj_name in self.objectives[: self.num_objectives]
+            ]
+
+            raw_fits[i] = metric_vals
+            fits[i] = metric_vals
+
+            net_key = tuple(self.classical_nets[i])
+
+            if net_key not in self.unique_networks_db:
+                self.unique_networks_db[net_key] = {
+                    "fitness": metric_vals,
+                    "first_generation": self.current_gen,
+                    "first_index": i,
+                    "candidate_id": candidate_id,
+                    "visits": 1,
+                }
+                new_unique_count += 1
+            else:
+                self.unique_networks_db[net_key]["visits"] += 1
+                repeated_count += 1
+
         if self.penalize_number and self.reducing_fns_list:
             penalties = self.get_penalties(self.classical_nets)
             fits[:, 0] -= penalties
 
-        # 5) Store raw_fits for logging / saving
+        self.total_eval += N
+
+        if self.current_gen % 5 == 0:
+            save_pkl(self.unique_networks_path, self.unique_networks_db)
+
+        self.logger.info(
+            "Total evals: %d | New unique: %d | Repeated in batch: %d | Total unique so far: %d",
+            self.total_eval,
+            new_unique_count,
+            repeated_count,
+            len(self.unique_networks_db),
+        )
+
         self.raw_fits = raw_fits
         self.fits = fits
 
@@ -842,6 +897,7 @@ class MOQNAS(QNAS):
                     "Gen %d: elapsed %dh %dm; ETA %dh %dm",
                     self.current_gen, h, m, est_h, est_m,
                 )
+        save_pkl(self.unique_networks_path, self.unique_networks_db)
         total_h, total_m = calculate_time(start_time, time.time())
         self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
 
