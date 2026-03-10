@@ -108,6 +108,18 @@ def load_pkl(file_path):
 
     return file
 
+def save_pkl(file_path, obj):
+    from os import makedirs
+    from os.path import dirname
+    from pickle import dump, HIGHEST_PROTOCOL
+
+    parent = dirname(file_path)
+    if parent:
+        makedirs(parent, exist_ok=True)
+
+    with open(file_path, "wb") as f:
+        dump(obj, f, protocol=HIGHEST_PROTOCOL)
+
 def create_info_file(out_path, info_dict, file_name='data_info.txt'):
     """ Saves info in *info_dict* in a txt file.
 
