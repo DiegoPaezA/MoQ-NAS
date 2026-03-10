@@ -532,7 +532,10 @@ class QPopulationNetwork(QPopulation):
             )
 
             q_rows = self.rules.mask_noop_in_targets(q_rows, rows, cols, prior_P=P_sel)
-            winners = np.argmax(q_rows, axis=1)
+            
+            random_noise = np.random.uniform(0, 1e-6, size=q_rows.shape)
+            winners = np.argmax(q_rows + random_noise, axis=1)
+
             consensus = q_rows[np.arange(q_rows.shape[0]), winners]
             bump = eta_base * np.maximum(consensus, 1e-8)
 
