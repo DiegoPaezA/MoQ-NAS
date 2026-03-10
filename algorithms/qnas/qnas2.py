@@ -21,6 +21,7 @@ from utils.helpers import (
     delete_old_dirs_v2,
     init_log,
     load_pkl,
+    save_pkl,
     calculate_time,
     backup_cache,
     load_cache,
@@ -113,13 +114,12 @@ class QNAS(object):
             self.evaluated = {}
             self.eval_history = defaultdict(list)
 
-        # self.history_database_path = os.path.join('network_history', "history_db.json")
-        # os.makedirs(os.path.dirname(self.history_database_path), exist_ok=True)
-        # try:
-        #     self.history_database = load_history_from_json(self.history_database_path)
-        # except Exception:
-        #     self.logger.info("Could not load history database, creating a new one.")
-        #     self.history_database = {}
+        self.unique_networks_path = os.path.join(self.experiment_path, "unique_networks.pkl")
+        self.unique_networks_db = (
+            load_pkl(self.unique_networks_path)
+            if os.path.exists(self.unique_networks_path)
+            else {}
+        )
 
     def initialize_qnas(self, num_quantum_ind, repetition, max_generations, update_quantum_gen,
                         quantum_update_config, replace_method, params_ranges, crossover_rate,
@@ -411,23 +411,80 @@ class QNAS(object):
             decoded_nets[i] = self.qpop_net.chromosome.decode(pop_net[i, :])
         return decoded_params, decoded_nets
 
-    def _eval_pop_without_cache(self, decoded_params, decoded_nets):
-        """Internal: Evaluates the population without using a cache."""
-        self.logger.info("Evaluating population of %d individuals without cache.", len(decoded_nets))
-        results = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
+    def _eval_pop_without_cache(self, decoded_params, decoded_nets, pop_net):
+        """
+        Internal: Evaluates the population without using a cache, while recording
+        a persistent registry of unique evaluated networks.
+
+        Notes
+        -----
+        - Every individual in the population is evaluated.
+        - Each unique network is stored only once in `self.unique_networks_db`.
+        - Repeated networks only update the `visits` counter.
+        - The registry is persisted every 5 generations using `save_pkl(...)`.
+        """
+        num_individuals = len(decoded_nets)
+        metric_key = self.objectives[0]
+
+        self.logger.info(
+            "Evaluating population of %d individuals without cache.", num_individuals
+        )
+
+        results = self.eval_func(
+            decoded_params,
+            decoded_nets,
+            generation=self.current_gen,
+        )
 
         if not results:
-            return [0.0] * len(decoded_nets)
+            self.logger.warning("Evaluation function returned no results.")
+            return np.full(num_individuals, np.nan, dtype=float)
 
-        raw_fits = [0.0] * len(decoded_nets)
-        metric_key = self.objectives[0]
-        for i in range(len(decoded_nets)):
-            candidate_id = decoded_params[i]['candidate_id']
-            if candidate_id in results:
-                raw_fits[i] = results[candidate_id].get(metric_key, 0.0)
+        raw_fits = np.full(num_individuals, np.nan, dtype=float)
 
-        self.total_eval += len(decoded_nets)
-        return np.array(raw_fits, dtype=float)
+        new_unique_count = 0
+        repeated_count = 0
+
+        for i in range(num_individuals):
+            net_key = tuple(pop_net[i])
+            candidate_id = decoded_params[i]["candidate_id"]
+
+            if candidate_id not in results:
+                self.logger.warning(
+                    "Candidate %s was not found in results.", candidate_id
+                )
+                continue
+
+            fitness = float(results[candidate_id].get(metric_key, np.nan))
+            raw_fits[i] = fitness
+
+            if net_key not in self.unique_networks_db:
+                self.unique_networks_db[net_key] = {
+                    "fitness": fitness,
+                    "first_generation": self.current_gen,
+                    "first_index": i,
+                    "candidate_id": candidate_id,
+                    "visits": 1,
+                }
+                new_unique_count += 1
+            else:
+                self.unique_networks_db[net_key]["visits"] += 1
+                repeated_count += 1
+
+        self.total_eval += num_individuals
+
+        if self.current_gen % 5 == 0:
+            save_pkl(self.unique_networks_path, self.unique_networks_db)
+
+        self.logger.info(
+            "Total evals: %d | New unique: %d | Repeated in batch: %d | Total unique so far: %d",
+            self.total_eval,
+            new_unique_count,
+            repeated_count,
+            len(self.unique_networks_db),
+        )
+
+        return raw_fits
 
     def _eval_pop_with_history(self, decoded_params, decoded_nets, pop_net):
         """Internal: Evaluates the population using a persistent history database (memoization)."""
@@ -543,7 +600,7 @@ class QNAS(object):
         if self.use_cache:
             raw_fits = self._eval_pop_with_cache(decoded_params, decoded_nets, pop_net)
         else:
-            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets)
+            raw_fits = self._eval_pop_without_cache(decoded_params, decoded_nets, pop_net)
 
         penalized_fits = raw_fits.copy()
         if self.penalize_number and self.reducing_fns_list:
@@ -826,5 +883,6 @@ class QNAS(object):
             if self.early_stopping and self.check_early_stopping():
                 break
 
+        save_pkl(self.unique_networks_path, self.unique_networks_db)
         total_h, total_m = calculate_time(start_time, time.time())
         self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
