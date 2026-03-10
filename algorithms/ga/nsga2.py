@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from .base_ga import GA
-from utils.helpers import delete_old_dirs_v2, calculate_time
+from utils.helpers import delete_old_dirs_v2, calculate_time, load_pkl, save_pkl
 
 class NSGA2(GA):
     """
@@ -65,6 +65,10 @@ class NSGA2(GA):
                     break # Move to the next active_obj
             if not match_found:
                 print(f"Warning: Could not find a rule for '{active_obj}'")
+                
+        self.unique_networks_path = os.path.join(self.experiment_path, "unique_networks.pkl")
+        self.unique_networks_db = load_pkl(self.unique_networks_path) if os.path.exists(self.unique_networks_path) else {}
+                
 
     def _evaluate_with_cache(self):
         """Private method to evaluate the population using the cache."""
@@ -99,6 +103,105 @@ class NSGA2(GA):
                 self.eval_cache[keys[original_index]] = res_dict
         
         return np.array(fits, dtype=float)
+
+    def _evaluate_without_cache_with_registry(self, decoded_params, decoded_nets, pop):
+        """
+        Evaluate the full population without cache, while recording a persistent
+        registry of unique evaluated networks.
+
+        Notes
+        -----
+        - Every individual in the population is evaluated.
+        - Each unique network is stored only once in `self.unique_networks_db`.
+        - Repeated networks only update the `visits` counter.
+        - The registry is persisted every 5 generations using `save_pkl(...)`.
+        """
+        num_individuals = len(decoded_nets)
+        num_objectives = len(self.objectives)
+
+        self.logger.info(
+            "Evaluating population of %d individuals without cache.", num_individuals
+        )
+
+        results_dict = self.eval_func(
+            decoded_params,
+            decoded_nets,
+            generation=self.current_gen,
+        )
+
+        if not results_dict:
+            self.logger.warning("Evaluation function returned no results.")
+            return np.full((num_individuals, num_objectives), np.nan, dtype=float)
+
+        fits = np.full((num_individuals, num_objectives), np.nan, dtype=float)
+
+        new_unique_count = 0
+        repeated_count = 0
+
+        for i in range(num_individuals):
+            net_key = tuple(pop[i])
+
+            if i not in results_dict:
+                self.logger.warning(
+                    "Individual at index %d was not found in results.", i
+                )
+                continue
+
+            res_dict = results_dict[i]
+            metric_vals = [float(res_dict.get(obj, np.nan)) for obj in self.objectives]
+            fits[i] = metric_vals
+
+            if net_key not in self.unique_networks_db:
+                self.unique_networks_db[net_key] = {
+                    "fitness": metric_vals,
+                    "first_generation": self.current_gen,
+                    "first_index": i,
+                    "candidate_id": decoded_params[i].get("candidate_id"),
+                    "visits": 1,
+                }
+                new_unique_count += 1
+            else:
+                self.unique_networks_db[net_key]["visits"] += 1
+                repeated_count += 1
+
+        self.total_eval += num_individuals
+
+        if self.current_gen % 5 == 0:
+            save_pkl(self.unique_networks_path, self.unique_networks_db)
+
+        self.logger.info(
+            "Total evals: %d | New unique: %d | Repeated in batch: %d | Total unique so far: %d",
+            self.total_eval,
+            new_unique_count,
+            repeated_count,
+            len(self.unique_networks_db),
+        )
+
+        return fits
+    # def evaluate_population(self):
+    #     """
+    #     Evaluates the current population. Uses a cache if enabled, otherwise
+    #     evaluates the entire population directly.
+    #     """
+    #     if self.use_cache:
+    #         self.fitnesses = self._evaluate_with_cache()
+    #     else:
+    #         # Bypass the cache and evaluate the entire population
+    #         decoded_nets, decoded_params = self.decode_pop()
+            
+    #         # eval_func returns a dictionary mapping index -> result_dict
+    #         results_dict = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
+            
+    #         N = len(decoded_params)
+    #         fits = np.zeros((N, len(self.objectives)))
+            
+    #         for index, res_dict in results_dict.items():
+    #             metric_vals = [res_dict[key] for key in self.objectives]
+    #             fits[index] = metric_vals
+                
+    #         self.fitnesses = np.array(fits, dtype=float)
+        
+    #     return self.fitnesses
     
     def evaluate_population(self):
         """
@@ -108,21 +211,13 @@ class NSGA2(GA):
         if self.use_cache:
             self.fitnesses = self._evaluate_with_cache()
         else:
-            # Bypass the cache and evaluate the entire population
             decoded_nets, decoded_params = self.decode_pop()
-            
-            # eval_func returns a dictionary mapping index -> result_dict
-            results_dict = self.eval_func(decoded_params, decoded_nets, generation=self.current_gen)
-            
-            N = len(decoded_params)
-            fits = np.zeros((N, len(self.objectives)))
-            
-            for index, res_dict in results_dict.items():
-                metric_vals = [res_dict[key] for key in self.objectives]
-                fits[index] = metric_vals
-                
-            self.fitnesses = np.array(fits, dtype=float)
-        
+            self.fitnesses = self._evaluate_without_cache_with_registry(
+                decoded_params=decoded_params,
+                decoded_nets=decoded_nets,
+                pop=self.population,
+            )
+
         return self.fitnesses
     
     def compute_hypervolume_mixed(self, front_raw: np.ndarray, ref_point=None) -> float:
@@ -490,7 +585,8 @@ class NSGA2(GA):
                     "Gen %d: elapsed %dh %dm; ETA %dh %dm",
                     self.current_gen, h, m, est_h, est_m,
                 )
-            
+
+        save_pkl(self.unique_networks_path, self.unique_networks_db)
         total_time = time.time() - start_time
         hours, rem = divmod(total_time, 3600)
         minutes, _ = divmod(rem, 60)
