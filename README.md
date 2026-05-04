@@ -177,6 +177,9 @@ pip install -r requirements.txt
 
 ## To-Do
 - [ ] Add more search algorithms (e.g., DARTS, ENAS).
+- [ ] Improve FP8 mixed-precision training support.
+- [ ] Implement additional fairness metrics (e.g., Equal Opportunity, Demographic Parity).
+- [ ] Add support for more datasets and tasks (e.g., object detection, segmentation).
 
 ## License
 
