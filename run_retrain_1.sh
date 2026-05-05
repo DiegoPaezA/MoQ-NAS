@@ -4,7 +4,7 @@
 dataset="cifar10"
 network_config="default"
 
-exp="exp23"
+exp="exp21"
 # Loop para repetir tres veces
 for repeat in 1 2 3; do
     echo "Starting $exp F13 repeat $repeat"
@@ -12,7 +12,7 @@ for repeat in 1 2 3; do
     #exp_path="experiment_v3_${dataset}/${exp}_repeat_${repeat}"
 
     # Retrain model
-    CUDA_VISIBLE_DEVICES=1 python retrain_model.py \
+    CUDA_VISIBLE_DEVICES=0 python retrain_model.py \
         --experiment_path "$exp_path" \
         --data_path "datasets/${dataset}_data" \
         --dataset "$dataset" \

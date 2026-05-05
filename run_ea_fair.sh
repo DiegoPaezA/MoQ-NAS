@@ -6,24 +6,26 @@
 
 # —— Which algorithms to run (choose any of: ga, nsga2, nsga3, moead) ——
 #algos=("ga" "nsga2" "nsga3" "moead")
-algos=("nsga3")
+algos=("nsga2")
 
 # —— Experiment settings ——
-dataset="cifar10"
-data_path="datasets/${dataset}_data"
-config_dir="config_files/config_files_cifar"
+dataset="personbin"
+data_path="datasets/${dataset}_data_96"
+config_dir="config_files/config_files_fairness"
 exp_root="experiment_${dataset}_ea"
 log_level="INFO"
 network_config="default"
-backbone_name="resnet18"   # used only if network_config="backbone"
+backbone_name="resnet18"           # used only if network_config="backbone"
 fitness_metric="best_accuracy"
+dataset_sample_size=10000
 
 # NEW: dataset YAML path derived from dataset name
-config_path_dataset="configs/${dataset}.yaml"
+config_path_dataset="configs/person_bin_96.yaml"
+
 
 # —— GA/NSGA/MOEA-D shared hyperparameters ——
-population_size=20
-num_generations=150
+population_size=24
+num_generations=100
 max_num_nodes=20
 crossover_rate=0.5
 mutation_rate=0.2
@@ -43,9 +45,9 @@ moead_pneighbor=0.9        # prob of mating within neighborhood
 
 # —— dataset size & repeats ——
 dataset_sample_size=10000
-configs=("config0.txt")
-exps=("exp2")
-cuda_devices=("1")
+configs=("config0_3_5.txt")
+exps=("exp1")
+cuda_devices=("0,1")
 num_repeats=3
 
 # --------------- Runner ---------------

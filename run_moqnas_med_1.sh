@@ -8,10 +8,10 @@
 #algos=("qnas" "moqnas")
 algos=("moqnas")
 # —— Experiment settings ——
-dataset="personbin"
-data_path="datasets/${dataset}_data_96"
-config_dir="config_files/config_files_fairness"
-exp_root="experiment_${dataset}_qfamily"
+dataset="pathmnist"
+data_path="datasets/${dataset}_data"
+config_dir="config_files/config_files_med_mo"
+exp_root="experiment_${dataset}_medmnist"
 log_level="INFO"
 network_config="default"
 backbone_name="resnet18"           # used only if network_config="backbone"
@@ -19,7 +19,7 @@ fitness_metric="best_accuracy"
 dataset_sample_size=10000
 
 # NEW: dataset YAML path derived from dataset name
-config_path_dataset="configs/person_bin_96.yaml"
+config_path_dataset="configs/${dataset}.yaml"
 
 # —— Common toggles (kept from your scripts) ——
 use_cache=false                     
@@ -37,15 +37,16 @@ enforce_noop_in_update=true
 # —— MO-QNAS-specific ——
 optimizer="AdamW"                   
 save_checkpoints_epochs=5           
-data_augmentation=true     
+data_augmentation=false             
 elite_mode_moqnas="moead_topk"      # "single"|"global_k"|"bootstrap_k"|"old"|"moead_topk"  
-ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"                             
+ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"
+multi_objective=true               # true | false                             
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0_4.txt")
-exps=("exp3")
-cuda_devices=("0,1")
+configs=("config0_3_5.txt")
+exps=("exp1")
+cuda_devices=("1")
 num_repeats=3
 
 # --------------- Runner ---------------
@@ -56,7 +57,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
   for algo in "${algos[@]}"; do
     echo "=== ${algo} | ${dataset} | ${configs[$j]} | CUDA=${cuda} ==="
-    for ((i=3; i<=num_repeats; i++)); do
+    for ((i=1; i<=num_repeats; i++)); do
       exp_path="${exp_root}/${algo}/${exp}_repeat_${i}"
       mkdir -p "${exp_path}"
 
