@@ -1,5 +1,4 @@
 # Configuration file 1 : group 1
-
 QNAS:
     crossover_rate: 0.5
     max_generations: 150

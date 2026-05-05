@@ -4,7 +4,7 @@ QNAS:
     crossover_rate: 0.5
     max_generations: 100
     max_num_nodes: 20
-    num_quantum_ind: 5
+    num_quantum_ind: 6
     penalize_number: 3
     repetition: 4
     replace_method: best
@@ -65,8 +65,8 @@ QNAS:
                      'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
 
 train:
-    batch_size: 128
-    eval_batch_size: 128
+    batch_size: 64
+    eval_batch_size: 64
     max_epochs: 50
     epochs_to_eval: 5 
     optimizer: AdamW
@@ -89,7 +89,7 @@ train:
     num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 20
+    threads: 10
 
     # Network structure Configuration
     network_config: default
