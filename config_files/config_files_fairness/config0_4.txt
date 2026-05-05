@@ -2,9 +2,9 @@
 
 QNAS:
     crossover_rate: 0.5
-    max_generations: 150
+    max_generations: 100
     max_num_nodes: 20
-    num_quantum_ind: 5
+    num_quantum_ind: 6
     penalize_number: 3
     repetition: 4
     replace_method: best
@@ -24,7 +24,7 @@ QNAS:
     # --- Network Architecture Rules ---
     terminal_op_name: "no_op"
     pool_op_name: "pool"
-    min_active_len: 5
+    min_active_len: 1
     truncate_after_noop: false
     avoid_consecutive_pool: false
     enforce_noop_in_update: true
@@ -65,8 +65,8 @@ QNAS:
                      'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
 
 train:
-    batch_size: 256
-    eval_batch_size: 256
+    batch_size: 64
+    eval_batch_size: 64
     max_epochs: 50
     epochs_to_eval: 5 
     optimizer: AdamW
@@ -82,14 +82,14 @@ train:
     loader_seed: 777                             # controls DataLoader shuffling
     download: true                               # safe even if files already exist
     stats_max_batches: 10                        # used only if YAML sets stats_mode: sample
-    data_augmentation: false
+    data_augmentation: true
     subtract_mean: true
     limit_data: true
     limit_data_value: 10000
     num_workers: 4
 
     # Hardware settings - parallelization
-    threads: 20
+    threads: 10
 
     # Network structure Configuration
     network_config: default
@@ -97,16 +97,20 @@ train:
 
     # Multi-objective parameters
     multi_objective: True
-    num_objectives: 3
-    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
+    num_objectives: 2
+    objectives: ['best_accuracy', 'fairness_spd'] # Added fairness objectives
     metrics:
       - name: Accuracy
       - name: HardwareMetrics
-      - name: ValidationLossFitness
-      - name: ScalarizedFitness
+      - name: FairnessMetric
         params:
-          metric_type: loss
-          max_params: 114090
-          max_inference_time: 1000
+          eval_dataset_name: 'facet'
+          eval_skintone_method: 'soft'
+          eval_dataset_path: 'datasets/facet_data/facet_eval.csv'
+          optimization_objective: 'spd_sum'
+          beta: 0.2
+          cache_dir: '.cache/facet_crops'
+          square_mode: letterbox
+          batch_size_fairness: 128
     artifacts:
       - name: ConfusionMatrix

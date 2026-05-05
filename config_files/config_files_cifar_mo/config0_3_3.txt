@@ -1,5 +1,4 @@
 # Configuration file 1 : group 1
-
 QNAS:
     crossover_rate: 0.5
     max_generations: 150
@@ -8,8 +7,8 @@ QNAS:
     penalize_number: 3
     repetition: 4
     replace_method: best
-    update_quantum_gen: 1
-    crossover_frequency: 1
+    update_quantum_gen: 5
+    crossover_frequency: 5
     pop_crossover_rate: 0.4 # offspring replacement proportion in the population
     pop_crossover_method: ['hux', 'one_point', 'two_point'] # 'hux' | 'one_point' | 'two_point'
     mo_crossover_strategy: directional # random_elite
@@ -24,7 +23,7 @@ QNAS:
     # --- Network Architecture Rules ---
     terminal_op_name: "no_op"
     pool_op_name: "pool"
-    min_active_len: 5
+    min_active_len: 1
     truncate_after_noop: false
     avoid_consecutive_pool: false
     enforce_noop_in_update: true

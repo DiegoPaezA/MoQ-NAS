@@ -1,5 +1,4 @@
 # Configuration file 1 : group 1
-
 QNAS:
     crossover_rate: 0.5
     max_generations: 150
@@ -24,7 +23,7 @@ QNAS:
     # --- Network Architecture Rules ---
     terminal_op_name: "no_op"
     pool_op_name: "pool"
-    min_active_len: 5
+    min_active_len: 1
     truncate_after_noop: false
     avoid_consecutive_pool: false
     enforce_noop_in_update: true
@@ -32,10 +31,10 @@ QNAS:
     noop_ramp_cap: true
 
     quantum_update_config:
-      quantum_rate_schedule: 'cosine'                     # use 'cosine' schedule or 'static'
-      max_update_schedule: 'cosine'                       # use 'cosine' schedule or 'static'
-      static_quantum_rate: 0.1                            # (Your old 0.4 / 5)
-      static_max_update: 0.05                             # (Your old 0.105 / 5)
+      quantum_rate_schedule: 'static'                     # use 'cosine' schedule or 'static'
+      max_update_schedule: 'static'                       # use 'cosine' schedule or 'static'
+      static_quantum_rate: 0.175
+      static_max_update: 0.06305
       quantum_rate_schedule_params:                       # Parameters for 'cosine cyclic' rate schedule
           start: 0.25                                      # Scaled down from 0.4
           end: 0.1                                       # Scaled down from ~0.01
