@@ -31,7 +31,7 @@ elite_mode_qnas="global_k"          # "single" | "global_k" | "bootstrap_k" | "o
 # Architecture rule toggles (enabled by default in your repo).
 # Set to false to APPEND the corresponding '--no-...' flag (matching your scripts).
 truncate_after_noop=false           
-avoid_consecutive_pool=false         
+avoid_consecutive_pool=true         
 enforce_noop_in_update=true         
 
 # —— MO-QNAS-specific ——
@@ -44,8 +44,8 @@ multi_objective=true               # true | false
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0_2.txt")
-exps=("exp10")
+configs=("config0_3_5.txt")
+exps=("exp24")
 cuda_devices=("0")
 num_repeats=3
 

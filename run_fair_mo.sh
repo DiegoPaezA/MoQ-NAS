@@ -37,14 +37,14 @@ enforce_noop_in_update=true
 # —— MO-QNAS-specific ——
 optimizer="AdamW"                   
 save_checkpoints_epochs=5           
-data_augmentation=false             
+data_augmentation=true     
 elite_mode_moqnas="moead_topk"      # "single"|"global_k"|"bootstrap_k"|"old"|"moead_topk"  
 ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"                             
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0.txt")
-exps=("exp1")
+configs=("config0_4.txt")
+exps=("exp3")
 cuda_devices=("0,1")
 num_repeats=3
 
@@ -56,7 +56,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
 
   for algo in "${algos[@]}"; do
     echo "=== ${algo} | ${dataset} | ${configs[$j]} | CUDA=${cuda} ==="
-    for ((i=1; i<=num_repeats; i++)); do
+    for ((i=3; i<=num_repeats; i++)); do
       exp_path="${exp_root}/${algo}/${exp}_repeat_${i}"
       mkdir -p "${exp_path}"
 
@@ -72,6 +72,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
         --network_config       "${network_config}"
         --backbone_name        "${backbone_name}"
         --log_level            "${log_level}"
+        --gpu_list             "${cuda_devices}"
         $($use_cache && echo --use_cache)
         $($early_stopping && echo --early_stopping)
         $($en_pop_crossover && echo --en_pop_crossover)
@@ -92,6 +93,7 @@ for ((j=0; j<${#configs[@]}; j++)); do
           --save_checkpoints_epochs "${save_checkpoints_epochs}" \
           --elite_mode "${elite_mode_moqnas}" \
           --ref_dir_method "${ref_dir_method}" \
+          $($multi_objective && echo --multi_objective) \
           $( [[ -n "${continue_path}" ]] && echo --continue_path "${continue_path}" ) \
           $( $data_augmentation && echo --data_augmentation )
       fi

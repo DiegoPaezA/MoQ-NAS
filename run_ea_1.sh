@@ -6,7 +6,7 @@
 
 # —— Which algorithms to run (choose any of: ga, nsga2, nsga3, moead) ——
 #algos=("ga" "nsga2" "nsga3" "moead")
-algos=("ga")
+algos=("nsga3")
 
 # —— Experiment settings ——
 dataset="cifar10"
@@ -44,7 +44,7 @@ moead_pneighbor=0.9        # prob of mating within neighborhood
 # —— dataset size & repeats ——
 dataset_sample_size=10000
 configs=("config0.txt")
-exps=("exp4")
+exps=("exp2")
 cuda_devices=("1")
 num_repeats=3
 
