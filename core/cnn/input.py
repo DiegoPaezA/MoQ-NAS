@@ -8,8 +8,6 @@ THIS VERSION RELIES **ONLY** ON YAML CONFIGS.
 """
 
 import os
-import random
-from time import time
 from typing import Optional, Tuple
 
 import torch
@@ -109,7 +107,7 @@ class GenericDataLoader:
                 - data_path: root data folder
                 - config_path_dataset: path to YAML config describing this dataset
             train_split (float): Split ratio for training data (torchvision family).
-            seed (int): Seed for randomization (defaults to time()).
+            seed (int): Fallback seed when the config lacks split_seed/loader_seed.
             info (dict): Unused (kept for API compatibility).
         """
         self.params = params
@@ -123,12 +121,12 @@ class GenericDataLoader:
                 "Place your file under configs/ and set params['config_path_dataset'] accordingly."
             )
 
-        # Seed RNGs
-        if seed is None:
-            seed = int(time())
-        random.seed(seed)
-        torch.manual_seed(seed)
-        self.seed = seed
+        # Fallback seed for split/loader when not given in the config.
+        # NOTE: must NOT touch the global RNGs (random/torch) here — doing so
+        # used to reseed them with time() and silently break --seed runs.
+        # All loader randomness goes through local generators (_make_gen)
+        # seeded from split_seed/loader_seed (or this fallback).
+        self.seed = int(params.get("seed", 42)) if seed is None else seed
 
         # Paths & policy
         self.data_path = self.params["data_path"]
