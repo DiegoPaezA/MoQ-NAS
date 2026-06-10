@@ -40,6 +40,17 @@ Correcciones incorporadas respecto al roadmap original:
 
 ---
 
+## Erratum — desviaciones encontradas al ejecutar las etapas 0/0.5 (2026-06-10)
+
+Correcciones que aplican a TODOS los scripts de verificación de etapas posteriores:
+
+1. **Los `config0.txt` del roadmap ya no parsean.** `core/config.py` exige claves nuevas (`mo_crossover_strategy`, `quantum_update_config`, etc.) ausentes en los configs viejos. Usar `config_files/config_files_cifar_mo/config0_3.txt` en TODOS los smoke runs (la ruta cambiará con los renombrados A.6/A.7).
+2. **moqnas/qnas ignoraban `--num_generations`/`--population_size`** (leían solo el config). El baseline moqnas de 0.5 usó `.refactor_baseline/config_moqnas_baseline.txt` (config0_3 con `max_generations: 1`). Desde la etapa 0.6, `--num_generations` SÍ sobreescribe `max_generations` para qnas/moqnas; `--population_size` sigue sin aplicar (la población es `num_quantum_ind × repetition`).
+3. **No hay líneas "hypervolume" en logs de 1 generación** — los grep de HV del roadmap no encuentran nada. Comparar las líneas por candidato `best_accuracy=` / `total_params=` en su lugar.
+4. **La accuracy entrenada NO era reproducible en 0.5 (~1-3 pp de spread) aunque las arquitecturas/`total_params` sí eran bit-exactas.** Causa raíz (diagnosticada con corridas `threads: 1`): `GenericDataLoader.__init__` resembraba los RNG globales (`random`, `torch`) con `int(time())`, destruyendo `--seed`; numpy no se tocaba, por eso las arquitecturas eran estables. Contribuía además el interleaving de workers y el avance del generator del DataLoader entre candidatos del mismo proceso. **Resuelto en la etapa 0.6** — accuracy por candidato es bit-exacta entre corridas e independiente del número de threads. Los baselines de 0.5 (`baseline_*.log`) son anteriores al fix: para comparaciones end-to-end del Bloque D usar los logs de `.refactor_baseline/expB_run1` (post-0.6) o regenerar baselines, comparando accuracy por candidato (bit-exacta), no solo arquitecturas.
+
+---
+
 ## Principios operativos
 
 1. **Una etapa, un commit.** Si la post-verificación falla, `git restore .` y reanálisis; nunca se acumulan cambios.
@@ -170,6 +181,33 @@ diff <(grep -i hypervolume .refactor_baseline/baseline_nsga2.log | tail -1) \
 ```
 
 **Métrica de éxito.** `set_global_seeds` importable; 4 baselines seeded generados; dos corridas con misma semilla coinciden (o se documenta el caveat cuDNN y la tolerancia a usar). `git commit -m "refactor(0.5): add global seeding and reproducible baselines"`.
+
+---
+
+## ETAPA 0.6 — siembra determinista por candidato y override de generaciones  *(NUEVA, surgida del erratum 0.5)*
+
+**Objetivo atómico.** Hacer la accuracy entrenada bit-exacta entre corridas con la misma semilla, independiente del scheduling de threads, y hacer que `--num_generations` aplique a qnas/moqnas. Sin esto, los checks end-to-end del Bloque D solo podrían comparar arquitecturas, no fitness.
+
+**Diagnóstico previo (experimento A).** Dos corridas nsga2 secuenciales con `threads: 1` y misma semilla seguían difiriendo en accuracy (arquitecturas bit-exactas). Causa raíz: `core/cnn/input.py` resembraba `random`/`torch` globales con `int(time())` en `GenericDataLoader.__init__`.
+
+**Instrucciones de refactorización.**
+1. `core/cnn/input.py`: eliminar el reseed global con `time()`; el loader solo usa generadores locales (`split_seed`/`loader_seed`, fallback `params['seed']`).
+2. `utils/seeding.py`: añadir `seed_candidate(global_seed, generation, candidate_id)` que resiembra `random`/`numpy`/`torch` con `(global_seed + 100_003·generation + candidate_id) % 2³¹` y devuelve la semilla derivada.
+3. `core/evaluation.py`: en `run_individuals`, antes de cada `master.fitness`, llamar `seed_candidate(...)` y resembrar `train_loader.generator` con la semilla derivada (el loader es compartido por los candidatos del mismo proceso; su generator avanza entre candidatos).
+4. `core/config.py`: añadir `'seed'` a `train_override_keys` para que el seed CLI llegue a `train_spec` (y de ahí a `EvalPopulation`).
+5. `run_all_evolution.py`: `--num_generations` con default `None`; si se pasa y el algo es qnas/moqnas, sobreescribe `config.QNAS_spec['max_generations']`; si no se pasa, GA-family usa 50 y qnas/moqnas usan el config.
+
+**Script de post-verificación (experimento B).**
+```bash
+# 3 corridas nsga2 seed=42 pop=4: run1/run2 con threads=4, run3 con threads=2
+bash .refactor_baseline/expB.sh
+# debe imprimir: run1 vs run2 BIT-EXACTO, run1 vs run3 BIT-EXACTO
+# override moqnas: con config0_3 (max_generations: 150) + --num_generations 1
+# debe loguear "Overriding config max_generations (150) with --num_generations 1"
+# y terminar tras 1 generación.
+```
+
+**Métrica de éxito.** Accuracy por candidato bit-exacta entre corridas con la misma semilla e independiente de `threads`; moqnas respeta `--num_generations`. `git commit -m "refactor(0.6): per-candidate deterministic seeding and qnas/moqnas generation override"`.
 
 ---
 
