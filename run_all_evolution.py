@@ -5,6 +5,7 @@ from typing import Tuple
 from core import config as cfg
 from core import evaluation
 from utils.helpers import check_files, init_log, download_dataset
+from utils.seeding import set_global_seeds
 
 from algorithms.qnas.moqnas import MOQNAS
 from algorithms.qnas import qnas2 as qnas
@@ -57,7 +58,9 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
 
 
 def main(**args):
+    set_global_seeds(args.get('seed', 42))
     logger = init_log(args['log_level'], name=__name__)
+    logger.info(f"Global seed set to {args.get('seed', 42)}")
     config, eval_pop, _ = _bootstrap(logger, args)
 
     algo = args.get('algo', 'nsga2').lower()
@@ -222,6 +225,8 @@ if __name__ == '__main__':
                         help='If resuming a previous evolution, point to its experiment path.')
     parser.add_argument('--log_level', choices=['NONE', 'INFO', 'DEBUG'], default='NONE',
                         help='Logging verbosity.')
+    parser.add_argument('--seed', type=int, default=int(os.environ.get('REFACTOR_SEED', 42)),
+                        help='Global RNG seed (random/numpy/torch). Defaults to $REFACTOR_SEED or 42.')
 
     # Training / pipeline toggles (kept from your scripts)
     parser.add_argument('--optimizer', type=str, default='AdamW',
