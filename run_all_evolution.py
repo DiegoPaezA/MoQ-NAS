@@ -40,6 +40,15 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     logger.info(f"Getting parameters from {args['config_file']} ...")
     config = cfg.ConfigParameters(args, phase=phase)
     config.get_parameters()
+
+    # qnas/moqnas read generations from the config; let the CLI flag win.
+    # Must happen before save_params_logfile so continue_evolution (which
+    # reloads the saved params) sees the overridden value.
+    if args.get('num_generations') is not None and args.get('algo', '').lower() in ('qnas', 'moqnas'):
+        logger.info(f"Overriding config max_generations ({config.QNAS_spec.get('max_generations')}) "
+                    f"with --num_generations {args['num_generations']}")
+        config.QNAS_spec['max_generations'] = args['num_generations']
+
     logger.info(f"Saving parameters for {config.phase} phase ...")
     config.save_params_logfile()
 
@@ -65,6 +74,9 @@ def main(**args):
 
     algo = args.get('algo', 'nsga2').lower()
     logger.info(f"Selected algorithm: {algo}")
+
+    if args.get('num_generations') is None:
+        args['num_generations'] = 50  # GA-family default; qnas/moqnas use the config value
 
     # If fn_list wasn’t set via CLI, fall back to config
     if args.get('fn_list') is None:
@@ -251,7 +263,9 @@ if __name__ == '__main__':
 
     # GA/NSGA params
     parser.add_argument('--population_size', type=int, default=20)
-    parser.add_argument('--num_generations', type=int, default=50)
+    parser.add_argument('--num_generations', type=int, default=None,
+                        help='Number of generations. Defaults: 50 for ga/nsga2/nsga3/moead; '
+                             'config max_generations for qnas/moqnas (CLI value overrides it).')
     parser.add_argument('--max_num_nodes', type=int, default=20)
     parser.add_argument('--fn_list', nargs='+', type=str, default=None,
                         help='Layer/op names used to decode chromosomes (fallback to config).')

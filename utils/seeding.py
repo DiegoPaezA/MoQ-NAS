@@ -42,3 +42,23 @@ def set_global_seeds(seed: int = 42, deterministic: bool = True) -> None:
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def seed_candidate(global_seed: int, generation: int, candidate_id: int) -> int:
+    """Reseed all RNGs deterministically for one candidate evaluation.
+
+    Called by each evaluation worker right before training a candidate, so
+    weight initialization, dropout and data shuffling depend only on
+    ``(global_seed, generation, candidate_id)`` — not on which worker
+    process trains the candidate or how many candidates it trained before.
+    This makes per-candidate trained accuracy bit-exact across runs even
+    with parallel evaluation threads.
+
+    Returns the derived seed (useful for logging).
+    """
+    seed = (global_seed + 100_003 * generation + candidate_id) % (2**31)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    return seed

@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 import torch.multiprocessing as mp
 from .cnn import input, master
 from utils.helpers import init_log, setup_dataset_info
+from utils.seeding import seed_candidate
 
 worker_data_loader = None
 
@@ -25,6 +26,7 @@ class EvalPopulation(object):
     def __init__(self, params: dict, fn_dict: dict, log_level: str = 'INFO'):
         self.fn_dict = fn_dict
         self.logger = init_log(log_level, name=__name__)
+        self.global_seed = int(params.get('seed', 42))
         self.loader = input.GenericDataLoader(params=params)
         self.train_params = setup_dataset_info(params)
         if 'objectives' not in self.train_params:
@@ -186,8 +188,18 @@ class EvalPopulation(object):
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
 
         for original_idx, thread_id, decoded_net, decoded_params in individuals_thread:
-            id_str = f"{generation}_{decoded_params.get('candidate_id', original_idx)}"
+            candidate_id = decoded_params.get('candidate_id', original_idx)
+            id_str = f"{generation}_{candidate_id}"
             model_path = None
+            # Per-candidate deterministic seeding: accuracy must not depend on
+            # which worker trains the candidate or in what order.
+            cand_seed_id = candidate_id if isinstance(candidate_id, int) else original_idx
+            cand_seed = seed_candidate(self.global_seed, generation, cand_seed_id)
+            # The loader is shared by all candidates of this process; reseed its
+            # generator so shuffle order/augmentation don't depend on how many
+            # candidates were trained before in the same process.
+            if getattr(train_loader, 'generator', None) is not None:
+                train_loader.generator.manual_seed(cand_seed)
             try:
                 results_dict, model_path = master.fitness(id_str,
                             {**train_params, 'device': gpu_device},
