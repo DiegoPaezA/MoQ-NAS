@@ -4,6 +4,14 @@
 # deprecation happens in F.3 — import from the topic modules in new code.
 # Note: the old standalone load_evolved_data was removed on purpose (F.2);
 # the canonical implementation is core.config.ConfigParameters.load_evolved_data.
+import warnings
+
+warnings.warn(
+    "utils.helpers is deprecated. Import from utils.io, utils.logging_utils, "
+    "utils.experiment, utils.dataset or utils.visualization instead.",
+    DeprecationWarning, stacklevel=2,
+)
+
 from utils.io import (
     load_yaml, save_pkl, load_pkl, create_info_file, save_results_file,
     load_log_params_evolution, load_pareto_history, load_history_from_json,
