@@ -3,7 +3,7 @@
 Generic data loader for PyTorch, supporting various datasets and data augmentation.
 
 THIS VERSION RELIES **ONLY** ON YAML CONFIGS.
-- Expects params["config_path_dataset"] to point to a YAML file in configs/.
+- Expects params["config_path_dataset"] to point to a YAML file in dataset_configs/.
 - Uses dataset_utils modules for transforms and dataset construction.
 """
 
@@ -118,7 +118,7 @@ class GenericDataLoader:
         if "config_path_dataset" not in self.params or not os.path.isfile(self.params["config_path_dataset"]):
             raise FileNotFoundError(
                 "config_path_dataset is required and must point to a valid YAML file. "
-                "Place your file under configs/ and set params['config_path_dataset'] accordingly."
+                "Place your file under dataset_configs/ and set params['config_path_dataset'] accordingly."
             )
 
         # Fallback seed for split/loader when not given in the config.

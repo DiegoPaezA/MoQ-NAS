@@ -22,7 +22,7 @@ from verify_splits import verify_loader_splits, summarize_balance, class_balance
 params = {
     "dataset": "cifar10",
     "data_path": "./cifar10_data",
-    "config_path_dataset": "configs/cifar10.yaml",
+    "config_path_dataset": "dataset_configs/cifar10.yaml",
     "batch_size": 256,
     "eval_batch_size": 256,
     "num_workers": 2,
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     params = {
         "dataset": "cifar10",
         "data_path": "./cifar10_data",
-        "config_path_dataset": "configs/cifar10.yaml",
+        "config_path_dataset": "dataset_configs/cifar10.yaml",
         "batch_size": 256,
         "eval_batch_size": 256,
         "num_workers": 2,

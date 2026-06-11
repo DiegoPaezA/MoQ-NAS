@@ -19,7 +19,7 @@ backbone_name="resnet18"   # used only if network_config="backbone"
 fitness_metric="best_accuracy"
 
 # NEW: dataset YAML path derived from dataset name
-config_path_dataset="configs/${dataset}.yaml"
+config_path_dataset="dataset_configs/${dataset}.yaml"
 
 # —— GA/NSGA/MOEA-D shared hyperparameters ——
 population_size=20

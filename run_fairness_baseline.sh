@@ -15,8 +15,8 @@ IMG_SIZE=96
 RESIZE_MODE="letterbox"
 
 # Config files
-CONFIG_PERSON="configs/person_bin_96.yaml"
-CONFIG_FACE="configs/face_bin_96.yaml"
+CONFIG_PERSON="dataset_configs/person_bin_96.yaml"
+CONFIG_FACE="dataset_configs/face_bin_96.yaml"
 
 # Data paths
 DATA_PERSON="datasets/personbin_data_96"
