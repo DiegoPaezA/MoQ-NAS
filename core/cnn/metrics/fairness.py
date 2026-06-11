@@ -33,6 +33,9 @@ class FairnessMetric(BaseMetric):
         self.eval_skintone_method = self._init_args.get('eval_skintone_method', 'soft').lower()
         self.img_size = self._init_args.get('img_size', 224)
         self.square_mode = self._init_args.get('square_mode', 'letterbox')
+        # Injected by EvalPopulation from the run's precision policy
+        # ('fp32'|'fp16'|'bf16'); defaults to fp32 when constructed directly.
+        self.precision = self._init_args.get('precision', 'fp32')
 
         if not all([self.model, self.device, self.eval_dataset_name, self.beta]):
             raise ValueError(f"FairnessMetric is missing required arguments. Provided: {list(self._init_args.keys())}")
@@ -47,13 +50,22 @@ class FairnessMetric(BaseMetric):
 
     def _autocast_kwargs(self):
         """
-        Prefer bf16 when supported (A100/L40S), otherwise fp16 (e.g., 3090).
-        Works across most CUDA GPUs. Disabled on CPU.
+        Autocast settings derived from the run's precision policy, so
+        fairness evaluation always uses the same dtype as training.
+        bf16 hardware support acts only as a guard, never as a selector.
+        Disabled on CPU and for fp32.
         """
-        if self.device.type == 'cuda':
-            use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-            return dict(device_type='cuda', dtype=(torch.bfloat16 if use_bf16 else torch.float16), enabled=True)
-        return dict(device_type='cpu', enabled=False)
+        if self.device.type != 'cuda':
+            return dict(device_type='cpu', enabled=False)
+        if self.precision == 'fp32':
+            return dict(device_type='cuda', enabled=False)
+        if self.precision == 'bf16' and not torch.cuda.is_bf16_supported():
+            raise RuntimeError(
+                f"precision='bf16' was requested for fairness evaluation but "
+                f"CUDA device '{torch.cuda.get_device_name(self.device)}' has "
+                f"no native bfloat16 support. Use precision='fp16' or 'fp32'.")
+        dtype = torch.bfloat16 if self.precision == 'bf16' else torch.float16
+        return dict(device_type='cuda', dtype=dtype, enabled=True)
 
     def reset(self):
         self._results = {}
