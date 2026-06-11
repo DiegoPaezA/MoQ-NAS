@@ -197,6 +197,8 @@ medmodels*/*
 
 # Results
 exp*/
+# exp*/ is for result dirs (experiment_cifar10_*, ...); keep the configs tracked
+!experiment_configs/
 # Logs
 logs/
 .refactor_baseline/
