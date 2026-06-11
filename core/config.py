@@ -12,7 +12,6 @@ import numpy as np
 import yaml
 import re
 
-from algorithms.qnas.chromosome import QChromosomeNetwork, QChromosomeParams
 from .cnn import model
 from utils.helpers import load_yaml, load_pkl, natural_key
 
