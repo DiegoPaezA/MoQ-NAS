@@ -10,7 +10,7 @@ algos=("moqnas")
 # —— Experiment settings ——
 dataset="personbin"
 data_path="datasets/${dataset}_data_96"
-config_dir="config_files/config_files_fairness"
+config_dir="experiment_configs/fairness"
 exp_root="experiment_${dataset}_qfamily"
 log_level="INFO"
 network_config="default"
@@ -43,7 +43,7 @@ ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0.txt")
+configs=("config0.yaml")
 exps=("exp1")
 cuda_devices=("0,1")
 num_repeats=3

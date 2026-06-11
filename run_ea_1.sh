@@ -11,7 +11,7 @@ algos=("ga")
 # —— Experiment settings ——
 dataset="cifar10"
 data_path="datasets/${dataset}_data"
-config_dir="config_files/config_files_cifar"
+config_dir="experiment_configs/cifar"
 exp_root="experiment_${dataset}_ea"
 log_level="INFO"
 network_config="default"
@@ -43,7 +43,7 @@ moead_pneighbor=0.9        # prob of mating within neighborhood
 
 # —— dataset size & repeats ——
 dataset_sample_size=10000
-configs=("config0.txt")
+configs=("config0.yaml")
 exps=("exp4")
 cuda_devices=("1")
 num_repeats=3
