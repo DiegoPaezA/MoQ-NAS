@@ -4,6 +4,7 @@ from typing import Tuple
 
 from core import config as cfg
 from core import evaluation
+from core.eval_cache import CachedEvaluator
 from utils.helpers import check_files, init_log, download_dataset
 from utils.seeding import set_global_seeds
 
@@ -64,6 +65,12 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
         fn_dict=config.fn_dict,
         log_level=config.train_spec['log_level']
     )
+    if args.get('use_cache'):
+        # Unified cache (core/eval_cache.py) wraps the evaluator for EVERY
+        # algorithm, moqnas included; the legacy per-algorithm caches stay off.
+        eval_pop = CachedEvaluator(eval_pop, config.train_spec,
+                                   log_level=config.train_spec['log_level'])
+        logger.info(f"Unified evaluation cache enabled at {eval_pop.cache_path}")
     return config, eval_pop, phase
 
 
@@ -97,7 +104,7 @@ def main(**args):
             log_file=config.files_spec['log_file'],
             log_level=config.train_spec['log_level'],
             data_file=config.files_spec['data_file'],
-            use_cache=args['use_cache'],
+            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
         )
         evolve_returns_four = True
 
@@ -112,7 +119,7 @@ def main(**args):
             log_file=config.files_spec['log_file'],
             log_level=config.train_spec['log_level'],
             data_file=config.files_spec['data_file'],
-            use_cache=args['use_cache'],
+            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
             ref_divisions=args.get('ref_divisions', None),
         )
 
@@ -127,7 +134,7 @@ def main(**args):
             log_file=config.files_spec['log_file'],
             log_level=config.train_spec['log_level'],
             data_file=config.files_spec['data_file'],
-            use_cache=args['use_cache'],
+            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
         )
     elif algo == 'moead':
         if moead is None:
@@ -140,7 +147,7 @@ def main(**args):
             log_file=config.files_spec['log_file'],
             log_level=config.train_spec['log_level'],
             data_file=config.files_spec['data_file'],
-            use_cache=args['use_cache'],
+            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
             divisions=args.get('ref_divisions', None),          # reuse NSGA-III arg name
             T=args.get('moead_T', 20),
             scalar_method=args.get('moead_scalar', 'tchebycheff'),
@@ -157,7 +164,7 @@ def main(**args):
             log_file=config.files_spec['log_file'],
             log_level=config.train_spec['log_level'],
             data_file=config.files_spec['data_file'],
-            use_cache=args['use_cache'],
+            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
         )
         # Special initializer for QNAS. Config validation forces multi-objective
         # keys (e.g. mo_crossover_strategy) into every config, but the
