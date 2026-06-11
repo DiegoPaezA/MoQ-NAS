@@ -25,10 +25,6 @@ from .metrics.base import BaseMetric
 from utils.helpers import create_info_file, init_log
 from settings import TRAIN_TIMEOUT
 
-project_root = os.getcwd() 
-log_directory = os.path.join(project_root, 'logs')
-if not os.path.exists(log_directory):
-    os.makedirs(log_directory)
 
 class BaseTrainer:
     """
@@ -123,9 +119,11 @@ class BaseTrainer:
         self.best_model_path = os.path.join(self.params['model_path'], 'best_model.pth')
         os.makedirs(self.params['model_path'], exist_ok=True)
 
-        # Initialize the logger
+        # Initialize the logger. logs/ is created here (not at import time) so
+        # importing this module stays side-effect free.
         phase = self.params.get('phase', 'evolution')
-        phase = self.params.get('phase', 'evolution')
+        log_directory = os.path.join(os.getcwd(), 'logs')
+        os.makedirs(log_directory, exist_ok=True)
         log_file = os.path.join(log_directory, f"{phase}.log")
         self.logger = init_log(log_level="INFO", name=__name__, file_path=log_file)
 
