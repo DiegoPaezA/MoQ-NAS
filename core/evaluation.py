@@ -241,6 +241,9 @@ class EvalPopulation(object):
             return {i: {name: 0.0 for name in self.fairness_metric_names} for i in range(len(model_specs))}
         
         fairness_params = metric_config.get('params', {}) or {}
+        # Fairness evaluation follows the run's precision policy (Area 4);
+        # a metric-level 'precision' in the config may still override it.
+        fairness_params.setdefault('precision', self.train_params.get('precision', 'fp32'))
         input_shape = self.train_params.get('input_shape', (3, 224, 224))
         fairness_params['img_size'] = input_shape[2]
 
