@@ -5,6 +5,8 @@
 """
 
 import inspect
+import json
+import logging
 import os
 from collections import OrderedDict
 
@@ -12,8 +14,23 @@ import numpy as np
 import yaml
 import re
 
+from settings import CFG_OBJ_PATH
 from .cnn import model
 from utils.helpers import load_yaml, load_pkl, natural_key
+
+# Output names each metric plugin contributes to the evaluation results.
+# The trainer itself always provides the *builtin* names regardless of plugins.
+# Used by _check_objectives to fail fast on objectives nothing will produce.
+METRIC_PROVIDES = {
+    'Accuracy': {'accuracy'},
+    'MedMNIST_Metrics': {'auc_score', 'acc_medmnist'},
+    'HardwareMetrics': {'cuda_inference_time', 'total_params', 'total_flops',
+                        'model_memory_usage'},
+    'ScalarizedFitness': {'scalar_multi_objective'},
+    'ValidationLossFitness': {'fitness_val_loss'},
+    'FairnessMetric': {'fairness_spd', 'fairness_mean_tpr', 'fairness_score'},
+}
+TRAINER_BUILTIN_METRICS = {'best_accuracy', 'best_loss'}
 
 
 class ConfigParameters(object):
@@ -162,6 +179,65 @@ class ConfigParameters(object):
                 self.train_spec[key] = val
 
         self.train_spec['experiment_path'] = self.args['experiment_path']
+        self._check_objectives()
+
+    def _check_objectives(self):
+        """Validate ``train.objectives`` at parse time, before any training.
+
+        Two checks, both fatal:
+
+        1. Sense resolution: every objective name must match exactly one key
+           of ``dataset_configs/cfg_obj.json`` under the same substring rule
+           the algorithms use (``key in objective``). Zero matches used to be
+           a silently-ignored warning in NSGA2/MOQNAS that left
+           ``objective_senses`` shorter than the fitness matrix, flipping the
+           wrong columns; more than one match is ambiguous.
+        2. Producibility: every objective must be provided by the trainer
+           builtins or by one of the configured metric plugins (per
+           METRIC_PROVIDES). Skipped if the config declares a metric this
+           table does not know about (forward compatibility).
+
+        Raises
+        ------
+        ValueError
+            Naming the offending objective and listing the valid options.
+        """
+        objectives = self.train_spec.get('objectives') or []
+        with open(CFG_OBJ_PATH, 'r') as f:
+            senses = json.load(f)['objectives']
+
+        for obj in objectives:
+            matches = [k for k in senses if k in obj]
+            if len(matches) == 0:
+                raise ValueError(
+                    f"Objective '{obj}' matches no sense rule in {CFG_OBJ_PATH}. "
+                    f"Available sense keys: {sorted(senses)}")
+            if len(matches) > 1:
+                raise ValueError(
+                    f"Objective '{obj}' is ambiguous: it matches multiple sense "
+                    f"rules {matches} in {CFG_OBJ_PATH}. Rename the objective or "
+                    f"the rules so exactly one applies.")
+
+        metrics_cfg = self.train_spec.get('metrics') or []
+        metric_names = [m.get('name') for m in metrics_cfg]
+        if not metrics_cfg:
+            # Legacy single-objective configs declare no metrics; the trainer
+            # fills hardware-style names with constant 0.0 defaults.
+            non_builtin = [o for o in objectives if o not in TRAINER_BUILTIN_METRICS]
+            if non_builtin:
+                logging.getLogger(__name__).warning(
+                    "Config declares no metrics; objectives %s will evaluate "
+                    "as the trainer's 0.0 defaults.", non_builtin)
+        elif all(name in METRIC_PROVIDES for name in metric_names):
+            providable = set(TRAINER_BUILTIN_METRICS)
+            for name in metric_names:
+                providable |= METRIC_PROVIDES[name]
+            missing = [o for o in objectives if o not in providable]
+            if missing:
+                raise ValueError(
+                    f"Objectives {missing} are not produced by the configured "
+                    f"metrics {metric_names} nor by the trainer builtins. "
+                    f"Producible names: {sorted(providable)}")
 
     def _get_fn_spec(self):
         """
