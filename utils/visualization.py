@@ -372,15 +372,36 @@ def plot_hypervolume_comparison(path_exp1, path_exp2, label_exp1="Method 1", lab
     plt.tight_layout()
     plt.show()
 
+# Pretty axis labels for known objective names; anything else falls back to
+# its raw name, so arbitrary objective sets (Area 3) plot without code edits.
+_OBJECTIVE_LABELS = {
+    "accuracy": "Accuracy (%)",
+    "best_accuracy": "Accuracy (%)",
+    "params": "Params (M)",
+    "total_params": "Params (count)",
+    "inference_time": "Inference Time (µs)",
+    "cuda_inference_time": "Inference Time (µs)",
+    "total_flops": "FLOPs (count)",
+}
+
+
 def plot_pareto_evolution(history, dims="3d",
-                            x="params", y="inference_time", z="accuracy",
+                            x=None, y=None, z=None,
                             width=1200, height=800, y_range=None):
     """
     Plot the evolution of Pareto fronts over generations en 2D o 3D con tooltips
-    formateados a 2 decimales y unidad.
+    formateados a 2 decimales.
+
+    The records' objective keys are taken as-is (whatever objective set the
+    run used, e.g. best_accuracy/total_params/total_flops in
+    pareto_history.pkl, or the legacy accuracy/params/inference_time from
+    load_data_for_pareto). When x/y/z are not given they default to the
+    record's objective keys in order (x=2nd, y=3rd, z=1st for 3D, matching
+    the historical params/time/accuracy layout).
     """
     # 1) Flatten the history into a DataFrame, skipping the "hypervolume" key
     rows = []
+    objective_keys = None
     for gen, fronts in history.items():
         for level, recs in fronts.items():
             # Skip any non-integer key (e.g. "hypervolume")
@@ -388,15 +409,26 @@ def plot_pareto_evolution(history, dims="3d",
                 continue
 
             for rec in recs:
+                values = {k: v for k, v in rec.items() if k != "id"}
+                if objective_keys is None:
+                    objective_keys = list(values)
                 rows.append({
                     "generation": gen,
                     "front_level": level,
-                    "accuracy": rec["accuracy"],
-                    "params": rec["params"],
-                    "inference_time": rec["inference_time"]
+                    **values,
                 })
 
     df = pd.DataFrame(rows)
+
+    # 2b) Default axes from the objective keys present in the data
+    if objective_keys:
+        if x is None:
+            x = objective_keys[1] if len(objective_keys) > 1 else objective_keys[0]
+        if y is None:
+            y = objective_keys[2] if len(objective_keys) > 2 else objective_keys[0]
+        if z is None:
+            z = objective_keys[0]
+    axis_label = lambda k: _OBJECTIVE_LABELS.get(k, k)
 
     # 2) Build the plot in 3D or 2D
     if dims == "3d":
@@ -408,9 +440,9 @@ def plot_pareto_evolution(history, dims="3d",
             width=width, height=height,
             title="Pareto Front Evolution (3D)",
             labels={
-                x: "Params (M)",
-                y: "Inference Time (µs)",
-                z: "Accuracy (%)",
+                x: axis_label(x),
+                y: axis_label(y),
+                z: axis_label(z),
                 "front_level": "Front Level",
                 "generation": "Generation"
             },
@@ -419,9 +451,9 @@ def plot_pareto_evolution(history, dims="3d",
         fig.update_traces(
             marker=dict(size=4),
             hovertemplate=(
-                "Params: %{x:.2f} M<br>"
-                "Inference Time: %{y:.2f} µs<br>"
-                "Accuracy: %{z:.2f}%<br>"
+                f"{axis_label(x)}: %{{x:.2f}}<br>"
+                f"{axis_label(y)}: %{{y:.2f}}<br>"
+                f"{axis_label(z)}: %{{z:.2f}}<br>"
                 "Front Level: %{customdata[0]}<br>"
                 "Generation: %{customdata[1]}<extra></extra>"
             )
@@ -443,8 +475,8 @@ def plot_pareto_evolution(history, dims="3d",
             width=width, height=height,
             title="Pareto Front Evolution (2D)",
             labels={
-                x: "Params (M)",
-                y: "Inference Time (µs)",
+                x: axis_label(x),
+                y: axis_label(y),
                 "front_level": "Front Level",
                 "generation": "Generation"
             },
@@ -453,8 +485,8 @@ def plot_pareto_evolution(history, dims="3d",
         fig.update_traces(
             marker=dict(size=6),
             hovertemplate=(
-                "Params: %{x:.2f} M<br>"
-                "Inference Time: %{y:.2f} µs<br>"
+                f"{axis_label(x)}: %{{x:.2f}}<br>"
+                f"{axis_label(y)}: %{{y:.2f}}<br>"
                 "Front Level: %{customdata[0]}<br>"
                 "Generation: %{customdata[1]}<extra></extra>"
             )
