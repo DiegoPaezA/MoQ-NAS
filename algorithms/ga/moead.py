@@ -2,6 +2,7 @@
 import numpy as np
 from math import comb
 from .nsga2 import NSGA2
+from algorithms.pareto import simplex_lattice, to_minimization
 
 _EPS = 1e-12
 
@@ -42,33 +43,13 @@ class MOEAD(NSGA2):
         p = int(divisions) if divisions is not None else 1
         while comb(p + M - 1, M - 1) < N:
             p += 1
-        dirs = self._simplex_lattice(M, p)  # (K, M), rows sum to 1
+        dirs = simplex_lattice(M, p)  # (K, M), rows sum to 1
         if dirs.shape[0] >= N:
             idx = np.random.choice(dirs.shape[0], size=N, replace=False)
             dirs = dirs[idx]
         norms = np.linalg.norm(dirs, axis=1, keepdims=True)
         norms[norms < _EPS] = 1.0
         return dirs / norms
-
-    def _simplex_lattice(self, M, p):
-        out, buf = [], [0]*M
-        def rec(depth, left):
-            if depth == M-1:
-                buf[depth] = left
-                out.append(buf.copy()); return
-            for v in range(left+1):
-                buf[depth] = v
-                rec(depth+1, left-v)
-        rec(0, p)
-        arr = np.array(out, dtype=float)
-        return arr / max(p, 1)
-
-    def _to_minimization(self, f):
-        f = np.array(f, dtype=float, copy=True)
-        for i, sense in enumerate(self.objective_senses):
-            if sense == 'max':
-                f[:, i] = -f[:, i]
-        return f
 
     def _init_weights_and_neighbors(self):
         N = self.population_size
@@ -94,7 +75,7 @@ class MOEAD(NSGA2):
         # evaluate once to set ideal point
         self.current_gen = 0
         fits = self.evaluate_population()            # (N, M)
-        fmin = self._to_minimization(fits)
+        fmin = to_minimization(fits, self.objective_senses)
         self.z = np.min(fmin, axis=0)
 
     def generate_offspring(self):
@@ -130,7 +111,7 @@ class MOEAD(NSGA2):
         self.population = np.array(child_disc)
         self.pop_params = np.array(child_cont)
         child_fits = self.evaluate_population()       # (K, M)
-        f_children_min = self._to_minimization(child_fits)
+        f_children_min = to_minimization(child_fits, self.objective_senses)
         self.population, self.pop_params = old_pop, old_params
 
         # update ideal
@@ -141,7 +122,7 @@ class MOEAD(NSGA2):
             fy_min = f_children_min[k]
             for j in self.neighbors[i]:
                 wj = self.weights[j]
-                fj_min = self._to_minimization(self.fitnesses[j:j+1, :])[0]
+                fj_min = to_minimization(self.fitnesses[j:j+1, :], self.objective_senses)[0]
                 if self._scalarize(fy_min, wj, self.z) + 1e-12 < self._scalarize(fj_min, wj, self.z):
                     new_population[j] = child_disc[k]
                     new_params[j] = child_cont[k]
