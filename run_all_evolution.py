@@ -158,8 +158,16 @@ def main(**args):
             data_file=config.files_spec['data_file'],
             use_cache=args['use_cache'],
         )
-        # Special initializer for QNAS
-        engine.initialize_qnas(**config.QNAS_spec)
+        # Special initializer for QNAS. Config validation forces multi-objective
+        # keys (e.g. mo_crossover_strategy) into every config, but the
+        # single-objective initializer doesn't take them — pass only what it accepts.
+        import inspect
+        accepted = set(inspect.signature(engine.initialize_qnas).parameters)
+        qnas_spec = {k: v for k, v in config.QNAS_spec.items() if k in accepted}
+        ignored = sorted(set(config.QNAS_spec) - accepted)
+        if ignored:
+            logger.info(f"Ignoring multi-objective-only config keys for QNAS: {ignored}")
+        engine.initialize_qnas(**qnas_spec)
         logger.info("Starting QNAS evolution ...")
         engine.evolve()
         logger.info("QNAS evolution finished.")
