@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from .base_ga import GA
+from settings import CFG_OBJ_PATH
 from utils.helpers import delete_old_dirs_v2, calculate_time, load_pkl, save_pkl
 
 class NSGA2(GA):
@@ -45,7 +46,7 @@ class NSGA2(GA):
         
         # load config objective sense
         try:
-            with open("configs/cfg_obj.json", "r") as f:
+            with open(CFG_OBJ_PATH, "r") as f:
                 self.objectives_info = json.load(f)["objectives"]
         except Exception as e:
             raise RuntimeError(f"Failed to load objective config: {e}")
