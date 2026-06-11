@@ -35,8 +35,12 @@ class NSGA2(GA):
             data_file (str): Path to initial data or checkpoint.
         """
         super().__init__(eval_func, experiment_path,objectives, log_file, log_level, data_file)
+        # Caching now lives in core/eval_cache.py (wraps eval_func).
         self.use_cache = use_cache
-        self.eval_cache = {}
+        if self.use_cache:
+            self.logger.warning(
+                "The legacy per-algorithm evaluation cache was removed; pass "
+                "--use_cache to enable the unified cache (core/eval_cache.py).")
         self.population_ids = None 
         self.pareto_global_population = None
         self.pareto_global_fitnesses = None
@@ -71,40 +75,6 @@ class NSGA2(GA):
         self.unique_networks_path = os.path.join(self.experiment_path, "unique_networks.pkl")
         self.unique_networks_db = load_pkl(self.unique_networks_path) if os.path.exists(self.unique_networks_path) else {}
                 
-
-    def _evaluate_with_cache(self):
-        """Private method to evaluate the population using the cache."""
-        decoded_nets, decoded_params = self.decode_pop()
-        pop = self.population
-        N = len(pop)
-        metrics_keys = self.objectives
-        M = len(metrics_keys)
-
-        fits = [[0.0] * M for _ in range(N)]
-        keys = [p.tobytes() for p in pop]
-        to_eval_indices = []
-
-        for i, k in enumerate(keys):
-            if k in self.eval_cache:
-                fits[i] = [self.eval_cache[k][key] for key in metrics_keys]
-            else:
-                to_eval_indices.append(i)
-
-        if to_eval_indices:
-            sub_nets = [decoded_nets[i] for i in to_eval_indices]
-            sub_params = [decoded_params[i] for i in to_eval_indices]
-            
-            # eval_func returns a dictionary for the subset
-            sub_results_dict = self.eval_func(sub_params, sub_nets, generation=self.current_gen)
-
-            # Correctly map the dictionary results back to the main fits array
-            for sub_index, res_dict in sub_results_dict.items():
-                original_index = to_eval_indices[sub_index]
-                metric_vals = [res_dict[key] for key in metrics_keys]
-                fits[original_index] = metric_vals
-                self.eval_cache[keys[original_index]] = res_dict
-        
-        return np.array(fits, dtype=float)
 
     def _evaluate_without_cache_with_registry(self, decoded_params, decoded_nets, pop):
         """
@@ -210,15 +180,12 @@ class NSGA2(GA):
         Evaluates the current population. Uses a cache if enabled, otherwise
         evaluates the entire population directly.
         """
-        if self.use_cache:
-            self.fitnesses = self._evaluate_with_cache()
-        else:
-            decoded_nets, decoded_params = self.decode_pop()
-            self.fitnesses = self._evaluate_without_cache_with_registry(
-                decoded_params=decoded_params,
-                decoded_nets=decoded_nets,
-                pop=self.population,
-            )
+        decoded_nets, decoded_params = self.decode_pop()
+        self.fitnesses = self._evaluate_without_cache_with_registry(
+            decoded_params=decoded_params,
+            decoded_nets=decoded_nets,
+            pop=self.population,
+        )
 
         return self.fitnesses
     
