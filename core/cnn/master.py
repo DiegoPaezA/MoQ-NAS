@@ -7,26 +7,22 @@
 
 """
 import os
+import logging
 import traceback
 import torch
 import torch.nn as nn
 
 from typing import Dict, List, Union, Any
 from . import model, trainer, model_resnet
-from utils.helpers import init_log, setup_dataset_info
+from utils.helpers import setup_dataset_info
 
 from .artifacts import ConfusionMatrix
 from .metrics import Accuracy, HardwareMetrics, MedMNIST_Metrics, FairnessMetric
 from .metrics.fitness import ScalarizedFitness, ValidationLossFitness
 
-# Initialize a logger (assumed to be defined in init_log)
-project_root = os.getcwd() 
-log_directory = os.path.join(project_root, 'logs')
-if not os.path.exists(log_directory):
-    os.makedirs(log_directory)
-
-log_file = os.path.join(log_directory, 'master.log')
-LOGGER = init_log("INFO", name=__name__, file_path=log_file)
+# Handler configuration is deferred to the run instance (init_log downstream,
+# once experiment_path is known); importing this module must be side-effect free.
+LOGGER = logging.getLogger(__name__)
 
 
 def create_metrics_from_config(config: dict, model_instance, device, input_shape) -> list:
