@@ -10,7 +10,7 @@ algos=("qnas")
 # —— Experiment settings ——
 dataset="cifar10"
 data_path="datasets/${dataset}_data"
-config_dir="config_files/config_files_cifar"
+config_dir="experiment_configs/cifar"
 exp_root="experiment_${dataset}_qfamily"
 log_level="INFO"
 network_config="default"
@@ -43,7 +43,7 @@ ref_dir_method="das-dennis"         # "das-dennis"|"dirichlet"
 continue_path=""                    # resume path, keep empty if not resuming             
 
 # —— dataset size & repeats ——
-configs=("config0_0.txt")
+configs=("config0_0.yaml")
 exps=("exp21")
 cuda_devices=("0")
 num_repeats=3
