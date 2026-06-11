@@ -16,9 +16,8 @@ import os
 # Absolute path to the repository root (directory containing this file).
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Dataset YAML configs (cifar10.yaml, pathmnist.yaml, ...). Old path on
-# purpose: se actualiza en A.5 (configs/ -> dataset_configs/).
-DATASET_CONFIGS_DIR = os.path.join(PROJECT_ROOT, 'configs')
+# Dataset YAML configs (cifar10.yaml, pathmnist.yaml, ...).
+DATASET_CONFIGS_DIR = os.path.join(PROJECT_ROOT, 'dataset_configs')
 
 # Multi-objective definition file (objective names/senses) read by the
 # NSGA-II and MO-QNAS engines.

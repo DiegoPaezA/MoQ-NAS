@@ -117,7 +117,7 @@ You must provide:
 ```bash
 # Example: Train all avaible networks
 python scripts/fairness_baseline/train.py \
-    --config_file configs/person_bin_96.yaml \
+    --config_file dataset_configs/person_bin_96.yaml \
     --data_path datasets/personbin_data_96 \
     --experiment_path checkpoints/baselines_head_96_limit \
     --archs resnet18,resnet50,efficientnet_v2_s,convnext_tiny,mobilenet_v3_large,mnasnet1_0 \
@@ -129,7 +129,7 @@ python scripts/fairness_baseline/train.py \
 ```bash
 # Example: Train models on the FACE dataset
 python scripts/fairness_baseline/train.py \
-    --config_file configs/face_bin_96.yaml \
+    --config_file dataset_configs/face_bin_96.yaml \
     --data_path datasets/facebin_data_96 \
     --experiment_path checkpoints/baselines_head_96_limit \
     --archs resnet18,resnet50,efficientnet_v2_s,convnext_tiny,mobilenet_v3_large,mnasnet1_0 \
@@ -148,7 +148,7 @@ You can:
 ```bash
 # Example: Freeze backbone and limit training to 10000 images
 python scripts/fairness_baseline/train.py \
-    --config_file configs/person_bin_96.yaml \
+    --config_file dataset_configs/person_bin_96.yaml \
     --data_path datasets/personbin_data_96 \
     --experiment_path checkpoints/baselines_head_96_limit \
     --archs resnet18,resnet50,efficientnet_v2_s,convnext_tiny,mobilenet_v3_large,mnasnet1_0 \
@@ -161,7 +161,7 @@ python scripts/fairness_baseline/train.py \
 #### 3.3. Key Arguments
 
 - `--config_file`  
-  Path to the YAML config file (e.g., `configs/person_bin.yaml`).
+  Path to the YAML config file (e.g., `dataset_configs/person_bin.yaml`).
 
 - `--data_path`  
   Root directory containing your datasets (e.g., `datasets`).

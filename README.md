@@ -38,7 +38,7 @@ moqnas/
 ├── utils/
 │   └── helpers.py            # General utility functions
 │
-├── configs/
+├── dataset_configs/
 │   └── *.yaml                # YAML files for experiment configuration
 │
 ├── scripts/
@@ -60,7 +60,7 @@ moqnas/
 - `core/`: Holds shared components essential for any experiment, including the CNN builder/trainer and the evaluation engine.
 - `dataset_utils/`: Manages all data loading, preprocessing, and splitting.
 - `utils/`: Contains helper functions used across the project.
-- `configs/`: Stores YAML configuration files that define the search space, model parameters, and training settings for experiments.
+- `dataset_configs/`: Stores YAML configuration files that define the search space, model parameters, and training settings for experiments.
 - `run_*.py`: Executable scripts to launch different types of NAS experiments.
 
 ## Fairness Evaluation
@@ -107,7 +107,7 @@ pip install -r requirements.txt
 
 ### 2. Configuration
 
-All experiments are controlled by configuration files located in the `configs/` directory. Before running an experiment, you can create or modify a `.yaml` file to define:
+All experiments are controlled by configuration files located in the `dataset_configs/` directory. Before running an experiment, you can create or modify a `.yaml` file to define:
 
 - The dataset (`dataset`, `data_path`).  
 - The search space (`function_dict`).  

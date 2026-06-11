@@ -74,7 +74,7 @@ train:
 
     # Dataset
     dataset: Cifar10
-    config_path_dataset: configs/cifar10.yaml   # <— updated key (points to your YAML)
+    config_path_dataset: dataset_configs/cifar10.yaml   # <— updated key (points to your YAML)
     data_path: /path/to/datasets/cifar10        # set this to your local path
     train_split: 0.9
     split_seed: 2025                             # controls split & balanced limiting

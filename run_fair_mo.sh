@@ -19,7 +19,7 @@ fitness_metric="best_accuracy"
 dataset_sample_size=10000
 
 # NEW: dataset YAML path derived from dataset name
-config_path_dataset="configs/person_bin_96.yaml"
+config_path_dataset="dataset_configs/person_bin_96.yaml"
 
 # —— Common toggles (kept from your scripts) ——
 use_cache=false                     
