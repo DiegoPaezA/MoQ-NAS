@@ -52,8 +52,9 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     logger.info(f"Saving parameters for {config.phase} phase ...")
     config.save_params_logfile()
 
-    if config.train_spec.get('mixed_precision', False):
-        logger.info("Using mixed precision training ...")
+    precision = config.train_spec.get('precision', 'fp32')
+    if precision != 'fp32':
+        logger.info(f"Using mixed precision training (precision={precision}) ...")
 
     dataset_status = download_dataset(params=config.train_spec)
     logger.info("Dataset is already downloaded." if dataset_status else "Dataset downloaded successfully.")

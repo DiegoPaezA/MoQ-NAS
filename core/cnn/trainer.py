@@ -23,6 +23,7 @@ from . import model, model_resnet
 from .artifacts import BaseArtifact
 from .metrics.base import BaseMetric
 from utils.helpers import create_info_file, init_log
+from core.precision import resolve_precision
 from settings import TRAIN_TIMEOUT
 
 
@@ -96,7 +97,20 @@ class BaseTrainer:
         self.params = params
         self.device = torch.device(params['device'])
 
-        self.scaler = GradScaler(self.device.type, enabled=self.params.get('mixed_precision', False))
+        # Precision policy, resolved once ('fp32' | 'fp16' | 'bf16').
+        self.precision = resolve_precision(self.params)
+        if (self.precision == 'bf16' and self.device.type == 'cuda'
+                and not torch.cuda.is_bf16_supported()):
+            raise RuntimeError(
+                f"precision='bf16' was requested but CUDA device "
+                f"'{torch.cuda.get_device_name(self.device)}' has no native "
+                f"bfloat16 support. Use precision='fp16' or 'fp32'.")
+        self._autocast_dtype = {'fp16': torch.float16,
+                                'bf16': torch.bfloat16}.get(self.precision, torch.float16)
+        self._autocast_enabled = self.precision in ('fp16', 'bf16')
+        # GradScaler exists ONLY for fp16; bf16 has fp32's dynamic range and
+        # needs no loss scaling, so bf16/fp32 take the plain backward path.
+        self.scaler = GradScaler(self.device.type, enabled=True) if self.precision == 'fp16' else None
         # --- Pluggable Metrics System ---
         self.post_processing_metrics = [
             m for m in metrics if m.is_post_processing or 'epoch_results' in m.compute.__code__.co_varnames
@@ -146,8 +160,8 @@ class BaseTrainer:
         if task == 'multi-class':
             labels = labels.squeeze().long()
         
-        # Run forward pass with mixed precision if enabled
-        with autocast(self.device.type, dtype=torch.float16, enabled=self.params.get('mixed_precision', False)):
+        # Run forward pass under the configured precision policy
+        with autocast(self.device.type, dtype=self._autocast_dtype, enabled=self._autocast_enabled):
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
         
@@ -179,11 +193,16 @@ class BaseTrainer:
 
                 if is_training:
                     self.optimizer.zero_grad()
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)  # desescala antes do clipping
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    if self.scaler is not None:  # fp16: scale, unscale before clipping
+                        self.scaler.scale(loss).backward()
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:  # bf16 / fp32: no loss scaling, same clipping
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        self.optimizer.step()
 
                 bs = inputs.size(0) if hasattr(inputs, "size") else 1
                 total_loss += loss.item() * bs
