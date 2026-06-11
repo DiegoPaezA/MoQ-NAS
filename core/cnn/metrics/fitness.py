@@ -14,19 +14,40 @@ class ScalarizedFitness(BaseMetric):
     """
     name = "scalarized_fitness"
 
-    def __init__(self, metric_type: str, max_params: float, max_inference_time: float, **kwargs):
+    def __init__(self, metric_type: str, max_params: float = None,
+                 max_inference_time: float = None, normalizers: Dict = None, **kwargs):
         """
         Initializes the scalarized fitness calculator.
 
         Args:
             metric_type (str): The primary metric to use ('accuracy' or 'loss').
-            max_params (float): The threshold for the maximum number of parameters.
-            max_inference_time (float): The threshold for the maximum inference time.
+            max_params (float, optional): Legacy threshold for the maximum
+                number of parameters. Translated to
+                ``normalizers['total_params']``.
+            max_inference_time (float, optional): Legacy threshold for the
+                maximum inference time. Translated to
+                ``normalizers['cuda_inference_time']``.
+            normalizers (Dict, optional): Generic mapping
+                ``{objective_name: max_value}``; each entry contributes one
+                penalty factor to the scalar (see ``_mofitness``). Use this
+                for non-default objective sets, e.g.
+                ``{'total_flops': 5.0e8}``. Mutually additive with the legacy
+                arguments; an explicit ``normalizers`` entry wins on key clash.
         """
-        super().__init__(metric_type=metric_type, max_params=max_params, max_inference_time=max_inference_time, **kwargs)
+        super().__init__(metric_type=metric_type, max_params=max_params,
+                         max_inference_time=max_inference_time,
+                         normalizers=normalizers, **kwargs)
         self.metric_type = metric_type
-        self.T_p = max_params
-        self.T_t = max_inference_time
+        # Back-compat translation: legacy keys first, in the historical
+        # factor order (params, then inference time), so old configs produce
+        # the bit-identical scalar.
+        merged = {}
+        if max_params is not None:
+            merged['total_params'] = max_params
+        if max_inference_time is not None:
+            merged['cuda_inference_time'] = max_inference_time
+        merged.update(normalizers or {})
+        self.normalizers = merged
 
     def reset(self):
         """This metric is stateless across batches, so reset does nothing."""
@@ -55,19 +76,24 @@ class ScalarizedFitness(BaseMetric):
         else:
             raise ValueError(f"Invalid metric_type: {self.metric_type}")
 
-        params = epoch_results.get('total_params', 0)
-        inference_time = epoch_results.get('cuda_inference_time', 0)
-        
+        secondary = {name: epoch_results.get(name, 0) for name in self.normalizers}
+
         # 2. Encapsulate the original mofitness logic
         return {
-            "scalar_multi_objective": self._mofitness(
-                metric_value, params, inference_time
-            )
+            "scalar_multi_objective": self._mofitness(metric_value, secondary)
         }
 
-    def _mofitness(self, metric_value, params, inference_time) -> float:
+    def _mofitness(self, metric_value, secondary: Dict) -> float:
         """
         Encapsulates the original weighted fitness function logic.
+
+        Each entry of ``secondary`` (objective value keyed by name) is turned
+        into a penalty factor ``ratio ** w`` against its normalizer threshold
+        T: ``ratio = value / T``; ``w = -0.01`` while ``value <= T`` (soft
+        reward below budget), ``w = -1`` above it (hard penalty). The scalar
+        is the primary fitness times the product of all factors, in
+        normalizer insertion order (preserves the historical
+        params-then-inference ordering for legacy configs).
         """
         # Handle the primary metric
         if self.metric_type == 'accuracy':
@@ -75,17 +101,14 @@ class ScalarizedFitness(BaseMetric):
         else: # 'loss'
             primary_fitness = 1 / (1 + metric_value)
 
-        # Assign weights based on thresholds
-        w_p = -0.01 if params <= self.T_p else -1
-        w_t = -0.01 if inference_time <= self.T_t else -1
+        fitness_value = primary_fitness
+        for name, threshold in self.normalizers.items():
+            value = secondary[name]
+            w = -0.01 if value <= threshold else -1
+            ratio = value / threshold if threshold > 0 else float('inf')
+            factor = ratio ** w if ratio > 0 else 0
+            fitness_value = fitness_value * factor
 
-        params_ratio = params / self.T_p if self.T_p > 0 else float('inf')
-        inference_time_ratio = inference_time / self.T_t if self.T_t > 0 else float('inf')
-
-        params_factor = params_ratio ** w_p if params_ratio > 0 else 0
-        inference_time_factor = inference_time_ratio ** w_t if inference_time_ratio > 0 else 0
-        
-        fitness_value = primary_fitness * params_factor * inference_time_factor
         return fitness_value * 100.0
     
 class ValidationLossFitness(BaseMetric):
