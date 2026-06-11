@@ -2,6 +2,7 @@
 import numpy as np
 from math import comb
 from .nsga2 import NSGA2
+from algorithms.pareto import fast_nondominated_sort, simplex_lattice, to_minimization
 
 _EPS = 1e-12
 
@@ -32,7 +33,7 @@ class NSGA3(NSGA2):
         gene_len = self.population.shape[1]
         new_pop = np.empty((pop_size, gene_len), dtype=self.population.dtype)
 
-        fronts = self.fast_nondominated_sort(self.fitnesses)
+        fronts = fast_nondominated_sort(self.fitnesses, self.objective_senses)
         rank = np.empty(len(self.population), dtype=int)
         for r, fr in enumerate(fronts):
             for idx in fr:
@@ -64,7 +65,7 @@ class NSGA3(NSGA2):
             return super().environmental_selection(pop, fits)
 
         pop_size = self.population_size
-        fronts = self.fast_nondominated_sort(fits)
+        fronts = fast_nondominated_sort(fits, self.objective_senses)
 
         selected_idx = []
         for fr in fronts:
@@ -77,7 +78,7 @@ class NSGA3(NSGA2):
 
                 # Build candidate set L = selected ∪ last_front for normalization/association
                 L_idx = selected_idx + last_front
-                F = self._to_minimization(fits[L_idx])
+                F = to_minimization(fits[L_idx], self.objective_senses)
                 # reference directions prepared for M objectives
                 if self._ref_dirs is None:
                     self._ref_dirs = self._build_reference_directions(M, pop_size, self.ref_divisions)
@@ -121,54 +122,28 @@ class NSGA3(NSGA2):
         # tie -> random
         return self.population[i] if np.random.rand() < 0.5 else self.population[j]
 
-    def _to_minimization(self, fits):
-        """
-        Convert objectives to minimization based on self.objective_senses.
-        """
-        f = np.array(fits, dtype=float, copy=True)
-        for i, sense in enumerate(self.objective_senses):
-            if sense == 'max':
-                f[:, i] = -f[:, i]
-        return f
-
-
     # ---------- NSGA-III core: ref dirs, normalization, association, niching ----------
 
     def _build_reference_directions(self, M, pop_size, divisions=None):
         """
-        Generate reference directions on the unit simplex (Das & Dennis).
+        Generate reference directions on the unit simplex (Das & Dennis),
+        building the lattice via algorithms.pareto.simplex_lattice.
         If divisions is None, pick the smallest p with C(p+M-1, M-1) >= pop_size.
+        No-prune policy: extra directions are kept for better spread (unlike
+        moead's variant, which prunes randomly — reason this method is not
+        consolidated into algorithms.pareto).
         """
         p = divisions
         if p is None:
             p = 1
             while comb(p + M - 1, M - 1) < pop_size:
                 p += 1
-        dirs = self._simplex_lattice(M, p)  # shape (K, M)
+        dirs = simplex_lattice(M, p)  # shape (K, M)
         # In rare cases K >> pop_size; that's okay (better spread). No random pruning here.
         # Normalize directions to unit length for distance computations.
         norms = np.linalg.norm(dirs, axis=1, keepdims=True)
         norms[norms < _EPS] = 1.0
         return dirs / norms
-
-    def _simplex_lattice(self, M, p):
-        """
-        Integer compositions of p into M parts, scaled by p.
-        Returns array of shape (K, M) with rows summing to 1.0.
-        """
-        out = []
-        buf = [0]*M
-        def rec(depth, left):
-            if depth == M-1:
-                buf[depth] = left
-                out.append(buf.copy())
-                return
-            for v in range(left+1):
-                buf[depth] = v
-                rec(depth+1, left-v)
-        rec(0, p)
-        arr = np.array(out, dtype=float)
-        return arr / max(p, 1)
 
     def _normalize(self, F):
         """
