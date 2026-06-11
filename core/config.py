@@ -15,6 +15,7 @@ import yaml
 import re
 
 from settings import CFG_OBJ_PATH
+from core.precision import resolve_precision
 from .cnn import model
 from utils.helpers import load_yaml, load_pkl, natural_key
 
@@ -179,6 +180,15 @@ class ConfigParameters(object):
                 self.train_spec[key] = val
 
         self.train_spec['experiment_path'] = self.args['experiment_path']
+
+        # Normalize the precision policy once; downstream code reads
+        # train_spec['precision'] ('fp32'|'fp16'|'bf16').
+        if 'precision' not in self.train_spec and self.train_spec.get('mixed_precision', False):
+            logging.getLogger(__name__).info(
+                "train.precision not set; derived 'fp16' from the legacy "
+                "mixed_precision flag. Set precision: fp16|bf16|fp32 explicitly.")
+        self.train_spec['precision'] = resolve_precision(self.train_spec)
+
         self._check_objectives()
 
     def _check_objectives(self):
@@ -379,6 +389,9 @@ class ConfigParameters(object):
         else:
             self._get_retrain_params()
         self._get_common_params()
+        # Older saved params files lack the precision key; resolve it for
+        # every phase so the trainer always finds a normalized value.
+        self.train_spec['precision'] = resolve_precision(self.train_spec)
 
     def load_old_params(self):
         """ Load parameters from *self.files_spec['previous_QNAS_params']* and replace
