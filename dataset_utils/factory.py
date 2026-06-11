@@ -62,6 +62,31 @@ def _coerce_bool(x):
         if xl in ("false", "0", "no", "n", "f"):
             return False
     return bool(x)
+
+
+class _TransformWrapper(Dataset):
+    """Apply a transform lazily to the samples of a wrapped subset.
+
+    Parameters
+    ----------
+    subset : torch.utils.data.Dataset
+        Underlying dataset/subset yielding ``(x, y)`` pairs.
+    tfm : callable or None
+        Transform applied to ``x`` on access; if None, ``x`` passes through.
+
+    Notes
+    -----
+    ``__getitem__`` returns ``(tfm(x), y)``. Consolidates the two identical
+    ``_Wrap`` inner classes previously defined inside ``build_datasets``.
+    """
+    def __init__(self, subset, tfm):
+        self.subset = subset; self.tfm = tfm
+    def __len__(self): return len(self.subset)
+    def __getitem__(self, i):
+        x, y = self.subset[i]
+        return (self.tfm(x) if self.tfm else x), y
+
+
 def build_datasets(
     *,
     spec,                      # DatasetSpec (name, family, num_classes, shape, ...)
@@ -106,17 +131,8 @@ def build_datasets(
         )
 
         # Finally inject transforms via small wrapper
-        
-        class _Wrap(Dataset):
-            def __init__(self, subset, tfm):
-                self.subset = subset; self.tfm = tfm
-            def __len__(self): return len(self.subset)
-            def __getitem__(self, i):
-                x, y = self.subset[i]
-                return (self.tfm(x) if self.tfm else x), y
-
-        train_dataset = _Wrap(train_subset, train_transform)
-        val_dataset   = _Wrap(val_subset,   eval_transform)
+        train_dataset = _TransformWrapper(train_subset, train_transform)
+        val_dataset   = _TransformWrapper(val_subset,   eval_transform)
 
         # Recompute labels if limiting changed the order/size
         # (apply_limit keeps sample order subset; labels remain consistent)
@@ -212,16 +228,8 @@ def build_datasets(
         )
         
         # 5. Wrap subsets with the appropriate transforms
-        class _Wrap(Dataset):
-            def __init__(self, subset, tfm):
-                self.subset = subset; self.tfm = tfm
-            def __len__(self): return len(self.subset)
-            def __getitem__(self, i):
-                x, y = self.subset[i]
-                return (self.tfm(x) if self.tfm else x), y
-        
-        train_dataset = _Wrap(train_subset, train_transform)
-        val_dataset   = _Wrap(val_subset,   eval_transform)
+        train_dataset = _TransformWrapper(train_subset, train_transform)
+        val_dataset   = _TransformWrapper(val_subset,   eval_transform)
 
         return train_dataset, val_dataset, test_dataset, train_labels, val_labels
 
