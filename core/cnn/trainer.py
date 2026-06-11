@@ -23,8 +23,7 @@ from . import model, model_resnet
 from .artifacts import BaseArtifact
 from .metrics.base import BaseMetric
 from utils.helpers import create_info_file, init_log
-
-TRAIN_TIMEOUT = 5400
+from settings import TRAIN_TIMEOUT
 
 project_root = os.getcwd() 
 log_directory = os.path.join(project_root, 'logs')
