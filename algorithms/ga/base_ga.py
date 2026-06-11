@@ -4,11 +4,8 @@ import datetime
 import numpy as np
 from collections import defaultdict
 from pickle import dump, load, HIGHEST_PROTOCOL
-from core import evaluation
-from core import config as cfg
-from utils.helpers import (delete_old_dirs_v2, init_log, check_files, 
-                           download_dataset, backup_cache, load_cache, 
-                           calculate_time)
+from utils.helpers import (delete_old_dirs_v2, init_log, backup_cache,
+                           load_cache, calculate_time)
 
 #TODO: add docstrings to all functions
 #TODO: use the utils functions for handling the folder structure
@@ -629,72 +626,3 @@ class GA(object):
         self.logger.info("Best solution found at generation %d with fitness %.4f",
                         self.best_so_far_id[0] if self.best_so_far_id else -1, self.best_so_far)
         return self.population, self.fitnesses, self.best_so_far, self.best_so_far_id
-
-# Example usage:
-if __name__ == "__main__":
-    # Define parameters similar to those defined in your .sh script
-    args = {
-        "experiment_path": "experiment_cifar10_ga/exp1_repeat_1",
-        "data_path": "cifar10_data",
-        "dataset": "cifar10",
-        "config_file": "config_files_cifar/config0.txt",
-        "continue_path": "",
-        "log_level": "DEBUG",  # Using DEBUG for detailed output during development
-        "optimizer": "AdamW",
-        "fitness_metric": "best_accuracy",
-        "data_augmentation": False,  # Set as needed for your experiment
-        "early_stopping": True,
-        "en_pop_crossover": True,
-        "save_checkpoints_epochs": 5,
-        "limit_data_value": 10000,
-        "backbone_name": "resnet18",
-        "network_config": "default",
-        'use_cache': True,  # Enable caching for faster evaluations
-    }
-
-    logger = init_log(args['log_level'], name=__name__)
-
-    if not os.path.exists(args['experiment_path']):
-        logger.info(f"Creating {args['experiment_path']} ...")
-        os.makedirs(args['experiment_path'])
-
-    # Evolution or continue previous evolution
-    if not args['continue_path']:
-        phase = 'evolution'
-    else:
-        phase = 'continue_evolution'
-        logger.info(f"Continue evolution from: {args['continue_path']}. Checking files ...")
-        check_files(args['continue_path'])
-
-    logger.info(f"Getting parameters from {args['config_file']} ...")
-    config = cfg.ConfigParameters(args, phase=phase)
-    config.get_parameters()
-    logger.info(f"Saving parameters for {config.phase} phase ...")
-    config.save_params_logfile()
-    
-    if config.train_spec['mixed_precision']:
-        logger.info(f"Using mixed precision training ...")
-        
-    # Download dataset
-    dataset_status = download_dataset(params=config.train_spec)
-    status_message = "Dataset is already downloaded." if dataset_status else "Dataset downloaded successfully."
-    logger.info(status_message)
-    
-    eval_pop = evaluation.EvalPopulation(params=config.train_spec,
-                                                fn_dict=config.fn_dict,
-                                                log_level=config.train_spec['log_level'])
-    # Initialize GA instance
-    ga = GA(eval_pop, config.train_spec['experiment_path'], 
-            config.files_spec['log_file'], 
-            log_level=config.train_spec['log_level'], 
-            data_file=config.files_spec['data_file'], 
-            use_cache=args['use_cache'])
-    # Set GA parameters: population_size, num_generations, max_num_nodes, crossover_rate, mutation_rate, etc.
-    ga.initialize_ga(population_size=20, num_generations=50, max_num_nodes=20,
-                    crossover_rate=0.4, mutation_rate=0.1, elitism=True, patience=20,
-                    fn_list=config.QNAS_spec['fn_list'], params_ranges=config.QNAS_spec['params_ranges'])
-    
-    # Run the evolution
-    population, fitnesses, best_fitness, best_id = ga.evolve()
-    print("Best fitness:", best_fitness)
-    print("Best individual (at generation, index):", best_id)
