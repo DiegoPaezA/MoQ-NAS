@@ -113,6 +113,15 @@ All experiments are controlled by configuration files located in the `dataset_co
 - The search space (`function_dict`).  
 - Algorithm hyperparameters (`max_generations`, `population_size`, etc.).  
 - Training parameters (`batch_size`, `max_epochs`, `optimizer`).  
+- Training precision (`precision: fp32 | fp16 | bf16`). `bf16` needs native
+  hardware support (Ampere/Ada, e.g. A100/L40S) and runs without a gradient
+  scaler; the legacy `mixed_precision: true` flag still works and maps to
+  `fp16`. Results are only comparable within the same precision.  
+- The objective set (`objectives`, e.g. `[best_accuracy, total_params,
+  total_flops]`); names are validated at startup against
+  `dataset_configs/cfg_obj.json` and the configured metrics. Replacing the
+  measured `cuda_inference_time` with deterministic `total_flops` makes whole
+  runs bit-reproducible (see `experiment_configs/cifar_mo/config0_3_flops.yaml`).  
 
 
 ### 3. Running an Experiment
