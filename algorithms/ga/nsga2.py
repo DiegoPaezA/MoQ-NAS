@@ -6,6 +6,7 @@ import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from .base_ga import GA
 from settings import CFG_OBJ_PATH
+from algorithms.pareto import dominates, fast_nondominated_sort, crowding_distance, compute_hypervolume_mixed
 from utils.helpers import delete_old_dirs_v2, calculate_time, load_pkl, save_pkl
 
 class NSGA2(GA):
@@ -221,116 +222,6 @@ class NSGA2(GA):
 
         return self.fitnesses
     
-    def compute_hypervolume_mixed(self, front_raw: np.ndarray, ref_point=None) -> float:
-        """
-        Compute hypervolume for a Pareto front with mixed objectives.
-        """
-        if front_raw is None or len(front_raw) == 0:
-            return 0.0
-
-        f = np.array(front_raw, dtype=float, copy=True)
-
-        # Flip the sign for maximization objectives
-        for i, sense in enumerate(self.objective_senses):
-            if sense == 'max':
-                f[:, i] = -f[:, i]
-
-        # Choose a safe reference point (must be worse than all points for minimization)
-        if ref_point is None:
-            rp = np.max(f, axis=0) + 1e-6
-        else:
-            rp = np.asarray(ref_point, dtype=float)
-            # Flip the sign for maximization objectives in the reference point as well
-            for i, sense in enumerate(self.objective_senses):
-                if sense == 'max':
-                    rp[i] = -rp[i]
-
-        return float(Hypervolume(ref_point=rp).do(f))
-
-    def dominates(self, a, b):
-        """
-        Determine Pareto domination between two fitness tuples based on objective senses.
-        """
-        # Create copies of the fitness values to avoid modifying the originals
-        obj_a = np.array(a, copy=True)
-        obj_b = np.array(b, copy=True)
-
-        # Flip the sign for maximization objectives to convert them to minimization
-        for i, sense in enumerate(self.objective_senses):
-            if sense == 'max':
-                obj_a[i] = -obj_a[i]
-                obj_b[i] = -obj_b[i]
-
-        return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
-
-    def fast_nondominated_sort(self, fits):
-        """
-        Perform non-dominated sorting on a set of fitness vectors.
-
-        Args:
-            fits (np.ndarray): Array of shape (N, M) for N individuals and M objectives.
-
-        Returns:
-            List[List[int]]: A list of fronts, each a list of individual indices.
-                Fronts[0] is the first Pareto front, etc.
-        """
-        N = len(fits)
-        dominated = [set() for _ in range(N)]
-        dom_count = np.zeros(N, dtype=int)
-        fronts = [[]]
-        for p in range(N):
-            for q in range(N):
-                if self.dominates(fits[p], fits[q]):
-                    dominated[p].add(q)
-                elif self.dominates(fits[q], fits[p]):
-                    dom_count[p] += 1
-            if dom_count[p] == 0:
-                fronts[0].append(p)
-        i = 0
-        while fronts[i]:
-            next_front = []
-            for p in fronts[i]:
-                for q in dominated[p]:
-                    dom_count[q] -= 1
-                    if dom_count[q] == 0:
-                        next_front.append(q)
-            i += 1
-            fronts.append(next_front)
-        return fronts[:-1]
-
-    def crowding_distance(self, fits, front):
-        """
-        Compute the crowding distance for individuals in a given front.
-
-        Uses a vectorized approach over all objectives to measure solution density,
-        assigning infinite distance to boundary points.
-
-        Args:
-            fits (np.ndarray): Fitness array of shape (N, M).
-            front (list[int]): Indices of individuals in the front.
-
-        Returns:
-            np.ndarray: Crowding distances for each index in `front`.
-        """
-        f = fits[front]
-        F, M = f.shape
-        dist = np.zeros(F)
-        if F <= 2:
-            return np.array([np.inf] * F)
-        sorted_idx = np.argsort(f, axis=0)
-        dist[sorted_idx[0, :]] = np.inf
-        dist[sorted_idx[-1, :]] = np.inf
-        min_vals = f[sorted_idx[0, :], np.arange(M)]
-        max_vals = f[sorted_idx[-1, :], np.arange(M)]
-        denom = max_vals - min_vals
-        for j in range(M):
-            if denom[j] == 0:
-                continue
-            prev = f[sorted_idx[:-2, j], j]
-            nxt = f[sorted_idx[2:, j], j]
-            dist[sorted_idx[1:-1, j]] += (nxt - prev) / denom[j]
-        return dist
-
     def environmental_selection(self, pop, fits):
         """
         Select the next generation population by Pareto rank and crowding.
@@ -347,7 +238,7 @@ class NSGA2(GA):
         """
         pop_size = self.population_size
         M = fits.shape[1]
-        fronts = self.fast_nondominated_sort(fits)
+        fronts = fast_nondominated_sort(fits, self.objective_senses)
         # Preallocate result arrays
         new_pop = np.empty((pop_size, pop.shape[1]), dtype=pop.dtype)
         new_fits = np.empty((pop_size, M), dtype=float)
@@ -365,7 +256,7 @@ class NSGA2(GA):
                 rem = pop_size - count
                 if rem > 0:
                     # Compute crowding distance and select top rem individuals
-                    cd = self.crowding_distance(fits, front)
+                    cd = crowding_distance(fits, front)
                     sel_indices = np.argsort(cd)[-rem:]
                     chosen = [front[i] for i in sel_indices]
                     new_pop[count:count+rem] = pop[chosen]
@@ -403,11 +294,11 @@ class NSGA2(GA):
         pop_size = self.population_size
         gene_len = self.population.shape[1]
         new_pop = np.empty((pop_size, gene_len), dtype=self.population.dtype)
-        fronts = self.fast_nondominated_sort(self.fitnesses)
+        fronts = fast_nondominated_sort(self.fitnesses, self.objective_senses)
         rank = np.empty(len(self.population), dtype=int)
         crowd = np.zeros(len(self.population))
         for r, fr in enumerate(fronts):
-            cd = self.crowding_distance(self.fitnesses, fr)
+            cd = crowding_distance(self.fitnesses, fr)
             for i, idx in enumerate(fr):
                 rank[idx] = r
                 crowd[idx] = cd[i]
@@ -457,7 +348,7 @@ class NSGA2(GA):
         unique_ids = list(unique_ids) # Convert back to a list
         
         # 1) Perform a full non-dominated sort on the combined set.
-        fronts = self.fast_nondominated_sort(unique_fits)
+        fronts = fast_nondominated_sort(unique_fits, self.objective_senses)
         
         # 2) The new global archive is the entire first front. No filtering is applied.
         idx0 = fronts[0]
@@ -470,7 +361,7 @@ class NSGA2(GA):
             self.pareto_global_params = unique_params[idx0]
 
         # 4) Compute crowding distance on the final global front for the *next* step's selection.
-        self._last_cd = self.crowding_distance(
+        self._last_cd = crowding_distance(
             self.pareto_global_fitnesses,
             list(range(len(self.pareto_global_fitnesses)))
         )
@@ -490,7 +381,7 @@ class NSGA2(GA):
             gen_record[1].append(individual_data)
 
         # 2) Calculate the hypervolume of the current global front.
-        hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+        hv = compute_hypervolume_mixed(self.pareto_global_fitnesses, self.objective_senses)
         gen_record["hypervolume"] = float(hv)
         
         # 3) Add the record for this generation to the main history dictionary.
