@@ -12,6 +12,7 @@ QNAS:
     crossover_frequency: 1
     pop_crossover_rate: 0.4 # offspring replacement proportion in the population
     pop_crossover_method: ['hux', 'one_point', 'two_point'] # 'hux' | 'one_point' | 'two_point'
+    mo_crossover_strategy: directional # required by config validation; ignored by single-objective QNAS
     patience: 60
     elite_mode: global_k # "single" | "global_k" | "bootstrap_k" | "old"
     k_elites: 5
