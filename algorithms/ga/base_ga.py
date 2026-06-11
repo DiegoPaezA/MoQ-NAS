@@ -2,10 +2,8 @@ import os
 import time
 import datetime
 import numpy as np
-from collections import defaultdict
 from pickle import dump, load, HIGHEST_PROTOCOL
-from utils.helpers import (delete_old_dirs_v2, init_log, backup_cache,
-                           load_cache, calculate_time)
+from utils.helpers import delete_old_dirs_v2, init_log, calculate_time
 
 #TODO: add docstrings to all functions
 #TODO: use the utils functions for handling the folder structure
@@ -77,20 +75,12 @@ class GA(object):
         self.data_file = data_file
         self.objectives = objectives
         self.logger = init_log(log_level, name=__name__, file_path=log_file)
-        # Initialize the cache for evaluated individuals.
+        # Caching now lives in core/eval_cache.py (wraps eval_func).
         self.use_cache = use_cache
-        
         if self.use_cache:
-            self.logger.info("Cache is enabled.")
-            # Initialize the cache for evaluated individuals.
-            cache_file = os.path.join(self.experiment_path, "cache_backup.pkl")
-            self.evaluated = load_cache(cache_file)
-            # this collects the raw fitness's until we have 3 of them
-            self.eval_history = defaultdict(list)
-        else:
-            self.logger.info("Cache is disabled.")
-            self.evaluated = {}
-            self.eval_history = defaultdict(list)
+            self.logger.warning(
+                "The legacy per-algorithm evaluation cache was removed; pass "
+                "--use_cache to enable the unified cache (core/eval_cache.py).")
         
     
     def initialize_ga(self, population_size, num_generations, max_num_nodes, fn_list, params_ranges,
@@ -240,67 +230,13 @@ class GA(object):
         self.total_eval += len(self.population)
         return fitness_values
 
-    def _evaluate_with_cache(self, decoded_net, decoded_params):
-        """Evaluates the population using a 3-run average cache to avoid re-computation."""
-        indices_to_evaluate = []
-        eval_dp = []
-        eval_net = []
-        fitness_list = [None] * len(decoded_net)
-
-        # 1) First pass: reuse cached means or schedule new runs
-        for idx, individual in enumerate(self.population):
-            key = tuple(individual.tolist())
-            if key in self.evaluated:
-                fitness_list[idx] = self.evaluated[key]
-                continue
-            hist = self.eval_history[key]
-            if len(hist) < 3:
-                indices_to_evaluate.append(idx)
-                eval_dp.append(decoded_params[idx])
-                eval_net.append(decoded_net[idx])
-            else: # 3 runs done, but not yet moved into evaluated
-                mean_f = sum(hist) / 3.0
-                self.evaluated[key] = mean_f
-                fitness_list[idx] = mean_f
-
-        # 2) Train all scheduled individuals in one batch
-        if indices_to_evaluate:
-            # `results` is a DICTIONARY mapping candidate_id to metrics.
-            results = self.eval_func(eval_dp, eval_net, generation=self.current_gen)
-            metric_key = self.objectives[0]
-            # Map results back to the original population indices
-            for i, original_idx in enumerate(indices_to_evaluate):
-                # Get the candidate_id that was sent for this individual
-                candidate_id = eval_dp[i]['candidate_id']
-                
-                if candidate_id in results:
-                    # Look up the result for this specific candidate
-                    result_for_candidate = results[candidate_id]
-                    raw_fitness = result_for_candidate[metric_key]
-
-                    # Now, do the caching logic with the correctly retrieved 'raw_fitness'
-                    key = tuple(self.population[original_idx].tolist())
-                    self.eval_history[key].append(raw_fitness)
-                    self.total_eval += 1
-
-                    if len(self.eval_history[key]) == 3: # On the 3rd run, compute & cache the mean
-                        mean_f = sum(self.eval_history[key]) / 3.0
-                        self.evaluated[key] = mean_f
-                        fitness_list[original_idx] = mean_f
-                    else: # Fewer than 3 runs: use raw fitness for selection
-                        fitness_list[original_idx] = raw_fitness
-        return fitness_list
-
     def evaluate_population(self):
         """
         Evaluate the current population using the appropriate strategy (cached or not).
         """
         decoded_net, decoded_params = self.decode_pop()
         
-        if self.use_cache:
-            fitness_values = self._evaluate_with_cache(decoded_net, decoded_params)
-        else:
-            fitness_values = self._evaluate_without_cache(decoded_net, decoded_params)
+        fitness_values = self._evaluate_without_cache(decoded_net, decoded_params)
 
         self.fitnesses = np.array(fitness_values, dtype=float)
         self.eval_idx = np.arange(self.population.shape[0], dtype=int)
@@ -587,7 +523,6 @@ class GA(object):
         Perform end-of-generation routines: log data, save data, and update generation counter.
         """
         self.save_data()
-        backup_cache(self.evaluated, file_path=self.experiment_path)
         best_id_gen = self.best_so_far_id[0]
         best_id_idx = self.best_so_far_id[1]
         best_id = f"{best_id_gen}_{best_id_idx}"
