@@ -12,6 +12,7 @@ import json
 import pickle
 import numpy as np
 from pymoo.indicators.hv import Hypervolume
+from settings import CFG_OBJ_PATH
 from .qnas2 import QNAS
 from .helpers.configs import MOEAConfig
 from .helpers.operators import apply_crossover
@@ -216,9 +217,9 @@ class MOQNAS(QNAS):
         # --- MOO Setup ---
         
         # 1. Load objective config from JSON
-        self.logger.info("Loading objective config from 'configs/cfg_obj.json'")
+        self.logger.info(f"Loading objective config from '{CFG_OBJ_PATH}'")
         try:
-            with open("configs/cfg_obj.json", "r") as f:
+            with open(CFG_OBJ_PATH, "r") as f:
                 self.objectives_info = json.load(f)["objectives"]
         except Exception as e:
             raise RuntimeError(f"Failed to load objective config: {e}")
