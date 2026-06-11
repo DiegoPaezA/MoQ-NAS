@@ -3,7 +3,7 @@
 # `from utils.helpers import X` consumers keep working unchanged. Formal
 # deprecation happens in F.3 — import from the topic modules in new code.
 # Note: the old standalone load_evolved_data was removed on purpose (F.2);
-# use core.config.ConfigParameters instead.
+# the canonical implementation is core.config.ConfigParameters.load_evolved_data.
 from utils.io import (
     load_yaml, save_pkl, load_pkl, create_info_file, save_results_file,
     load_log_params_evolution, load_pareto_history, load_history_from_json,
