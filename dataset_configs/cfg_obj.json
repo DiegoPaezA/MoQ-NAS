@@ -20,6 +20,9 @@
         },
         "fairness_mean_tpr": {
             "goal": "maximize"
+        },
+        "fairness_score": {
+            "goal": "maximize"
         }
     }
 }
