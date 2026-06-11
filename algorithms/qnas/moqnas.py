@@ -13,6 +13,7 @@ import pickle
 import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from settings import CFG_OBJ_PATH
+from algorithms.pareto import dominates, fast_nondominated_sort, crowding_distance, compute_hypervolume_mixed
 from .qnas2 import QNAS
 from .helpers.configs import MOEAConfig
 from .helpers.operators import apply_crossover
@@ -358,145 +359,6 @@ class MOQNAS(QNAS):
 
         return fits
 
-    def compute_hypervolume_mixed(self, front_raw: np.ndarray, ref_point=None) -> float:
-        """
-        Compute hypervolume for a 3-objective Pareto front where:
-            - front_raw[:, 0] = accuracy (to be maximized)
-            - front_raw[:, 1] = num_parameters (to be minimized)
-            - front_raw[:, 2] = inference_time (to be minimized)
-
-        We first convert everything into minimization form by flipping accuracy → -accuracy,
-        then build a reference point slightly above the “worst” in each dimension,
-        and finally call pymoo’s Hypervolume on that minimization front.
-
-        Args:
-            front_raw (np.ndarray): shape=(N, 3) with columns [acc, params, time].
-            ref_point (np.ndarray): shape=(3,) with the reference point for hypervolume calculation.
-
-        Returns:
-            float: the hypervolume (in the original mixed‐obj space).
-        """
-        if front_raw is None or len(front_raw) == 0:
-            return 0.0
-
-        f = np.array(front_raw, dtype=float, copy=True)
-
-        # Flip the sign for maximization objectives
-        for i, sense in enumerate(self.objective_senses):
-            if sense == 'max':
-                f[:, i] = -f[:, i]
-
-        # Choose a safe reference point (must be worse than all points for minimization)
-        if ref_point is None:
-            rp = np.max(f, axis=0) + 1e-6
-        else:
-            rp = np.asarray(ref_point, dtype=float)
-            # Flip the sign for maximization objectives in the reference point as well
-            for i, sense in enumerate(self.objective_senses):
-                if sense == 'max':
-                    rp[i] = -rp[i]
-
-        return float(Hypervolume(ref_point=rp).do(f))
-    
-    def dominates(self, a, b):
-        """
-        Determine Pareto domination between two fitness tuples.
-
-        Converts the first objective to minimization by negating it, then checks
-        if `a` is no worse in all objectives and strictly better in at least one.
-
-        Args:
-            a (tuple or list): Fitness values for candidate a.
-            b (tuple or list): Fitness values for candidate b.
-
-        Returns:
-            bool: True if a dominates b, False otherwise.
-        """
-        obj_a = np.array(a, copy=True)
-        obj_b = np.array(b, copy=True)
-
-        # Flip the sign for maximization objectives to convert them to minimization
-        for i, sense in enumerate(self.objective_senses):
-            if sense == 'max':
-                obj_a[i] = -obj_a[i]
-                obj_b[i] = -obj_b[i]
-
-        return np.all(obj_a <= obj_b) and np.any(obj_a < obj_b)
-
-    def fast_nondominated_sort(self, fitnesses: np.ndarray):
-        """
-        Perform the “fast non‐dominated sort” of NSGA‐II on the (2*pop_size × n_obj)
-        fitness‐matrix. Returns a list of fronts, where each front is a list of indices.
-
-        Args:
-            fitnesses (np.ndarray): shape=(N_all, n_obj)
-
-        Returns:
-            fronts (list of lists): fronts[0] is list of indices of the first Pareto front,
-                                fronts[1] is list of indices of the second front, etc.
-        """
-        N = fitnesses.shape[0]
-        dominated_sets = [set() for _ in range(N)]
-        dom_count = np.zeros(N, dtype=int)
-        fronts = [[]]
-
-        for p in range(N):
-            for q in range(N):
-                # if p == q:
-                #     continue
-                if self.dominates(fitnesses[p], fitnesses[q]):
-                    dominated_sets[p].add(q)
-                elif self.dominates(fitnesses[q], fitnesses[p]):
-                    dom_count[p] += 1
-            if dom_count[p] == 0:
-                fronts[0].append(p)
-        i = 0
-        while fronts[i]:
-            next_front = []
-            for p in fronts[i]:
-                for q in dominated_sets[p]:
-                    dom_count[q] -= 1
-                    if dom_count[q] == 0:
-                        next_front.append(q)
-            i += 1
-            fronts.append(next_front)
-
-        # The last appended front will be empty; discard it
-        return fronts[:-1]
-
-    def crowding_distance(self, fits, front):
-        """
-        Compute the crowding distance for individuals in a given front.
-
-        Uses a vectorized approach over all objectives to measure solution density,
-        assigning infinite distance to boundary points.
-
-        Args:
-            fits (np.ndarray): Fitness array of shape (N, M).
-            front (list[int]): Indices of individuals in the front.
-
-        Returns:
-            np.ndarray: Crowding distances for each index in `front`.
-        """
-        f = fits[front]
-        F, M = f.shape
-        dist = np.zeros(F)
-        if F <= 2:
-            return np.array([np.inf] * F)
-        sorted_idx = np.argsort(f, axis=0)
-        dist[sorted_idx[0, :]] = np.inf
-        dist[sorted_idx[-1, :]] = np.inf
-        min_vals = f[sorted_idx[0, :], np.arange(M)]
-        max_vals = f[sorted_idx[-1, :], np.arange(M)]
-        denom = max_vals - min_vals
-        for j in range(M):
-            if denom[j] == 0:
-                continue
-            prev = f[sorted_idx[:-2, j], j]
-            nxt = f[sorted_idx[2:, j], j]
-            dist[sorted_idx[1:-1, j]] += (nxt - prev) / denom[j]
-        return dist
-
     def environmental_selection(
         self, pop: np.ndarray, fits: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -508,7 +370,7 @@ class MOQNAS(QNAS):
         in `pop` that were chosen.
         """
         pop_size = self.pop_size
-        fronts = self.fast_nondominated_sort(fits)
+        fronts = fast_nondominated_sort(fits, self.objective_senses)
 
         new_pop = np.zeros((pop_size, pop.shape[1]), dtype=pop.dtype)
         new_fits = np.zeros((pop_size, fits.shape[1]), dtype=float)
@@ -531,7 +393,7 @@ class MOQNAS(QNAS):
                 # Quedan pocos huecos (rem) y el frente es más grande
                 rem = pop_size - count
                 if rem > 0:
-                    cd = self.crowding_distance(fits, front)  # (len(front),)
+                    cd = crowding_distance(fits, front)  # (len(front),)
                     # Seleccionamos los índices con mayor crowding distance
                     top_indices = np.argsort(cd)[-rem:]
                     # Convertimos esos índices relativos en índices absolutos sobre 'pop'
@@ -668,7 +530,7 @@ class MOQNAS(QNAS):
                 gen_record[1].append(individual_data)
 
             # 2) Calculate the hypervolume of the current global front.
-            hv = self.compute_hypervolume_mixed(self.pareto_global_fitnesses)
+            hv = compute_hypervolume_mixed(self.pareto_global_fitnesses, self.objective_senses)
             gen_record["hypervolume"] = float(hv)
             
             # 3) Add the record for this generation to the main history dictionary.
@@ -711,7 +573,7 @@ class MOQNAS(QNAS):
         unique_ids = list(unique_ids) # Convert back to a list
         
         # 1) Perform a full non-dominated sort on the combined set.
-        fronts = self.fast_nondominated_sort(unique_fits)
+        fronts = fast_nondominated_sort(unique_fits, self.objective_senses)
         
         # 2) The new global Pareto front consists of all individuals in the first front.
         idx0 = fronts[0]
@@ -724,7 +586,7 @@ class MOQNAS(QNAS):
         
         # 4) Compute crowding distance on the final, updated global front.
         #    This is stored for the quantum update logic in `go_next_gen`.
-        self._last_cd = self.crowding_distance(self.pareto_global_fitnesses,
+        self._last_cd = crowding_distance(self.pareto_global_fitnesses,
             list(range(len(self.pareto_global_fitnesses))))
     
     def go_next_gen(self):
