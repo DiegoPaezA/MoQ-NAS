@@ -52,9 +52,10 @@ train:
   for comparisons and for testing resume.
 - **`eval_window_agg`** only changes how the scalar proxy accuracy is computed; the
   saved model (`best_model.pth`) is always the best-val-accuracy epoch.
-- **`workers_per_gpu`** sets per-GPU concurrency and memory pressure; it is the
-  config side of GPU usage (the matrix's `gpus`/`gpus_per_run` is the other side).
-  Covered in detail in [§4](#4-managing-gpus).
+- **`workers_per_gpu`** sets per-GPU concurrency and memory pressure (the matrix's
+  `gpus`/`gpus_per_run` is the other side of GPU usage). It can live in the config
+  `train:` section or be set per batch from the matrix. Covered in detail in
+  [§4](#4-managing-gpus).
 
 ---
 
@@ -111,11 +112,12 @@ python launch.py experiment_matrices/your_matrix.yaml --dry-run
 
 This is the matrix shipped as `experiment_matrices/acc_flops.yaml`: the four
 multi-objective algorithms on the `(best_accuracy, total_flops)` objective set,
-3 repeats each, on one GPU.
+3 repeats each, **one experiment at a time on two GPUs** (10 candidates per GPU).
 
 ```yaml
 exp_root: experiment_cifar10_acc_flops
-gpus: [0]
+gpus: [0, 1]                  # two-GPU pool
+gpus_per_run: 2              # 1 slot of 2 GPUs -> one experiment at a time, both GPUs
 repeats: 3
 seed_base: 42
 defaults:
@@ -126,6 +128,7 @@ defaults:
   multi_objective: true       # keep the config's multi-objective setting
   population_size: 20         # nsga2/nsga3/moead (ignored by moqnas)
   num_generations: 150
+  workers_per_gpu: 10         # 10 candidates concurrent per GPU -> 20 in flight on 2 GPUs
 experiments:
   - {algo: moqnas, config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: moqnas}
   - {algo: nsga2,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: nsga2}
@@ -200,34 +203,38 @@ identical regardless of the number of GPUs.
 
 ### 4.2 `workers_per_gpu` vs `threads` — which to use
 
-Both live in the experiment config under `train:`.
-
 | Key | Meaning | Use it when |
 |---|---|---|
-| `workers_per_gpu: M` | `M` candidates concurrently **per visible GPU**; total workers = `M × n_gpus`. | You want a fixed concurrency *per GPU* that **scales with the hardware** — the same config uses more GPUs automatically when they are available. **Recommended.** |
+| `workers_per_gpu: M` | `M` candidates concurrently **per visible GPU**; total workers = `M × n_gpus`. | You want a fixed concurrency *per GPU* that **scales with the hardware** — the same setup uses more GPUs automatically when they are available. **Recommended.** |
 | `threads: T` (legacy) | `T` workers **in total**, split across the visible GPUs (`T / n_gpus` per GPU). | Back-compat with existing configs. The per-GPU concurrency changes if the number of GPUs changes. |
 
-If both are present, `workers_per_gpu` wins. Existing configs ship with
-`threads`; switch a config to `workers_per_gpu` when you want per-GPU control.
+If both are present, `workers_per_gpu` wins. Existing configs ship with `threads`.
+
+**Where to set them.** Either place works; the matrix value wins when present:
+
+- In the **experiment config** under `train:` (applies wherever that config is used).
+- In the **launcher matrix** (`defaults` or per-experiment `overrides`) — passed
+  as `--workers_per_gpu` / `--threads`, so a batch is self-contained and you do
+  not have to edit the config. This is the convenient option when the same config
+  is shared across batches with different hardware.
 
 **Worked example — "5 per GPU, refilled as they finish".** Population of 20, you
-want each GPU to train 5 candidates at a time on 2 GPUs:
+want each GPU to train 5 candidates at a time on 2 GPUs. Put everything in the
+matrix:
 
-```yaml
-# experiment config (train:)
-workers_per_gpu: 5
-```
 ```yaml
 # launcher matrix
 gpus: [0, 1]
-gpus_per_run: 2     # the run sees both GPUs (CUDA_VISIBLE_DEVICES=0,1)
+gpus_per_run: 2        # the run sees both GPUs (CUDA_VISIBLE_DEVICES=0,1)
+defaults:
+  workers_per_gpu: 5   # -> --workers_per_gpu 5 (overrides the config's threads)
 ```
 
 Result: `5 × 2 = 10` workers → 5 candidates concurrent on each GPU. The 20
 candidates flow from the shared queue; the first 10 start, and each worker grabs
 the next one the moment it finishes — exactly "as one architecture ends, another
-enters". With 1 GPU the same config runs 5 at a time; with 4 GPUs, 5 per GPU = 20
-at a time — without editing the config.
+enters". With 1 GPU the same matrix runs 5 at a time; with 4 GPUs, 5 per GPU = 20
+at a time — without editing anything.
 
 (With `threads`, you would write `threads: 10` and get 5 per GPU **only** while
 exactly 2 GPUs are visible; change the GPU count and the per-GPU number changes.)
@@ -413,6 +420,6 @@ GPU usage cheat-sheet (see [§4](#4-managing-gpus) for the full model):
 |---|---|
 | One experiment on N GPUs | matrix `gpus_per_run: N` (or `CUDA_VISIBLE_DEVICES` for a direct run) |
 | Many experiments in parallel, 1 GPU each | matrix `gpus: [0,1,2,3]`, `gpus_per_run: 1` |
-| K candidates concurrent per GPU (scales with #GPUs) | config `workers_per_gpu: K` |
-| Fixed total #workers across GPUs (legacy) | config `threads: T` |
+| K candidates concurrent per GPU (scales with #GPUs) | `workers_per_gpu: K` (config `train:` or matrix `defaults`) |
+| Fixed total #workers across GPUs (legacy) | `threads: T` (config `train:` or matrix `defaults`) |
 | Fewer OOMs on a large dataset | lower `workers_per_gpu` |
