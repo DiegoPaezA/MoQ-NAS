@@ -6,6 +6,7 @@ import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from .base_ga import GA
 from settings import CFG_OBJ_PATH
+from algorithms.checkpoint import save_checkpoint
 from algorithms.pareto import dominates, fast_nondominated_sort, crowding_distance, compute_hypervolume_mixed
 from utils.helpers import delete_old_dirs_v2, calculate_time, load_pkl, save_pkl
 
@@ -388,8 +389,33 @@ class NSGA2(GA):
             # On the first run, also clean up directories from generation 0.
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
 
+        # Generation boundary: archive + history saved, g+1 not begun.
+        save_checkpoint(self)
         # 5. Advance the generation counter.
         self.current_gen += 1
+
+    # ---- Checkpoint hooks: extend GA state with the external Pareto archive ----
+
+    def _checkpoint_state(self) -> dict:
+        s = super()._checkpoint_state()
+        s.update({
+            'population_ids': self.population_ids,
+            'pareto_global_population': self.pareto_global_population,
+            'pareto_global_fitnesses': self.pareto_global_fitnesses,
+            'pareto_global_params': getattr(self, 'pareto_global_params', None),
+            'pareto_global_ids': list(self.pareto_global_ids),
+            'fronts_history': self.fronts_history,
+        })
+        return s
+
+    def _restore_state(self, s: dict) -> None:
+        super()._restore_state(s)
+        self.population_ids = s['population_ids']
+        self.pareto_global_population = s['pareto_global_population']
+        self.pareto_global_fitnesses = s['pareto_global_fitnesses']
+        self.pareto_global_params = s.get('pareto_global_params')
+        self.pareto_global_ids = s['pareto_global_ids']
+        self.fronts_history = s['fronts_history']
 
     def evolve(self):
         """
@@ -406,15 +432,26 @@ class NSGA2(GA):
         """
         self.logger.info("Starting NSGA-II evolution")
         start_time = time.time()
-        fits_old = self.evaluate_population()
-        pop_old = self.population.copy()
-        
-        ids_old = [f"0_{i}" for i in range(len(pop_old))]
-        self.population_ids = ids_old.copy() 
-    
-        self.best_so_far = np.max(fits_old[:, 0])
-        self.last_best_so_far = self.best_so_far
-        self.current_gen = 1
+
+        if getattr(self, '_resumed', False):
+            # Resumed: the survivors of the completed generation g (restored
+            # into self.population/fitnesses/population_ids) play the parent
+            # role; rebuild the loop-local parent vars and continue at g+1.
+            self.logger.info("Resuming NSGA-II after completed generation %d.", self.current_gen)
+            pop_old = self.population.copy()
+            fits_old = self.fitnesses.copy()
+            ids_old = self.population_ids.copy()
+            self.current_gen += 1
+        else:
+            fits_old = self.evaluate_population()
+            pop_old = self.population.copy()
+
+            ids_old = [f"0_{i}" for i in range(len(pop_old))]
+            self.population_ids = ids_old.copy()
+
+            self.best_so_far = np.max(fits_old[:, 0])
+            self.last_best_so_far = self.best_so_far
+            self.current_gen = 1
         while self.current_gen < self.num_generations:
             self.generate_offspring()
             fits_new = self.evaluate_population()

@@ -25,6 +25,22 @@ class NSGA3(NSGA2):
 
     # ---------- Public API differences ----------
 
+    # ---- Checkpoint hooks: add the reference directions to the GA/NSGA2 state ----
+
+    def _checkpoint_config_block(self) -> dict:
+        b = super()._checkpoint_config_block()
+        b['ref_divisions'] = self.ref_divisions
+        return b
+
+    def _checkpoint_state(self) -> dict:
+        s = super()._checkpoint_state()
+        s['_ref_dirs'] = self._ref_dirs
+        return s
+
+    def _restore_state(self, s: dict) -> None:
+        super()._restore_state(s)
+        self._ref_dirs = s['_ref_dirs']
+
     def generate_offspring(self):
         """
         NSGA-III usually uses rank-only tournament; ties broken at random.

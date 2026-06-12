@@ -74,6 +74,31 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     return config, eval_pop, phase
 
 
+def _setup_checkpoint(engine, config, args, logger):
+    """Inject checkpoint identity and, with --resume, restore the saved state.
+
+    The config block stored in every checkpoint carries the evaluation
+    fingerprint (the same notion of evaluation identity used by the cache),
+    the precision and the seed. Without --resume an existing checkpoint is
+    ignored and the run starts from generation 0 (safe default).
+    """
+    from algorithms.checkpoint import checkpoint_path, load_checkpoint
+    engine.checkpoint_extra = {
+        'fingerprint': compute_fingerprint(config.train_spec),
+        'precision': config.train_spec.get('precision', 'fp32'),
+        'seed': args.get('seed', 42),
+    }
+    engine.checkpoint_keep_every = config.train_spec.get('checkpoint_keep_every', 0)
+    ckpt = checkpoint_path(engine)
+    if args.get('resume'):
+        completed = load_checkpoint(engine)
+        logger.info(f"Resumed from {ckpt}: generation {completed} completed, "
+                    f"continuing at {completed + 1}.")
+    elif os.path.exists(ckpt):
+        logger.info(f"Checkpoint found at {ckpt} but --resume was not given; "
+                    f"starting from generation 0 (checkpoint will be overwritten).")
+
+
 def main(**args):
     set_global_seeds(args.get('seed', 42))
     logger = init_log(args['log_level'], name=__name__)
@@ -83,8 +108,8 @@ def main(**args):
     algo = args.get('algo', 'nsga2').lower()
     logger.info(f"Selected algorithm: {algo}")
 
-    if args.get('resume') and algo != 'moqnas':
-        raise ValueError("--resume is currently supported only for --algo moqnas.")
+    if args.get('resume') and algo not in ('moqnas', 'ga', 'nsga2', 'nsga3', 'moead'):
+        raise ValueError(f"--resume is not supported for --algo {algo}.")
 
     if args.get('num_generations') is None:
         args['num_generations'] = 50  # GA-family default; qnas/moqnas use the config value
@@ -199,24 +224,7 @@ def main(**args):
         # Special initializer for MO-QNAS
         engine.initialize_moqnas(**config.QNAS_spec)
 
-        # Checkpoint/resume wiring (Area 6). The config block stored in every
-        # checkpoint carries the evaluation fingerprint (shared notion of
-        # identity with the eval cache), the precision and the seed.
-        from algorithms.checkpoint import checkpoint_path, load_checkpoint
-        engine.checkpoint_extra = {
-            'fingerprint': compute_fingerprint(config.train_spec),
-            'precision': config.train_spec.get('precision', 'fp32'),
-            'seed': args.get('seed', 42),
-        }
-        engine.checkpoint_keep_every = config.train_spec.get('checkpoint_keep_every', 0)
-        ckpt = checkpoint_path(engine)
-        if args.get('resume'):
-            completed = load_checkpoint(engine)
-            logger.info(f"Resumed from {ckpt}: generation {completed} completed, "
-                        f"continuing at {completed + 1}.")
-        elif os.path.exists(ckpt):
-            logger.info(f"Checkpoint found at {ckpt} but --resume was not given; "
-                        f"starting from generation 0 (checkpoint will be overwritten).")
+        _setup_checkpoint(engine, config, args, logger)
 
         logger.info("Starting MO-QNAS evolution ...")
         engine.evolve()
@@ -240,6 +248,10 @@ def main(**args):
         params_ranges=config.QNAS_spec['params_ranges'],
         mutation_strategy=args['mutation_strategy']
     )
+
+    # Checkpoint/resume wiring for the GA family (after initialize_ga, before
+    # evolve, so the restored state overrides the fresh initial population).
+    _setup_checkpoint(engine, config, args, logger)
 
     # -------- Run evolution --------
     logger.info("Starting evolution ...")

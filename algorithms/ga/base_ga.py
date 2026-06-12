@@ -4,6 +4,7 @@ import datetime
 import numpy as np
 from pickle import dump, load, HIGHEST_PROTOCOL
 from utils.helpers import delete_old_dirs_v2, init_log, calculate_time
+from algorithms.checkpoint import save_checkpoint
 
 #TODO: add docstrings to all functions
 #TODO: use the utils functions for handling the folder structure
@@ -526,9 +527,44 @@ class GA(object):
         best_id_gen = self.best_so_far_id[0]
         best_id_idx = self.best_so_far_id[1]
         best_id = f"{best_id_gen}_{best_id_idx}"
-        delete_old_dirs_v2(self.experiment_path, 
+        delete_old_dirs_v2(self.experiment_path,
                             self.current_gen, keep_ids=[best_id])
+        # Generation boundary: state for gen g is final, g+1 not begun.
+        save_checkpoint(self)
         self.current_gen += 1
+
+    # ---- Checkpoint hooks (consumed by algorithms.checkpoint) ----
+
+    def _checkpoint_config_block(self) -> dict:
+        """Identity-defining config validated on resume.
+
+        population_size and num_generations come from the CLI (not the
+        config file) for the GA family, so they are part of the block to
+        catch a resume launched with different values.
+        """
+        block = {
+            'algorithm': type(self).__name__,
+            'objectives': list(self.objectives),
+            'population_size': int(self.population_size),
+            'num_generations': int(self.num_generations),
+        }
+        block.update(getattr(self, 'checkpoint_extra', {}) or {})
+        return block
+
+    def _checkpoint_state(self) -> dict:
+        """Resumable GA state: population + evolved continuous genes + fitness."""
+        return {
+            'population': self.population,
+            'pop_params': self.pop_params,
+            'fitnesses': self.fitnesses,
+            'current_population': self.current_population,
+        }
+
+    def _restore_state(self, s: dict) -> None:
+        self.population = s['population']
+        self.pop_params = s['pop_params']
+        self.fitnesses = s['fitnesses']
+        self.current_population = s.get('current_population')
 
     def evolve(self):
         """
@@ -536,7 +572,13 @@ class GA(object):
         """
         start_time = time.time()
         self.logger.info("Starting evolution for %d generations", self.num_generations)
-        
+
+        if getattr(self, '_resumed', False):
+            # Resumed: population/pop_params/fitnesses restored; current_gen is
+            # the completed generation g, so continue the loop at g+1.
+            self.logger.info("Resuming GA after completed generation %d.", self.current_gen)
+            self.current_gen += 1
+
         while self.current_gen < self.num_generations:
             self.logger.info("Generation %d started - Evaluating...", self.current_gen)
             self.evaluate_population()

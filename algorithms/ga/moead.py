@@ -131,8 +131,39 @@ class MOEAD(NSGA2):
         self.population = new_population
         self.pop_params = new_params
 
+    # ---- Checkpoint hooks: add the ideal point z, weights and neighbors ----
+
+    def _checkpoint_config_block(self) -> dict:
+        b = super()._checkpoint_config_block()
+        b.update({
+            'ref_divisions': self.divisions,
+            'moead_T': self.T,
+            'scalar_method': self.scalar_method,
+            'prob_neighbor_mating': self.prob_neighbor_mating,
+        })
+        return b
+
+    def _checkpoint_state(self) -> dict:
+        s = super()._checkpoint_state()
+        # z (ideal point) accumulates the per-objective minimum across all
+        # generations — losing it would reset the decomposition on resume.
+        s.update({'z': self.z, 'weights': self.weights, 'neighbors': self.neighbors})
+        return s
+
+    def _restore_state(self, s: dict) -> None:
+        super()._restore_state(s)
+        self.z = s['z']
+        self.weights = s['weights']
+        self.neighbors = s['neighbors']
+
     def evolve(self):
         self.logger.info("Starting MOEA/D evolution")
+        if getattr(self, '_resumed', False):
+            # initialize_ga already rebuilt weights/neighbors/z from a fresh
+            # gen-0 eval; load_checkpoint then overwrote them (and population)
+            # with the restored values. Continue at g+1.
+            self.logger.info("Resuming MOEA/D after completed generation %d.", self.current_gen)
+            self.current_gen += 1
         while self.current_gen < self.num_generations:
             self.evaluate_population()      # refresh fitnesses for current pop
             self.generate_offspring()
