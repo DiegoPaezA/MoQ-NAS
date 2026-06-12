@@ -42,6 +42,7 @@ train:
     eval_batch_size: 128
     max_epochs: 50
     epochs_to_eval: 5 
+    eval_window_agg: max   # how best_accuracy is aggregated over the eval window: max | mean | last
     optimizer: AdamW
     fitness_metric: best_loss
     mo_metric_base: accuracy

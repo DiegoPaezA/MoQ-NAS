@@ -37,8 +37,8 @@ from utils.logging_utils import init_log
 # must invalidate hits (the fingerprint is part of every key).
 _FINGERPRINT_FIELDS = (
     'dataset', 'limit_data', 'limit_data_value', 'max_epochs',
-    'epochs_to_eval', 'batch_size', 'optimizer', 'precision', 'objectives',
-    'seed', 'network_config', 'backbone_name', 'data_augmentation',
+    'epochs_to_eval', 'eval_window_agg', 'batch_size', 'optimizer', 'precision',
+    'objectives', 'seed', 'network_config', 'backbone_name', 'data_augmentation',
     'train_split', 'split_seed', 'loader_seed', 'mixed_precision',
 )
 
