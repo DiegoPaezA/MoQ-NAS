@@ -147,6 +147,11 @@ class ConfigParameters(object):
         if config_file['train']['epochs_to_eval'] >= config_file['train']['max_epochs']:
             raise ValueError('Invalid epochs_to_eval! It should be < max_epochs.')
 
+        # Optional; defaults to 'max' (current behavior) when absent.
+        agg = config_file['train'].get('eval_window_agg', 'max')
+        if agg not in ('max', 'mean', 'last'):
+            raise ValueError(f"Invalid eval_window_agg '{agg}'! Use 'max', 'mean' or 'last'.")
+
     def _get_evolution_params(self):
         """Loads and organizes parameters for a new evolution run."""
         config_file = load_yaml(self.args['config_file'])

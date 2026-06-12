@@ -356,6 +356,20 @@ class BaseTrainer:
                         self.logger.info("Epoch [%d/%d] - Training Loss: %.4f - Training Accuracy: %.2f%%",
                                         epoch, max_epochs, train_results.get('loss',0), train_results.get('accuracy',0))
 
+        # --- Aggregate the proxy accuracy over the eval window ---
+        # Model selection above keeps the best-val-accuracy checkpoint; the
+        # reported scalar is aggregated per eval_window_agg (max|mean|last).
+        agg = self.params.get('eval_window_agg', 'max')
+        if agg not in ('max', 'mean', 'last'):
+            raise ValueError(f"eval_window_agg must be 'max', 'mean' or 'last', got {agg!r}")
+        if validation_accuracies:
+            if agg == 'max':
+                self.best_accuracy = max(validation_accuracies)
+            elif agg == 'mean':
+                self.best_accuracy = sum(validation_accuracies) / len(validation_accuracies)
+            else:  # 'last'
+                self.best_accuracy = validation_accuracies[-1]
+
         # --- Final Result Aggregation ---
         total_training_time = time.time() - t0
         self.params['training_time'] = total_training_time
