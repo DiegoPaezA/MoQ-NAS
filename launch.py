@@ -18,9 +18,11 @@ Matrix format (see experiment_matrices/*.yaml):
       config_path_dataset: dataset_configs/cifar10.yaml
       limit_data_value: 10000
       log_level: INFO
-    gpus: [0]            # slot pool; len(gpus) cells run concurrently
+    gpus: [0]            # GPU pool
+    gpus_per_run: 1      # GPUs per run; pool is grouped into slots of this size
     repeats: 3
     seed_base: 42        # repeat i (1-based) runs with seed_base + i
+    resume: false        # OR pass --resume on the launcher to resume the batch
     exp_root: experiment_cifar10_qfamily
     experiments:
       - algo: moqnas
@@ -99,46 +101,85 @@ def _record_command(cell):
         f.write(env + ' '.join(cell['argv']) + '\n')
 
 
-def run_matrix(matrix: dict, dry_run: bool = False, resume: bool = False):
+def _checkpoint_gen(experiment_path):
+    """Completed generation in a cell's checkpoint, or None if absent."""
+    path = os.path.join(experiment_path, 'checkpoint.pkl')
+    if not os.path.exists(path):
+        return None
+    try:
+        import pickle
+        with open(path, 'rb') as f:
+            return pickle.load(f).get('completed_gen')
+    except Exception:
+        return None
+
+
+def _build_slots(matrix):
+    """Group the GPU pool into slots of ``gpus_per_run`` GPUs each.
+
+    With ``gpus: [0,1,2,3]`` and ``gpus_per_run: 2`` the slots are
+    ``[[0,1],[2,3]]``: two runs execute concurrently, each one seeing two
+    GPUs (CUDA_VISIBLE_DEVICES="0,1"/"2,3") over which its candidates are
+    balanced. Default ``gpus_per_run: 1`` keeps one GPU per run.
+    """
     gpus = matrix.get('gpus', [0]) or [0]
+    gpr = max(1, int(matrix.get('gpus_per_run', 1)))
+    return [gpus[i:i + gpr] for i in range(0, len(gpus), gpr)]
+
+
+def run_matrix(matrix: dict, dry_run: bool = False, resume: bool = False):
+    slots = _build_slots(matrix)
+    resume = bool(resume or matrix.get('resume', False))
     cells = list(expand(matrix, resume=resume))
 
     if dry_run:
         for c in cells:
             print(' '.join(c['argv']))
-        print(f"\n# {len(cells)} cell(s), {len(gpus)} GPU slot(s).", file=sys.stderr)
+        print(f"\n# {len(cells)} cell(s), {len(slots)} slot(s) "
+              f"of {len(slots[0])} GPU(s) each.", file=sys.stderr)
         return 0
 
+    if resume:
+        # Pre-flight: show which cells already have progress. Finished runs
+        # load their final checkpoint and exit almost immediately; interrupted
+        # runs continue from their last generation.
+        print("[resume] checkpoint status per cell:")
+        for c in cells:
+            g = _checkpoint_gen(c['experiment_path'])
+            print(f"  {'gen ' + str(g) if g is not None else 'no checkpoint (fresh)':>22}"
+                  f"  {c['experiment_path']}")
+
     pending = list(cells)
-    running = {}   # gpu -> (cell, Popen)
+    running = {}   # slot_index -> (cell, Popen)
     results = []   # (experiment_path, returncode)
     t0 = time.perf_counter()
 
     while pending or running:
         # Fill every free slot.
-        free = [g for g in gpus if g not in running]
+        free = [i for i in range(len(slots)) if i not in running]
         while free and pending:
-            gpu = free.pop(0)
+            si = free.pop(0)
             cell = pending.pop(0)
-            cell['gpu'] = gpu
+            visible = ','.join(str(g) for g in slots[si])
+            cell['gpu'] = visible
             _record_command(cell)
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES=visible)
             log = open(os.path.join(cell['experiment_path'], 'launcher.log'), 'w')
             proc = subprocess.Popen(cell['argv'], env=env, stdout=log, stderr=subprocess.STDOUT)
             cell['_log'] = log
-            running[gpu] = (cell, proc)
-            print(f"[launch] GPU{gpu} seed={cell['seed']} -> {cell['experiment_path']}")
+            running[si] = (cell, proc)
+            print(f"[launch] GPU{visible} seed={cell['seed']} -> {cell['experiment_path']}")
 
         # Reap any finished slot; one failure never kills siblings.
         time.sleep(1.0)
-        for gpu, (cell, proc) in list(running.items()):
+        for si, (cell, proc) in list(running.items()):
             rc = proc.poll()
             if rc is not None:
                 cell['_log'].close()
                 results.append((cell['experiment_path'], rc))
                 status = 'OK' if rc == 0 else f'FAIL(rc={rc})'
-                print(f"[done]   GPU{gpu} {status}: {cell['experiment_path']}")
-                del running[gpu]
+                print(f"[done]   GPU{cell['gpu']} {status}: {cell['experiment_path']}")
+                del running[si]
 
     wall = time.perf_counter() - t0
     failed = [p for p, rc in results if rc != 0]
