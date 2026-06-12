@@ -256,6 +256,55 @@ The root-level `run_*.sh` scripts are now thin wrappers over the launcher,
 so `./run_moqnas_1.sh` and `./run_moqnas_1.sh --dry-run` are equivalent to
 calling `launch.py` with the matching matrix.
 
+#### Example: the four multi-objective algorithms on (accuracy, FLOPs)
+
+The matrix `experiment_matrices/acc_flops.yaml` runs **MO-QNAS, NSGA-II,
+NSGA-III and MOEA/D** on the `(best_accuracy, total_flops)` objective set,
+**3 repeats each**, on a **single GPU**. The objectives come from the config
+(`experiment_configs/cifar_mo/config0_3_acc_flops.yaml`); because FLOPs are
+deterministic (unlike measured inference time), these runs are fully
+reproducible. NSGA-II/III and MOEA/D take `population_size` and
+`num_generations` from the matrix, while MO-QNAS reads its population from the
+config and uses `num_generations` only to override `max_generations`.
+
+```yaml
+# experiment_matrices/acc_flops.yaml
+exp_root: experiment_cifar10_acc_flops
+gpus: [0]            # single GPU -> the runs execute one after another
+repeats: 3
+seed_base: 42        # repeats use seeds 43, 44, 45
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  log_level: INFO
+  multi_objective: true       # keep the config's multi-objective setting
+  population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
+  num_generations: 150
+
+experiments:
+  - {algo: moqnas, config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: moqnas}
+  - {algo: nsga2,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: nsga2}
+  - {algo: nsga3,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: nsga3,
+     overrides: {ref_divisions: 12}}
+  - {algo: moead,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: moead,
+     overrides: {ref_divisions: 12, moead_T: 20, moead_scalar: tchebycheff, moead_pneighbor: 0.9}}
+```
+
+```bash
+# Preview the 12 commands (4 algorithms x 3 repeats) without running anything
+python launch.py experiment_matrices/acc_flops.yaml --dry-run
+
+# Launch them (sequentially, since gpus: [0])
+python launch.py experiment_matrices/acc_flops.yaml
+```
+
+Results are written under
+`experiment_cifar10_acc_flops/<algo>/<algo>_repeat_<i>/`. To run the four
+algorithms concurrently instead, set `gpus: [0, 1, 2, 3]` (one algorithm per
+GPU slot).
+
 ### 4. Environment Configuration
 
 The following steps are used to configure the environment for the project.
