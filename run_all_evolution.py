@@ -369,6 +369,11 @@ if __name__ == '__main__':
                         help='Use cached evaluations to speed up runs.')
 
     parser.add_argument('--gpu_list', type=str, default=None, help='String of CUDA devices to be used (e.g., "0,1")')
+    parser.add_argument('--workers_per_gpu', type=int, default=None,
+                        help='Candidates evaluated concurrently per visible GPU. '
+                             'Overrides the config value; takes precedence over threads.')
+    parser.add_argument('--threads', type=int, default=None,
+                        help='Total evaluation worker processes (legacy; overrides the config).')
 
     args = parser.parse_args()
     main(**vars(args))
