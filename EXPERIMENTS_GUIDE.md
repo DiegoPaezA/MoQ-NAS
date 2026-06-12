@@ -34,6 +34,8 @@ train:
                                 # aggregated over the last epochs_to_eval epochs
   optimizer: AdamW
   precision: fp16               # fp32 | fp16 | bf16 (bf16 needs Ampere/Ada)
+  workers_per_gpu: 5            # candidates trained concurrently PER visible GPU
+                                # (or legacy `threads: N` = total workers). See §4
   multi_objective: true
   objectives: ['best_accuracy', 'total_flops']
   metrics:
@@ -50,6 +52,9 @@ train:
   for comparisons and for testing resume.
 - **`eval_window_agg`** only changes how the scalar proxy accuracy is computed; the
   saved model (`best_model.pth`) is always the best-val-accuracy epoch.
+- **`workers_per_gpu`** sets per-GPU concurrency and memory pressure; it is the
+  config side of GPU usage (the matrix's `gpus`/`gpus_per_run` is the other side).
+  Covered in detail in [§4](#4-managing-gpus).
 
 ---
 
@@ -150,40 +155,142 @@ python launch.py experiment_matrices/acc_flops.yaml             # run
 
 ## 4. Managing GPUs
 
-The launcher groups the `gpus` pool into **slots** of `gpus_per_run` GPUs each;
-one run occupies one slot at a time, and as many runs execute concurrently as
-there are slots.
+GPU usage has **two independent parts**. Understanding the split is the key to
+using one or many GPUs per experiment:
 
-### Run many experiments in parallel (one GPU each)
+1. **Which GPUs a run can see** — set by `CUDA_VISIBLE_DEVICES` (the launcher
+   sets it per run via `gpus_per_run`; for a direct run you set it yourself).
+2. **How the candidates of each generation are distributed across those visible
+   GPUs** — done automatically by the evaluation scheduler in
+   `core/evaluation.py`, controlled by `workers_per_gpu` (or the legacy
+   `threads`) in the experiment config.
 
-```yaml
-gpus: [0, 1, 2, 3]
-gpus_per_run: 1     # (default) -> 4 slots -> up to 4 runs at once, one GPU each
+```
+        matrix (launcher)                experiment config (train:)
+   ┌───────────────────────────┐   ┌──────────────────────────────────┐
+   │ gpus / gpus_per_run        │   │ workers_per_gpu  (or threads)    │
+   │  → which GPUs are VISIBLE  │   │  → how many candidates run        │
+   │    (CUDA_VISIBLE_DEVICES)  │   │    CONCURRENTLY per visible GPU   │
+   └───────────────────────────┘   └──────────────────────────────────┘
 ```
 
-This is the throughput-oriented setup: with 12 cells (4 algorithms × 3 repeats)
-and 4 slots, four runs proceed at a time and the rest queue automatically. A
-single failed run never stops the others; a summary is printed at the end.
+> ⚠️ **`--gpu_list` does not select GPUs.** It only writes a line to the log.
+> GPU selection is always via `CUDA_VISIBLE_DEVICES` (this was true in the
+> original code too — the shell scripts set the env var). Use the launcher's
+> `gpus_per_run`, or set `CUDA_VISIBLE_DEVICES` yourself for a direct run.
 
-### Use several GPUs for one experiment
+### 4.1 How the scheduler distributes candidates (the model)
 
-Set `gpus_per_run` to the number of GPUs each run should use. The pool is split
-into slots of that size:
+Each generation has a population of candidate architectures to evaluate. The
+scheduler:
+
+- spawns `N` worker processes, where `N = workers_per_gpu × (number of visible
+  GPUs)` (or `N = threads` total if you use the legacy key);
+- pins each worker to a GPU by `gpu = worker_rank % (number of visible GPUs)`;
+- feeds all candidates through a **single shared queue** (work-stealing): each
+  worker trains one candidate at a time and, as soon as it finishes, pulls the
+  next candidate from the queue.
+
+So each visible GPU runs `workers_per_gpu` candidates **at the same time**, and
+**as one finishes, the next one starts** — no GPU sits idle while another is
+still busy. This is the same idea as the original round-robin distribution, but
+with dynamic load balancing (no stragglers). Per-candidate seeding makes the
+result independent of which worker/GPU trains which candidate, so results are
+identical regardless of the number of GPUs.
+
+### 4.2 `workers_per_gpu` vs `threads` — which to use
+
+Both live in the experiment config under `train:`.
+
+| Key | Meaning | Use it when |
+|---|---|---|
+| `workers_per_gpu: M` | `M` candidates concurrently **per visible GPU**; total workers = `M × n_gpus`. | You want a fixed concurrency *per GPU* that **scales with the hardware** — the same config uses more GPUs automatically when they are available. **Recommended.** |
+| `threads: T` (legacy) | `T` workers **in total**, split across the visible GPUs (`T / n_gpus` per GPU). | Back-compat with existing configs. The per-GPU concurrency changes if the number of GPUs changes. |
+
+If both are present, `workers_per_gpu` wins. Existing configs ship with
+`threads`; switch a config to `workers_per_gpu` when you want per-GPU control.
+
+**Worked example — "5 per GPU, refilled as they finish".** Population of 20, you
+want each GPU to train 5 candidates at a time on 2 GPUs:
+
+```yaml
+# experiment config (train:)
+workers_per_gpu: 5
+```
+```yaml
+# launcher matrix
+gpus: [0, 1]
+gpus_per_run: 2     # the run sees both GPUs (CUDA_VISIBLE_DEVICES=0,1)
+```
+
+Result: `5 × 2 = 10` workers → 5 candidates concurrent on each GPU. The 20
+candidates flow from the shared queue; the first 10 start, and each worker grabs
+the next one the moment it finishes — exactly "as one architecture ends, another
+enters". With 1 GPU the same config runs 5 at a time; with 4 GPUs, 5 per GPU = 20
+at a time — without editing the config.
+
+(With `threads`, you would write `threads: 10` and get 5 per GPU **only** while
+exactly 2 GPUs are visible; change the GPU count and the per-GPU number changes.)
+
+### 4.3 GPU memory / large datasets
+
+`workers_per_gpu` is also your **memory-pressure control**: those concurrent
+trainings share one GPU's VRAM. With a large dataset or large models, too many
+concurrent candidates can exhaust memory:
+
+- If the log shows CUDA out-of-memory (OOM) errors, **lower `workers_per_gpu`**
+  (e.g. 5 → 3 → 2). Trade-off: less concurrency is safer but slower.
+- There is a safety net: on an OOM the scheduler clears the CUDA cache and
+  **retries the candidate once** before scoring it 0.0 (with an explicit error
+  log). This absorbs transient memory spikes so a single OOM does not silently
+  inject a zero-fitness candidate into the search — but it is not a substitute
+  for tuning `workers_per_gpu` when OOM is systematic.
+
+### 4.4 Running on one or many GPUs
+
+**One experiment, several GPUs** — set `gpus_per_run` to how many GPUs each run
+should use; the pool is split into slots of that size:
 
 ```yaml
 gpus: [0, 1]
-gpus_per_run: 2     # -> 1 slot of 2 GPUs; each run sees CUDA_VISIBLE_DEVICES=0,1
+gpus_per_run: 2     # 1 slot of 2 GPUs; the run sees CUDA_VISIBLE_DEVICES=0,1
 ```
 
-Within that run, candidate trainings are distributed across both GPUs by the
-work-stealing scheduler (a single GPU is never oversubscribed by two runs). With
-`gpus: [0,1,2,3]` and `gpus_per_run: 2` you get two slots (`[0,1]` and `[2,3]`):
-two runs at a time, each on two GPUs.
+**Many experiments in parallel, one GPU each** (throughput-oriented):
 
-> When is multi-GPU-per-run worth it? Only when one run actually saturates a
-> single GPU (large population, full epochs/models). For many small candidates,
-> running more experiments in parallel (`gpus_per_run: 1`) uses the hardware
-> better, because the per-run setup cost dominates over GPU compute.
+```yaml
+gpus: [0, 1, 2, 3]
+gpus_per_run: 1     # (default) 4 slots -> up to 4 runs at once, one GPU each
+```
+
+**Both at once** — e.g. two experiments in parallel, two GPUs each:
+
+```yaml
+gpus: [0, 1, 2, 3]
+gpus_per_run: 2     # 2 slots: [0,1] and [2,3]
+```
+
+A single GPU is never oversubscribed by two different runs: the launcher hands
+each run its own slot. A failed run never stops its siblings; a summary is
+printed at the end.
+
+> When is multi-GPU-*per-run* worth it? Only when one run actually saturates a
+> single GPU (large population, large models, full epochs). For many small
+> candidates, running more experiments in parallel (`gpus_per_run: 1`) uses the
+> hardware better, because per-run setup cost dominates over GPU compute. As a
+> rule of thumb: pick `gpus_per_run` and `workers_per_gpu` so each GPU is busy
+> but not OOM-ing, and use extra GPUs to run more experiments rather than to
+> accelerate one small experiment.
+
+### 4.5 Direct run (no launcher)
+
+The same applies to a single `run_all_evolution.py` call — you set visibility
+with `CUDA_VISIBLE_DEVICES` and per-GPU concurrency with the config:
+
+```bash
+CUDA_VISIBLE_DEVICES=0     python run_all_evolution.py ...   # 1 GPU
+CUDA_VISIBLE_DEVICES=0,1,2 python run_all_evolution.py ...   # 3 GPUs, candidates spread over all 3
+```
 
 ---
 
@@ -299,3 +406,13 @@ python launch.py experiment_matrices/M.yaml --resume
 | `defaults` | Args shared by every cell. |
 | `experiments[].overrides` | Per-cell args (override `defaults`). |
 | `experiments[].flags` | Literal flags appended verbatim (e.g. `--multi_objective`). |
+
+GPU usage cheat-sheet (see [§4](#4-managing-gpus) for the full model):
+
+| Want | Set |
+|---|---|
+| One experiment on N GPUs | matrix `gpus_per_run: N` (or `CUDA_VISIBLE_DEVICES` for a direct run) |
+| Many experiments in parallel, 1 GPU each | matrix `gpus: [0,1,2,3]`, `gpus_per_run: 1` |
+| K candidates concurrent per GPU (scales with #GPUs) | config `workers_per_gpu: K` |
+| Fixed total #workers across GPUs (legacy) | config `threads: T` |
+| Fewer OOMs on a large dataset | lower `workers_per_gpu` |
