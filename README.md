@@ -16,7 +16,7 @@ This repository provides a flexible and extensible framework for Neural Architec
 - **Experiment-Matrix Launcher:** A single launcher (`launch.py`) expands a YAML matrix into one run per (experiment × repeat), schedules them across GPU slots, and assigns an explicit seed to every repeat for reproducibility.
 - **Selectable Training Precision:** Choose `fp32`, `fp16`, or `bf16` from the config; `bf16` removes the gradient-underflow noise that corrupts the search signal on heterogeneous, short-budget training.
 - **Evaluation Cache:** An optional cache reuses the metrics of architectures that have already been evaluated, keyed by network, hyperparameters and the full evaluation configuration (including precision).
-- **Checkpointing & Resume:** MO-QNAS runs save the full search state (quantum population, elite state, Pareto archive, RNG) at every generation and can resume an interrupted run from the last boundary.
+- **Checkpointing & Resume:** Every algorithm (MO-QNAS and the GA family: GA, NSGA-II, NSGA-III, MOEA/D) saves its full search state — population, evolved hyperparameters, Pareto archive, algorithm-specific state (quantum PMFs / MOEA/D ideal point / reference directions) and all RNG — at every generation, and can resume an interrupted run from the last boundary, bit-identically to an uninterrupted one.
 - **Fairness Evaluation:** A post-processing step to evaluate model fairness across different demographic groups, such as skin tone and race.
 
 ## Project Structure
@@ -125,6 +125,13 @@ Each experiment is controlled by a YAML config in `experiment_configs/` (the sea
 - The search space (`function_dict`).  
 - Algorithm hyperparameters (`max_generations`, `population_size`, etc.).  
 - Training parameters (`batch_size`, `max_epochs`, `optimizer`).  
+- Proxy-accuracy aggregation (`eval_window_agg: max | mean | last`, default
+  `max`). Controls how `best_accuracy` is aggregated over the last
+  `epochs_to_eval` validation epochs: `max` (current behavior), `mean`
+  (recommended for new experiments — an unbiased estimator on the small
+  validation set) or `last` (final epoch only). Model selection
+  (`best_model.pth`) always keeps the best-val-accuracy epoch; only the
+  reported scalar changes.  
 - Training precision (`precision: fp32 | fp16 | bf16`). `bf16` needs native
   hardware support (Ampere/Ada, e.g. A100/L40S) and runs without a gradient
   scaler; the legacy `mixed_precision: true` flag still works and maps to
@@ -192,14 +199,20 @@ python run_all_evolution.py --algo moqnas \
     --config_path_dataset dataset_configs/cifar10.yaml \
     --use_cache --seed 42 --log_level INFO
 
-# Resume an interrupted MO-QNAS run from its last saved generation
-python run_all_evolution.py --algo moqnas \
+# Resume an interrupted run from its last saved generation (any algorithm)
+python run_all_evolution.py --algo nsga2 \
     --config_file experiment_configs/cifar_mo/config0_3.yaml \
-    --experiment_path experiment_cifar10_qfamily/moqnas/exp10_repeat_1 \
+    --experiment_path experiment_cifar10_ea/nsga2/exp4_repeat_1 \
     --data_path datasets/cifar10_data --dataset cifar10 \
     --config_path_dataset dataset_configs/cifar10.yaml \
     --resume --seed 42 --log_level INFO
 ```
+
+> Note on resume: `--resume` works for every algorithm and picks up from
+> `<experiment_path>/checkpoint.pkl`. Without it, an existing checkpoint is
+> ignored and the run restarts from generation 0 (safe default). Rerun the
+> exact same command (same config, population, generations, objectives and
+> precision) plus `--resume`; a mismatch aborts naming the differing field.
 
 > Note on precision: select it in the config (`precision: fp32 | fp16 | bf16`).
 > `bf16` requires native hardware support (Ampere/Ada, e.g. A100/L40S).
