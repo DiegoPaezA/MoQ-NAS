@@ -53,15 +53,21 @@ def _arg_tokens(key, value):
     return [f'--{key}', str(value)]
 
 
-def expand(matrix: dict):
+def expand(matrix: dict, resume: bool = False):
     """Yield one cell dict per (experiment, repeat).
 
     Each cell: {experiment_path, seed, gpu(None yet), argv(list)}.
+
+    ``resume`` (matrix key ``resume: true`` OR the launcher ``--resume``
+    flag) appends ``--resume`` to every cell, so relaunching an
+    interrupted batch is rerunning the same matrix: each run picks up from
+    its own ``<experiment_path>/checkpoint.pkl``.
     """
     defaults = matrix.get('defaults', {}) or {}
     repeats = int(matrix.get('repeats', 1))
     seed_base = int(matrix.get('seed_base', 42))
     exp_root = matrix['exp_root']
+    resume = bool(resume or matrix.get('resume', False))
 
     for exp in matrix['experiments']:
         algo = exp['algo']
@@ -81,6 +87,8 @@ def expand(matrix: dict):
             for k, v in merged.items():
                 argv += _arg_tokens(k, v)
             argv += flags
+            if resume:
+                argv.append('--resume')
             yield {'experiment_path': exp_path, 'seed': seed, 'gpu': None, 'argv': argv}
 
 
@@ -91,9 +99,9 @@ def _record_command(cell):
         f.write(env + ' '.join(cell['argv']) + '\n')
 
 
-def run_matrix(matrix: dict, dry_run: bool = False):
+def run_matrix(matrix: dict, dry_run: bool = False, resume: bool = False):
     gpus = matrix.get('gpus', [0]) or [0]
-    cells = list(expand(matrix))
+    cells = list(expand(matrix, resume=resume))
 
     if dry_run:
         for c in cells:
@@ -146,10 +154,14 @@ def main():
     ap.add_argument('matrix', help='Path to an experiment-matrix YAML file.')
     ap.add_argument('--dry-run', action='store_true',
                     help='Print the expanded commands without running anything.')
+    ap.add_argument('--resume', action='store_true',
+                    help='Append --resume to every run (each picks up from its own '
+                         'checkpoint.pkl). Overrides the matrix `resume` key. Use this '
+                         'to relaunch an interrupted batch with the same matrix.')
     args = ap.parse_args()
     with open(args.matrix) as f:
         matrix = yaml.safe_load(f)
-    sys.exit(run_matrix(matrix, dry_run=args.dry_run))
+    sys.exit(run_matrix(matrix, dry_run=args.dry_run, resume=args.resume))
 
 
 if __name__ == '__main__':
