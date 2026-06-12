@@ -252,9 +252,13 @@ def main(**args):
         population, fitnesses = engine.evolve()
         logger.info("Evolution finished.")
         if population is not None and fitnesses is not None:
+            # Print generically over the configured objectives (any number/type),
+            # instead of assuming a fixed 3-objective accuracy/params/time layout.
+            obj_names = config.train_spec['objectives']
             for i, (ind, fit) in enumerate(zip(population, fitnesses)):
                 chrom = ind.tolist() if hasattr(ind, "tolist") else ind
-                print(f"  Ind {i}: chrom={chrom}  →  (acc={fit[0]:.3f}, params={fit[1]:.0f}, time={fit[2]:.4f})")
+                fit_str = ", ".join(f"{name}={float(v):.4f}" for name, v in zip(obj_names, fit))
+                print(f"  Ind {i}: chrom={chrom}  →  ({fit_str})")
 
 
 if __name__ == '__main__':
