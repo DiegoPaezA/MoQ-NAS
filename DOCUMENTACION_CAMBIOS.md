@@ -300,8 +300,9 @@ antes de avanzar el contador), incluyendo **todas las RNG** (numpy, python, torc
 CPU/CUDA). Detalles de diseño:
 
 - **`--resume` explícito**: sin el flag, un checkpoint existente se **ignora** y la
-  corrida empieza en gen 0 (comportamiento seguro por defecto). Solo moqnas lo
-  soporta; otros algoritmos lanzan un error claro.
+  corrida empieza en gen 0 (comportamiento seguro por defecto). En esta etapa solo
+  moqnas lo soportaba; **más tarde se extendió a toda la familia GA** (ver la sección
+  "Extensión post-estrategia" más abajo).
 - **Validación de config al reanudar**: se compara campo a campo un bloque de config
   (incluye `max_generations`, porque gobierna los *schedules* del *update* cuántico,
   además de objetivos, precisión y semilla). Cualquier diferencia aborta nombrando
@@ -355,6 +356,66 @@ Los scripts `run_ea_1.sh`, `run_moqnas_1.sh`, `run_qnas_1.sh` pasaron a ser
 *wrappers* de una línea sobre el lanzador. Verificado: dos celdas concurrentes en 2
 GPUs, semillas por repeat, y `repeat_1` (semilla 42) bit-exacto vs la referencia.
 
+### Extensión post-estrategia — Checkpoint/resume para la familia GA (`a7b966f`, `a0e6216`, `d2c9dcb`)
+
+El Área 6 dejó el checkpoint solo para MO-QNAS. Una corrida de la familia GA
+(`GA`, `NSGA-II`, `NSGA-III`, `MOEA/D`) que perdiera energía en la generación 80 de
+100 debía reiniciarse desde 0. Esta extensión lo resuelve, reusando la
+infraestructura del Área 6 en vez de duplicarla. La estrategia previa se documentó
+en `ESTRATEGIA_CHECKPOINT_GA.md` (commit `a24e5a2`).
+
+**Generalización del módulo (`a7b966f`).** `algorithms/qnas/checkpoint.py` se movió a
+`algorithms/checkpoint.py` y se hizo **agnóstico al motor**: el módulo maneja solo lo
+transversal (contador de generación, *bookkeeping* común, captura de RNG, escritura
+atómica, validación del bloque de config, flag `_resumed`) y delega el estado
+específico a tres métodos que cada motor implementa:
+
+- `_checkpoint_config_block()` — config que define la identidad (validada al reanudar);
+- `_checkpoint_state()` — el estado restaurable del motor;
+- `_restore_state(state)` — lo restaura.
+
+Esto mapea la jerarquía de clases `GA → NSGA2 → {NSGA3, MOEAD}`: cada subclase
+**extiende** los métodos del padre con `super()`. MO-QNAS implementa los suyos
+reproduciendo su contenido previo (regresión cero: dos corridas seedeadas siguen
+dando checkpoints byte-idénticos).
+
+**Estado por algoritmo (`a0e6216`).** Lo que cada motor declara como restaurable:
+
+| Algoritmo | Estado propio (además del común) |
+|---|---|
+| `GA` | `population`, **`pop_params`** (genes continuos evolucionados), `fitnesses` |
+| `NSGA-II` | `population_ids`, archivo de Pareto (`pareto_global_*`), `fronts_history` |
+| `NSGA-III` | `_ref_dirs` (direcciones de referencia) + `ref_divisions` en el config block |
+| `MOEA/D` | **`z`** (punto ideal acumulado a lo largo de toda la búsqueda), `weights`, `neighbors` |
+
+`save_checkpoint` se engancha al final de cada `go_next_gen` (la frontera de
+generación). Cada `evolve` gana una rama `_resumed` que **salta la inicialización de
+la gen 0** y continúa en `g+1`. En NSGA-II hubo una sutileza: la población padre vive
+en variables locales del bucle (`pop_old`/`fits_old`/`ids_old`), así que la rama de
+*resume* las **reconstruye** desde los atributos restaurados antes de entrar al
+`while`. En MOEA/D, `z` se restaura **después** de que `initialize_ga` lo recalcula
+desde cero (el `z` restaurado es el autoritativo).
+
+> **Los dos atributos de mayor riesgo** —`pop_params` (GA) y `z` (MOEA/D)— son
+> precisamente los que un checkpoint ingenuo olvidaría: el primero son los
+> hiperparámetros continuos evolucionados; el segundo es estado acumulado entre
+> generaciones (análogo a la `_q_ema` de MO-QNAS). El test de aceptación los cubre.
+
+**Reanudación de un *batch* completo (`d2c9dcb`).** El lanzador (`launch.py`) acepta
+ahora una clave de matriz `resume: true` **o** un flag `--resume` (que tiene
+prioridad), que añade `--resume` a cada celda. Relanzar un *batch* interrumpido es
+rerunear la misma matriz con `--resume`; cada celda retoma desde su propio
+`checkpoint.pkl`.
+
+**Test de aceptación (`.refactor_baseline/ga_checkpoint_check.sh`, 18/18 PASS).** Para
+**cada uno de los 4 algoritmos**: una corrida de 4 generaciones **interrumpida con
+SIGKILL tras la gen 2** y **reanudada** produce un estado **bit-exacto** (población,
+`pop_params`, archivo de Pareto, `z`, `_ref_dirs`, estado RNG de numpy) frente a la
+corrida ininterrumpida. Más los *guard checks*: sin `--resume` arranca en gen 0, y un
+*mismatch* de config (p. ej. `num_generations` distinto) aborta nombrando el campo.
+Se usan objetivos FLOPs para nsga2/nsga3/moead y `best_accuracy` (determinista) para
+GA, de modo que la corrida completa sea reproducible (sección 1.3).
+
 ---
 
 ## 5. Conceptos clave explicados en profundidad
@@ -405,8 +466,11 @@ Los scripts de verificación viven en `.refactor_baseline/` (directorio ignorado
 git; existe localmente). Los principales:
 
 - `expB.sh` — reproducibilidad bit-exacta de nsga2 entre *threads*.
-- `area6_check.sh` — batería de 10 comprobaciones del checkpoint/resume, incluido el
-  test de aceptación interrumpido vs ininterrumpido.
+- `area6_check.sh` — batería de 10 comprobaciones del checkpoint/resume de MO-QNAS,
+  incluido el test de aceptación interrumpido vs ininterrumpido.
+- `ga_checkpoint_check.sh` — el equivalente para la familia GA (18 comprobaciones):
+  para GA/NSGA-II/NSGA-III/MOEA/D, interrumpido con SIGKILL + reanudado == ininterrumpido
+  bit-exacto, más los *guard checks*.
 - `final_check.sh` — verificación integral de los algoritmos end-to-end.
 
 Patrón general de una verificación bit-exacta:
@@ -500,3 +564,13 @@ Rama: `refactor/update-2026-staged`. En orden cronológico.
 | `18e0857` | 2 | lanzador de experimentos |
 | `523a063` | 2 | scripts como *wrappers* del lanzador |
 | `165b723` | — | actualización del README |
+
+### Post-estrategia: configs FLOPs, fix de impresión y checkpoint de la familia GA
+
+| Commit | Descripción |
+|---|---|
+| `0c4446f` | matriz `acc_flops.yaml` (4 algos MO sobre accuracy+FLOPs) + fix del `print` final hardcodeado a 3 objetivos (IndexError con 2 objetivos) |
+| `a24e5a2` | `ESTRATEGIA_CHECKPOINT_GA.md` (análisis y estrategia) |
+| `a7b966f` | checkpoint generalizado a módulo agnóstico al motor (`algorithms/checkpoint.py`) |
+| `a0e6216` | checkpoint/resume extendido a la familia GA (GA, NSGA-II/III, MOEA/D) |
+| `d2c9dcb` | `--resume` como clave/flag del lanzador de matrices |
