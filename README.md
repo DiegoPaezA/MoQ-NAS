@@ -305,6 +305,24 @@ Results are written under
 algorithms concurrently instead, set `gpus: [0, 1, 2, 3]` (one algorithm per
 GPU slot).
 
+#### Resuming an interrupted batch
+
+Every run (MO-QNAS and the GA family: GA, NSGA-II, NSGA-III, MOEA/D) writes a
+`checkpoint.pkl` at each generation boundary. If a batch is interrupted (power
+loss, preemption), relaunch the **same matrix** with `--resume`: each cell
+picks up from its own `<experiment_path>/checkpoint.pkl` instead of starting
+over, and the resumed search is bit-identical to an uninterrupted one.
+
+```bash
+# Same command that launched the batch, plus --resume
+python launch.py experiment_matrices/acc_flops.yaml --resume
+```
+
+`--resume` can also be made the default for a matrix by adding `resume: true`
+at its top level. Without `--resume` (and without the key), an existing
+checkpoint is ignored and the run restarts from generation 0 — the safe
+default for a fresh launch.
+
 ### 4. Environment Configuration
 
 The following steps are used to configure the environment for the project.
