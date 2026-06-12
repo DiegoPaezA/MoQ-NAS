@@ -13,6 +13,7 @@ import numpy as np
 import time
 
 from .population import QPopulationNetwork, QPopulationParams
+from .checkpoint import save_checkpoint
 from .helpers.configs import NetworkRulesConfig, EliteUpdateConfig
 from .helpers.operators import apply_crossover
 
@@ -773,6 +774,8 @@ class QNAS(object):
         keep_ids = [best_id] if best_id else []
         delete_old_dirs_v2(self.experiment_path, self.current_gen, keep_ids=keep_ids)
 
+        # Generation boundary: quantum update + save_data done, g+1 not begun.
+        save_checkpoint(self)
         self.current_gen += 1
 
     def evolve(self):

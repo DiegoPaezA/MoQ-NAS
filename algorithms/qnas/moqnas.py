@@ -14,6 +14,7 @@ import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from settings import CFG_OBJ_PATH
 from algorithms.pareto import dominates, fast_nondominated_sort, crowding_distance, compute_hypervolume_mixed
+from .checkpoint import save_checkpoint
 from .qnas2 import QNAS
 from .helpers.configs import MOEAConfig
 from .helpers.operators import apply_crossover
@@ -653,6 +654,9 @@ class MOQNAS(QNAS):
 
         # 8. Save other necessary data from the parent class and advance the generation counter.
         self.save_data()
+        # Generation boundary: archive + quantum update + save_data complete,
+        # generation g+1 has consumed no randomness yet (Area 6).
+        save_checkpoint(self)
         self.current_gen += 1
 
     def evolve(self) -> tuple[np.ndarray, np.ndarray]:
@@ -677,35 +681,47 @@ class MOQNAS(QNAS):
                 j) Prepare (p0_params, p0_nets, f0, p0_raws) for next iteration
         3. Return final global Pareto archive
         """
-        # 1) Generation 0: sample both hyperparams and nets via generate_classical()
         start_time = time.time()
-        p0_params, p0_nets = self.generate_classical()
-        self.classical_params = p0_params
-        self.classical_nets = p0_nets
-        
-        self.qpop_params.current_pop = p0_params
-        self.qpop_net.current_pop    = p0_nets
+        if getattr(self, '_resumed', False):
+            # Resumed from a checkpoint: the survivors of the completed
+            # generation g play the parent role; the loop enters at g+1.
+            self.logger.info("Resuming evolution after completed generation %d.",
+                             self.current_gen)
+            p0_params = self.classical_params
+            p0_nets = self.classical_nets
+            f0 = self.fits
+            p0_ids = self.classical_ids
+            start_gen = self.current_gen + 1
+        else:
+            # 1) Generation 0: sample both hyperparams and nets via generate_classical()
+            start_gen = 1
+            p0_params, p0_nets = self.generate_classical()
+            self.classical_params = p0_params
+            self.classical_nets = p0_nets
 
-        # Evaluate generation 0
-        f0 = self.multiobjective_fitness()
-        self.logger.info("Generation 0: fitnesses:\n%s", f0)
-        
-        p0_ids = [f"0_{i}" for i in range(len(p0_nets))]
-        self.classical_ids = p0_ids # Initialize a new attribute to hold current IDs
-    
-        self.fits = f0
-        self.raw_fits = self.raw_fits.copy()
+            self.qpop_params.current_pop = p0_params
+            self.qpop_net.current_pop    = p0_nets
 
-        # Record best‐so‐far (by first objective)
-        i0 = int(np.nanargmax(f0[:, 0]))
-        self.best_so_far = float(f0[i0, 0])
-        self.best_so_far_id = [0, i0]
+            # Evaluate generation 0
+            f0 = self.multiobjective_fitness()
+            self.logger.info("Generation 0: fitnesses:\n%s", f0)
+
+            p0_ids = [f"0_{i}" for i in range(len(p0_nets))]
+            self.classical_ids = p0_ids # Initialize a new attribute to hold current IDs
+
+            self.fits = f0
+            self.raw_fits = self.raw_fits.copy()
+
+            # Record best‐so‐far (by first objective)
+            i0 = int(np.nanargmax(f0[:, 0]))
+            self.best_so_far = float(f0[i0, 0])
+            self.best_so_far_id = [0, i0]
 
         # Keep copies for parent‐combination in next loop
         p0_raws = self.raw_fits.copy()
 
-        # 2) Main loop: generations 1..max_generations
-        for gen in range(1, self.max_generations + 1):
+        # 2) Main loop: generations start_gen..max_generations
+        for gen in range(start_gen, self.max_generations + 1):
             self.current_gen = gen
 
             # 2a) Sample children classical population (both params and nets) at once
