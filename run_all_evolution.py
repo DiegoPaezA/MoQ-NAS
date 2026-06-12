@@ -4,7 +4,7 @@ from typing import Tuple
 
 from core import config as cfg
 from core import evaluation
-from core.eval_cache import CachedEvaluator
+from core.eval_cache import CachedEvaluator, compute_fingerprint
 from utils.helpers import check_files, init_log, download_dataset
 from utils.seeding import set_global_seeds
 
@@ -82,6 +82,9 @@ def main(**args):
 
     algo = args.get('algo', 'nsga2').lower()
     logger.info(f"Selected algorithm: {algo}")
+
+    if args.get('resume') and algo != 'moqnas':
+        raise ValueError("--resume is currently supported only for --algo moqnas.")
 
     if args.get('num_generations') is None:
         args['num_generations'] = 50  # GA-family default; qnas/moqnas use the config value
@@ -195,6 +198,26 @@ def main(**args):
         )
         # Special initializer for MO-QNAS
         engine.initialize_moqnas(**config.QNAS_spec)
+
+        # Checkpoint/resume wiring (Area 6). The config block stored in every
+        # checkpoint carries the evaluation fingerprint (shared notion of
+        # identity with the eval cache), the precision and the seed.
+        from algorithms.qnas.checkpoint import checkpoint_path, load_checkpoint
+        engine.checkpoint_extra = {
+            'fingerprint': compute_fingerprint(config.train_spec),
+            'precision': config.train_spec.get('precision', 'fp32'),
+            'seed': args.get('seed', 42),
+        }
+        engine.checkpoint_keep_every = config.train_spec.get('checkpoint_keep_every', 0)
+        ckpt = checkpoint_path(engine)
+        if args.get('resume'):
+            completed = load_checkpoint(engine)
+            logger.info(f"Resumed from {ckpt}: generation {completed} completed, "
+                        f"continuing at {completed + 1}.")
+        elif os.path.exists(ckpt):
+            logger.info(f"Checkpoint found at {ckpt} but --resume was not given; "
+                        f"starting from generation 0 (checkpoint will be overwritten).")
+
         logger.info("Starting MO-QNAS evolution ...")
         engine.evolve()
         logger.info("MO-QNAS evolution finished.")
@@ -323,6 +346,9 @@ if __name__ == '__main__':
                         help='Enable multi-objective optimization (MO-QNAS).')
 
     # Cache
+    parser.add_argument('--resume', action='store_true', default=False,
+                        help='Resume a moqnas run from <experiment_path>/checkpoint.pkl. '
+                             'Without this flag an existing checkpoint is ignored.')
     parser.add_argument('--use_cache', action='store_true', default=False,
                         help='Use cached evaluations to speed up runs.')
 
