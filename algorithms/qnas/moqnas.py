@@ -14,7 +14,7 @@ import numpy as np
 from pymoo.indicators.hv import Hypervolume
 from settings import CFG_OBJ_PATH
 from algorithms.pareto import dominates, fast_nondominated_sort, crowding_distance, compute_hypervolume_mixed
-from .checkpoint import save_checkpoint
+from algorithms.checkpoint import save_checkpoint
 from .qnas2 import QNAS
 from .helpers.configs import MOEAConfig
 from .helpers.operators import apply_crossover
@@ -658,6 +658,38 @@ class MOQNAS(QNAS):
         # generation g+1 has consumed no randomness yet (Area 6).
         save_checkpoint(self)
         self.current_gen += 1
+
+    # ---- Checkpoint hooks: extend QNAS state with the external archive ----
+
+    def _checkpoint_state(self) -> dict:
+        s = super()._checkpoint_state()
+        s['moqnas'] = {
+            'classical_nets': self.classical_nets,
+            'classical_params': self.classical_params,
+            'classical_ids': list(self.classical_ids),
+            'fits': self.fits,
+            'raw_fits': self.raw_fits,
+            'pareto_global_population': self.pareto_global_population,
+            'pareto_global_fitnesses': self.pareto_global_fitnesses,
+            'pareto_global_params': self.pareto_global_params,
+            'pareto_global_ids': list(self.pareto_global_ids),
+            'fronts_history': self.fronts_history,
+        }
+        return s
+
+    def _restore_state(self, s: dict) -> None:
+        super()._restore_state(s)
+        m = s['moqnas']
+        self.classical_nets = m['classical_nets']
+        self.classical_params = m['classical_params']
+        self.classical_ids = m['classical_ids']
+        self.fits = m['fits']
+        self.raw_fits = m['raw_fits']
+        self.pareto_global_population = m['pareto_global_population']
+        self.pareto_global_fitnesses = m['pareto_global_fitnesses']
+        self.pareto_global_params = m['pareto_global_params']
+        self.pareto_global_ids = m['pareto_global_ids']
+        self.fronts_history = m['fronts_history']
 
     def evolve(self) -> tuple[np.ndarray, np.ndarray]:
         """

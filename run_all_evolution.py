@@ -202,7 +202,7 @@ def main(**args):
         # Checkpoint/resume wiring (Area 6). The config block stored in every
         # checkpoint carries the evaluation fingerprint (shared notion of
         # identity with the eval cache), the precision and the seed.
-        from algorithms.qnas.checkpoint import checkpoint_path, load_checkpoint
+        from algorithms.checkpoint import checkpoint_path, load_checkpoint
         engine.checkpoint_extra = {
             'fingerprint': compute_fingerprint(config.train_spec),
             'precision': config.train_spec.get('precision', 'fp32'),

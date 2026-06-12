@@ -13,7 +13,7 @@ import numpy as np
 import time
 
 from .population import QPopulationNetwork, QPopulationParams
-from .checkpoint import save_checkpoint
+from algorithms.checkpoint import save_checkpoint
 from .helpers.configs import NetworkRulesConfig, EliteUpdateConfig
 from .helpers.operators import apply_crossover
 
@@ -777,6 +777,57 @@ class QNAS(object):
         # Generation boundary: quantum update + save_data done, g+1 not begun.
         save_checkpoint(self)
         self.current_gen += 1
+
+    # ---- Checkpoint hooks (consumed by algorithms.checkpoint) ----
+
+    def _checkpoint_config_block(self) -> dict:
+        """Identity-defining config validated on resume (see algorithms.checkpoint)."""
+        block = {
+            'algorithm': type(self).__name__,
+            'objectives': list(self.objectives),
+            'num_quantum_ind': int(self.qpop_net.num_ind),
+            'fn_list': list(self.qpop_net.chromosome.fn_list),
+            'max_generations': int(getattr(self, 'max_generations', 0)
+                                   or getattr(self, 'generations', 0) or 0),
+            'update_quantum_gen': int(self.update_quantum_gen),
+            'crossover_frequency': int(getattr(self, 'crossover_frequency', 0) or 0),
+        }
+        block.update(getattr(self, 'checkpoint_extra', {}) or {})
+        return block
+
+    def _checkpoint_state(self) -> dict:
+        """Resumable quantum-search state (PMFs + coupled elite state)."""
+        qn, qp = self.qpop_net, self.qpop_params
+        return {
+            'random_intensity': getattr(self, 'random', 0.0),
+            'qpop_net': {
+                'probabilities': qn.probabilities,
+                'current_pop': qn.current_pop,
+                'current_pop_objs': getattr(qn, 'current_pop_objs', None),
+                'num_genes': qn.chromosome.num_genes,
+                'update_counter': qn.logger._update_counter,
+                'last_P': qn.logger._last_P,
+                'q_ema': qn.update_strategy._q_ema,
+            },
+            'qpop_params': {
+                'lower': qp.lower, 'upper': qp.upper, 'current_pop': qp.current_pop,
+            },
+        }
+
+    def _restore_state(self, s: dict) -> None:
+        qn, qp = self.qpop_net, self.qpop_params
+        self.random = s['random_intensity']
+        n = s['qpop_net']
+        qn.chromosome.set_num_genes(n['num_genes'])
+        qn.probabilities = n['probabilities']
+        qn.current_pop = n['current_pop']
+        if n['current_pop_objs'] is not None:
+            qn.current_pop_objs = n['current_pop_objs']
+        qn.logger._update_counter = n['update_counter']
+        qn.logger._last_P = n['last_P']
+        qn.update_strategy._q_ema = n['q_ema']
+        p = s['qpop_params']
+        qp.lower, qp.upper, qp.current_pop = p['lower'], p['upper'], p['current_pop']
 
     def evolve(self):
         """Runs the main evolutionary loop."""
