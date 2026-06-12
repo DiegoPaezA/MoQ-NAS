@@ -12,7 +12,11 @@ This repository provides a flexible and extensible framework for Neural Architec
 - **Modular Architecture:** A clean, refactored structure that separates algorithms, core components, and utilities.
 - **Extensible CNN Library:** A rich set of CNN building blocks, including standard convolutions, residual blocks, and attention mechanisms (SE, CBAM).
 - **Flexible Configuration:** Easily configure experiments, search spaces, and network parameters using YAML files.
-- **Multi-Objective Optimization:** Optimize for competing objectives simultaneously, such as accuracy, model size, and inference time.
+- **Configurable Multi-Objective Optimization:** Optimize for any combination of competing objectives — accuracy, parameter count, FLOPs/MACs, inference time — declared per experiment and validated at startup.
+- **Experiment-Matrix Launcher:** A single launcher (`launch.py`) expands a YAML matrix into one run per (experiment × repeat), schedules them across GPU slots, and assigns an explicit seed to every repeat for reproducibility.
+- **Selectable Training Precision:** Choose `fp32`, `fp16`, or `bf16` from the config; `bf16` removes the gradient-underflow noise that corrupts the search signal on heterogeneous, short-budget training.
+- **Evaluation Cache:** An optional cache reuses the metrics of architectures that have already been evaluated, keyed by network, hyperparameters and the full evaluation configuration (including precision).
+- **Checkpointing & Resume:** MO-QNAS runs save the full search state (quantum population, elite state, Pareto archive, RNG) at every generation and can resume an interrupted run from the last boundary.
 - **Fairness Evaluation:** A post-processing step to evaluate model fairness across different demographic groups, such as skin tone and race.
 
 ## Project Structure
@@ -22,46 +26,54 @@ The codebase has been refactored into a modular architecture to improve clarity 
 ```
 moqnas/
 ├── algorithms/
-│   ├── ga/                   # Classic Genetic Algorithms (GA, NSGA-II, NSGA-III)
-│   └── qnas/                 # Quantum-Inspired Algorithms (QNAS, MOQNAS)
+│   ├── ga/                   # Classic Genetic Algorithms (GA, NSGA-II, NSGA-III, MOEA/D)
+│   ├── pareto/               # Shared Pareto operators (dominance, diversity, hypervolume)
+│   └── qnas/                 # Quantum-Inspired Algorithms (QNAS, MOQNAS) + checkpoint.py
 │
 ├── core/
 │   ├── cnn/                  # CNN model definitions, trainer, and metrics
 │   ├── fairness/             # Fairness evaluation logic and data loaders
 │   ├── config.py             # Experiment configuration handler
-│   └── evaluation.py         # Population evaluation engine
+│   ├── evaluation.py         # Population evaluation engine (work-stealing scheduler)
+│   ├── eval_cache.py         # Optional unified evaluation cache
+│   └── precision.py          # fp32 / fp16 / bf16 precision policy
 │
 ├── dataset_utils/
 │   ├── factory.py            # Dataset loading and splitting logic
 │   └── transformations.py    # Data augmentation and transforms
 │
 ├── utils/
-│   └── helpers.py            # General utility functions
+│   └── helpers.py            # General utility functions (facade over io/dataset/...)
 │
 ├── dataset_configs/
-│   └── *.yaml                # YAML files for experiment configuration
+│   ├── *.yaml                # Dataset metadata (cifar10.yaml, pathmnist.yaml, ...)
+│   └── cfg_obj.json          # Objective senses (maximize / minimize)
+│
+├── experiment_configs/       # Experiment configs: search space, hyperparameters, objectives
+│   ├── cifar/                # Single-objective and GA-family configs
+│   ├── cifar_mo/             # Multi-objective configs (incl. *_flops variants)
+│   └── ...                   # medmnist, fairness, ...
+│
+├── experiment_matrices/      # YAML matrices consumed by launch.py (ea, qfamily, smoke)
 │
 ├── scripts/
 │   ├── download_datasets/    # Script to download and prepare datasets like FairFace, WiderFace, Coco 
 │   ├── fairness_baseline/    # Evaluate fairness of baseline models (e.g., ResNet, MobileNet)
 │   └── readme.md             # Instructions to create person/face datasets for fairness evaluation
 │
-├── dataset_utils/
-│   ├── factory.py            # Dataset loading and splitting logic
-│   └── transformations.py    # Data augmentation and transforms
-│
-├── utils/
-│   └── helpers.py            # General utility functions
-│
-└── ...
+├── run_all_evolution.py      # Single entry point for one evolution run (any algorithm)
+├── launch.py                 # Experiment-matrix launcher (multiple runs + GPU scheduling)
+└── run_*.sh                  # Thin wrappers calling launch.py with a matrix
 ```
 
-- `algorithms/`: Contains the core logic for all search algorithms.
-- `core/`: Holds shared components essential for any experiment, including the CNN builder/trainer and the evaluation engine.
+- `algorithms/`: Contains the core logic for all search algorithms and the shared Pareto operators.
+- `core/`: Holds shared components essential for any experiment, including the CNN builder/trainer, the evaluation engine, the cache and the precision policy.
 - `dataset_utils/`: Manages all data loading, preprocessing, and splitting.
 - `utils/`: Contains helper functions used across the project.
-- `dataset_configs/`: Stores YAML configuration files that define the search space, model parameters, and training settings for experiments.
-- `run_*.py`: Executable scripts to launch different types of NAS experiments.
+- `dataset_configs/`: Dataset metadata YAMLs and the objective-sense definitions (`cfg_obj.json`).
+- `experiment_configs/`: YAML files that define the search space, model parameters, objectives and training settings for each experiment.
+- `experiment_matrices/`: YAML matrices that describe a batch of runs for `launch.py`.
+- `run_all_evolution.py`: Runs a single evolution; `launch.py` orchestrates many runs from a matrix.
 
 ## Fairness Evaluation
 
@@ -107,7 +119,7 @@ pip install -r requirements.txt
 
 ### 2. Configuration
 
-All experiments are controlled by configuration files located in the `dataset_configs/` directory. Before running an experiment, you can create or modify a `.yaml` file to define:
+Each experiment is controlled by a YAML config in `experiment_configs/` (the search space, algorithm and training settings), while `dataset_configs/` holds the dataset metadata and the objective senses (`cfg_obj.json`). Before running an experiment, you can create or modify an `experiment_configs/*.yaml` file to define:
 
 - The dataset (`dataset`, `data_path`).  
 - The search space (`function_dict`).  
@@ -126,20 +138,123 @@ All experiments are controlled by configuration files located in the `dataset_co
 
 ### 3. Running an Experiment
 
-Use one of the root-level scripts to launch an experiment. For example, to run a Multi-Objective QNAS evolution:
+There are two ways to run experiments: a **single run** with `run_all_evolution.py`, or a **batch of runs** with the matrix launcher `launch.py`.
+
+#### 3.1 A single run (`run_all_evolution.py`)
+
+`run_all_evolution.py` is the single entry point for every algorithm; the `--algo` flag selects which one. For example, a Multi-Objective QNAS evolution:
 
 ```bash
-python run_evolution_moqnas.py \
-    --config_file configs/your_experiment_config.yaml \
-    --experiment_path experiments/my_moqnas_run \
+python run_all_evolution.py \
+    --algo moqnas \
+    --config_file experiment_configs/cifar_mo/config0_3.yaml \
+    --experiment_path experiment_cifar10_qfamily/moqnas/exp10_repeat_1 \
+    --data_path datasets/cifar10_data \
+    --dataset cifar10 \
+    --config_path_dataset dataset_configs/cifar10.yaml \
+    --seed 42 \
     --log_level INFO
 ```
 
-- `--config_file`: Specifies the YAML file with the experiment's parameters.  
-- `--experiment_path`: Defines the directory where logs, models, and results will be saved.  
-- `--log_level`: Sets the verbosity of the log output.  
+Key flags:
 
+- `--algo`: Algorithm to run (`ga`, `nsga2`, `nsga3`, `moead`, `qnas`, `moqnas`).
+- `--config_file`: Experiment config (`experiment_configs/...`).
+- `--config_path_dataset`: Dataset metadata YAML (`dataset_configs/...`).
+- `--experiment_path`: Directory where logs, models, and results are saved.
+- `--seed`: Global RNG seed (makes a run reproducible).
+- `--log_level`: Verbosity of the log output.
 
+More examples for different setups:
+
+```bash
+# NSGA-II with explicit population and generations
+python run_all_evolution.py --algo nsga2 \
+    --config_file experiment_configs/cifar/config0.yaml \
+    --experiment_path experiment_cifar10_ea/nsga2/exp4_repeat_1 \
+    --data_path datasets/cifar10_data --dataset cifar10 \
+    --config_path_dataset dataset_configs/cifar10.yaml \
+    --population_size 20 --num_generations 150 --seed 42 --log_level INFO
+
+# Multi-objective with accuracy + parameters + FLOPs (a fully reproducible objective set)
+python run_all_evolution.py --algo moqnas \
+    --config_file experiment_configs/cifar_mo/config0_3_flops.yaml \
+    --experiment_path experiment_cifar10_qfamily/moqnas/flops_repeat_1 \
+    --data_path datasets/cifar10_data --dataset cifar10 \
+    --config_path_dataset dataset_configs/cifar10.yaml \
+    --seed 42 --log_level INFO
+
+# Enable the evaluation cache (skips re-training architectures already seen)
+python run_all_evolution.py --algo moqnas \
+    --config_file experiment_configs/cifar_mo/config0_3.yaml \
+    --experiment_path experiment_cifar10_qfamily/moqnas/cached_repeat_1 \
+    --data_path datasets/cifar10_data --dataset cifar10 \
+    --config_path_dataset dataset_configs/cifar10.yaml \
+    --use_cache --seed 42 --log_level INFO
+
+# Resume an interrupted MO-QNAS run from its last saved generation
+python run_all_evolution.py --algo moqnas \
+    --config_file experiment_configs/cifar_mo/config0_3.yaml \
+    --experiment_path experiment_cifar10_qfamily/moqnas/exp10_repeat_1 \
+    --data_path datasets/cifar10_data --dataset cifar10 \
+    --config_path_dataset dataset_configs/cifar10.yaml \
+    --resume --seed 42 --log_level INFO
+```
+
+> Note on precision: select it in the config (`precision: fp32 | fp16 | bf16`).
+> `bf16` requires native hardware support (Ampere/Ada, e.g. A100/L40S).
+> Multi-GPU is controlled with `CUDA_VISIBLE_DEVICES` (e.g.
+> `CUDA_VISIBLE_DEVICES=0,1 python run_all_evolution.py ...`); candidates are
+> evaluated in parallel and balanced across the visible GPUs.
+
+#### 3.2 A batch of runs (`launch.py`)
+
+`launch.py` expands an **experiment matrix** (a YAML file in `experiment_matrices/`) into one `run_all_evolution.py` invocation per (experiment × repeat). It schedules the runs across the GPU slots declared in the matrix (one run per slot at a time), gives every repeat its own seed (`seed_base + repeat_index`), and records the exact command in each experiment directory.
+
+A matrix looks like this:
+
+```yaml
+# experiment_matrices/qfamily.yaml
+exp_root: experiment_cifar10_qfamily
+gpus: [0]            # GPU slot pool; len(gpus) runs execute concurrently
+repeats: 3
+seed_base: 42        # repeat i (1-based) runs with seed_base + i
+
+defaults:            # arguments common to every run
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  log_level: INFO
+
+experiments:
+  - algo: moqnas
+    config: experiment_configs/cifar_mo/config0_2.yaml
+    name: exp10
+    overrides: {optimizer: AdamW, elite_mode: moead_topk}
+    flags: [--multi_objective]
+```
+
+Run it:
+
+```bash
+# Preview the exact commands without running anything
+python launch.py experiment_matrices/qfamily.yaml --dry-run
+
+# Launch the MO-QNAS family (3 repeats, seeds 43/44/45)
+python launch.py experiment_matrices/qfamily.yaml
+
+# Launch the GA / NSGA family
+python launch.py experiment_matrices/ea.yaml
+```
+
+To run several experiments in parallel, list more than one GPU in `gpus`
+(e.g. `gpus: [0, 1]`) and/or add more entries under `experiments:`; the
+launcher keeps every GPU slot busy and reports a summary at the end, so a
+single failed run never stops the others.
+
+The root-level `run_*.sh` scripts are now thin wrappers over the launcher,
+so `./run_moqnas_1.sh` and `./run_moqnas_1.sh --dry-run` are equivalent to
+calling `launch.py` with the matching matrix.
 
 ### 4. Environment Configuration
 
