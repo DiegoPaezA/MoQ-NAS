@@ -70,32 +70,53 @@ class EvalPopulation(object):
         # Combined list for tracking purposes
         self.metric_names = self.primary_metric_names + self.fairness_metric_names
 
+    def _num_workers(self, pop_size: int) -> int:
+        """Number of evaluation worker processes for this generation.
+
+        ``workers_per_gpu`` (preferred) sets the per-GPU concurrency and is
+        multiplied by the visible GPU count; the legacy ``threads`` key is
+        used as-is when present (a total worker count, not per-GPU). Never
+        spawn more workers than candidates.
+        """
+        per_gpu = self.train_params.get('workers_per_gpu')
+        if per_gpu is not None:
+            try:
+                n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            except Exception:
+                n_gpus = 0
+            workers = max(1, int(per_gpu)) * max(1, n_gpus)
+        else:
+            workers = max(1, int(self.train_params.get('threads', 1)))
+        return max(1, min(workers, pop_size))
+
     def __call__(self, decoded_params: list, decoded_nets: list, generation: int):
         pop_size = len(decoded_nets)
-        result_queue: mp.Queue = mp.Queue()
+        n_workers = self._num_workers(pop_size)
 
-        # Temporal solution to distribute the individuals in the threads
-        selected_thread = 0
-        individual_per_thread = []
+        # Work-stealing scheduler: a single task queue feeds N workers that
+        # pull until drained, so a worker that drew fast candidates keeps
+        # helping instead of idling (the static round-robin partition left
+        # stragglers). Per-candidate seeding keys training on candidate_id,
+        # not on which worker runs it, so results stay bit-exact.
+        task_queue: mp.Queue = mp.Queue()
+        result_queue: mp.Queue = mp.Queue()
+        stats_queue: mp.Queue = mp.Queue()
         for idx in range(pop_size):
-            individual_per_thread.append((idx, selected_thread, decoded_nets[idx], decoded_params[idx]))
-            selected_thread += 1
-            if selected_thread >= self.train_params['threads']:
-                selected_thread = selected_thread % self.train_params['threads']
-        
+            task_queue.put((idx, decoded_nets[idx], decoded_params[idx]))
+        for _ in range(n_workers):
+            task_queue.put(None)  # one sentinel per worker
+
         processes = []
         print("\n")
-        self.logger.info(f"Starting the Generation {generation} with {pop_size} individuals")
+        self.logger.info(f"Starting the Generation {generation} with {pop_size} individuals "
+                         f"({n_workers} workers)")
         evol_time_start = time.perf_counter()
 
-        # Create a process for each thread
-        for thread_id in range(self.train_params['threads']):
-            batch_thread = [x for x in individual_per_thread if x[1] == thread_id]
-            if not batch_thread:
-                continue
+        for worker_rank in range(n_workers):
             p = mp.Process(
                 target=self.run_individuals,
-                args=(generation, self.parallel_train_params, self.fn_dict, batch_thread, thread_id, result_queue)
+                args=(generation, self.parallel_train_params, self.fn_dict,
+                      worker_rank, task_queue, result_queue, stats_queue)
             )
             p.start()
             processes.append(p)
@@ -105,7 +126,7 @@ class EvalPopulation(object):
         for _ in range(pop_size):
             idx, res_dict, model_path = result_queue.get()
             results[idx] = res_dict
-            
+
             if model_path and os.path.exists(model_path):
                 # Save spec for later fairness eval
                 model_specs[idx] = {
@@ -118,7 +139,18 @@ class EvalPopulation(object):
                 model_specs[idx] = None
         for p in processes:
             p.join()
-        self.logger.info("Parallel evaluation complete.")
+
+        # Aggregate per-worker stats for straggler/idle visibility.
+        busy = {}
+        for _ in range(n_workers):
+            wr, n_cand, busy_s = stats_queue.get()
+            busy[wr] = (n_cand, busy_s)
+        total_wall = time.perf_counter() - evol_time_start
+        max_idle = max((total_wall - b[1]) for b in busy.values()) if busy else 0.0
+        self.logger.info(
+            "Parallel evaluation complete. workers=%d, candidates/worker=%s, "
+            "max worker idle=%.1fs of %.1fs wall.",
+            n_workers, {wr: busy[wr][0] for wr in sorted(busy)}, max_idle, total_wall)
 
         # --- FAIRNESS EVALUATION BLOCK ---
         if self.fairness_metric_names:
@@ -167,18 +199,25 @@ class EvalPopulation(object):
 
         return results
 
-    def run_individuals(self, generation, train_params, fn_dict, individuals_thread, thread_id, queue: mp.Queue):
+    def run_individuals(self, generation, train_params, fn_dict, worker_rank,
+                        task_queue: mp.Queue, result_queue: mp.Queue, stats_queue: mp.Queue):
+        """Worker loop: pull candidates from ``task_queue`` until a sentinel.
+
+        Each worker builds its loaders once and reseeds them per candidate
+        from the candidate's deterministic seed, so the result of a candidate
+        is independent of which worker ran it or how many it ran before.
+        """
         global worker_data_loader
         gpu_device = 'cpu'
         try:
             if torch.cuda.is_available():
                 num_gpus = torch.cuda.device_count()
                 if num_gpus > 0:
-                    gpu_idx = thread_id % num_gpus
+                    gpu_idx = worker_rank % num_gpus
                     torch.cuda.set_device(gpu_idx)
                     gpu_device = f'cuda:{gpu_idx}'
         except Exception as e:
-            self.logger.error(f"CUDA initialization failed for thread {thread_id}: {e}. Falling back to CPU.")
+            self.logger.error(f"CUDA initialization failed for worker {worker_rank}: {e}. Falling back to CPU.")
             gpu_device = 'cpu'
 
         os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -187,10 +226,17 @@ class EvalPopulation(object):
 
         train_loader, val_loader = self.loader.get_loader(pin_memory_device=gpu_device)
 
-        for original_idx, thread_id, decoded_net, decoded_params in individuals_thread:
+        n_done = 0
+        busy = 0.0
+        while True:
+            task = task_queue.get()
+            if task is None:  # sentinel: no more work for this worker
+                break
+            original_idx, decoded_net, decoded_params = task
             candidate_id = decoded_params.get('candidate_id', original_idx)
             id_str = f"{generation}_{candidate_id}"
             model_path = None
+            t0 = time.perf_counter()
             # Per-candidate deterministic seeding: accuracy must not depend on
             # which worker trains the candidate or in what order.
             cand_seed_id = candidate_id if isinstance(candidate_id, int) else original_idx
@@ -214,17 +260,20 @@ class EvalPopulation(object):
             except Exception as e:
                 self.logger.error(f"Error training model {id_str}: {e}")
                 results_dict = {k: 0.0 for k in self.metric_names}
-            
-            # Filter results for current thread (primary metrics only)
+
+            busy += time.perf_counter() - t0
+            # Filter results (primary metrics only)
             filtered_results = {k: results_dict.get(k, 0.0) for k in self.primary_metric_names}
-            queue.put((original_idx, filtered_results, model_path))
+            result_queue.put((original_idx, filtered_results, model_path))
+            n_done += 1
 
             if not results_dict:
-                self.logger.warning(f"Thread {thread_id} – candidate {original_idx}: No results returned.")
-                continue
+                self.logger.warning(f"Worker {worker_rank} – candidate {original_idx}: No results returned.")
             else:
                 metrics_log = ", ".join(f"{k}={results_dict.get(k, 0.0):.3f}" for k in self.primary_metric_names)
-                self.logger.info(f"Thread {thread_id} – candidate {original_idx}: {metrics_log}")
+                self.logger.info(f"Worker {worker_rank} – candidate {original_idx}: {metrics_log}")
+
+        stats_queue.put((worker_rank, n_done, busy))
     
     def evaluate_fairness_parallel_cuda(self, model_specs: list, processes_per_gpu: int = 10) -> Dict[int, Dict[str, float]]:
         import torch.multiprocessing as mp
