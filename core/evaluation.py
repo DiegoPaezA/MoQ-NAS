@@ -236,30 +236,50 @@ class EvalPopulation(object):
             candidate_id = decoded_params.get('candidate_id', original_idx)
             id_str = f"{generation}_{candidate_id}"
             model_path = None
-            t0 = time.perf_counter()
-            # Per-candidate deterministic seeding: accuracy must not depend on
-            # which worker trains the candidate or in what order.
             cand_seed_id = candidate_id if isinstance(candidate_id, int) else original_idx
-            cand_seed = seed_candidate(self.global_seed, generation, cand_seed_id)
-            # The loader is shared by all candidates of this process; reseed its
-            # generator so shuffle order/augmentation don't depend on how many
-            # candidates were trained before in the same process.
-            if getattr(train_loader, 'generator', None) is not None:
-                train_loader.generator.manual_seed(cand_seed)
-            try:
-                results_dict, model_path = master.fitness(id_str,
-                            {**train_params, 'device': gpu_device},
-                            fn_dict,
-                            decoded_net,
-                            decoded_params,
-                            train_loader,
-                            val_loader)
-            except RuntimeError as e:
-                self.logger.error(f"RuntimeError training model {id_str}: {e}")
-                results_dict = {k: 0.0 for k in self.metric_names}
-            except Exception as e:
-                self.logger.error(f"Error training model {id_str}: {e}")
-                results_dict = {k: 0.0 for k in self.metric_names}
+            t0 = time.perf_counter()
+            # A CUDA OOM gets ONE retry (after clearing the cache) before the
+            # candidate is scored 0.0, so transient memory pressure under high
+            # worker concurrency does not silently inject zero-fitness
+            # candidates into the search. Each attempt reseeds from the
+            # candidate's deterministic seed; non-OOM errors fail immediately.
+            results_dict = None
+            for attempt in range(2):
+                # Per-candidate deterministic seeding: accuracy must not depend
+                # on which worker trains the candidate or in what order.
+                cand_seed = seed_candidate(self.global_seed, generation, cand_seed_id)
+                # The loader is shared by all candidates of this process; reseed
+                # its generator so shuffle order/augmentation don't depend on
+                # how many candidates were trained before in the same process.
+                if getattr(train_loader, 'generator', None) is not None:
+                    train_loader.generator.manual_seed(cand_seed)
+                try:
+                    results_dict, model_path = master.fitness(id_str,
+                                {**train_params, 'device': gpu_device},
+                                fn_dict,
+                                decoded_net,
+                                decoded_params,
+                                train_loader,
+                                val_loader)
+                    break
+                except RuntimeError as e:
+                    is_oom = 'out of memory' in str(e).lower()
+                    if is_oom and attempt == 0:
+                        self.logger.error(
+                            f"CUDA OOM training model {id_str} (worker {worker_rank}); "
+                            f"clearing cache and retrying once.")
+                        if str(gpu_device).startswith('cuda'):
+                            torch.cuda.empty_cache()
+                        continue
+                    self.logger.error(
+                        f"{'CUDA OOM' if is_oom else 'RuntimeError'} training model "
+                        f"{id_str} after {attempt + 1} attempt(s); scoring 0.0: {e}")
+                    results_dict = {k: 0.0 for k in self.metric_names}
+                    break
+                except Exception as e:
+                    self.logger.error(f"Error training model {id_str}: {e}")
+                    results_dict = {k: 0.0 for k in self.metric_names}
+                    break
 
             busy += time.perf_counter() - t0
             # Filter results (primary metrics only)
