@@ -60,7 +60,7 @@ train:
     epochs_to_eval: 5 
     eval_window_agg: max   # how best_accuracy is aggregated over the eval window: max | mean | last
     optimizer: AdamW
-    mixed_precision: True
+    precision: bf16
     device: cuda:0
 
     # Dataset
