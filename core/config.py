@@ -123,13 +123,13 @@ class ConfigParameters(object):
             
             'train': [('batch_size', int), ('eval_batch_size', int), ('max_epochs', int),
                     ('epochs_to_eval', int), ('optimizer', str), ('device', str),
-                    ('dataset', str), ('mixed_precision', bool),
-                    ('objectives', list), ('multi_objective', bool), ('metrics', list), 
+                    ('dataset', str),
+                    ('objectives', list), ('multi_objective', bool), ('metrics', list),
                     ('data_augmentation', bool), ('subtract_mean', bool), ('artifacts', list),
                     ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
                     ('network_config', str), ('threads', int),
-                    ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),             
-                    ('stats_max_batches', int), ('num_workers', int),           
+                    ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),
+                    ('stats_max_batches', int), ('num_workers', int),
                     ]
         }
 
@@ -140,6 +140,16 @@ class ConfigParameters(object):
                     raise KeyError(f"Variable \"{config}:{var_name}\" not found in config file.")
                 if not isinstance(var, var_type):
                     raise TypeError(f"Variable {var_name} should be {var_type} but is {type(var)}")
+
+        # Precision: accept either explicit 'precision' (str) or legacy 'mixed_precision' (bool).
+        train = config_file['train']
+        precision_val = train.get('precision')
+        mixed_val = train.get('mixed_precision')
+        if precision_val is None and mixed_val is None:
+            raise KeyError("train config must have 'precision' (fp32|fp16|bf16) "
+                           "or legacy 'mixed_precision' (bool).")
+        if precision_val is not None and precision_val not in ('fp32', 'fp16', 'bf16'):
+            raise ValueError(f"train:precision must be fp32|fp16|bf16, got {precision_val!r}.")
         
         check_params_ranges()
         check_fn_dict()
