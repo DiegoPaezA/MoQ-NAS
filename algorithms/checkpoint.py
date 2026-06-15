@@ -52,7 +52,7 @@ def _capture_rng() -> dict:
         'python': random.getstate(),
         'torch_cpu': torch.get_rng_state().numpy(),
         'torch_cuda': ([s.numpy() for s in torch.cuda.get_rng_state_all()]
-                       if torch.cuda.is_available() else None),
+                       if torch.cuda.is_initialized() else None),
     }
 
 
@@ -60,7 +60,7 @@ def _restore_rng(rng: dict) -> None:
     np.random.set_state(rng['numpy'])
     random.setstate(rng['python'])
     torch.set_rng_state(torch.tensor(np.asarray(rng['torch_cpu']), dtype=torch.uint8))
-    if rng['torch_cuda'] is not None and torch.cuda.is_available():
+    if rng['torch_cuda'] is not None and torch.cuda.is_initialized():
         torch.cuda.set_rng_state_all(
             [torch.tensor(np.asarray(s), dtype=torch.uint8) for s in rng['torch_cuda']])
 

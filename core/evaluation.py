@@ -77,13 +77,20 @@ class EvalPopulation(object):
         multiplied by the visible GPU count; the legacy ``threads`` key is
         used as-is when present (a total worker count, not per-GPU). Never
         spawn more workers than candidates.
+
+        GPU count is read from CUDA_VISIBLE_DEVICES rather than calling any
+        torch.cuda function, because is_available()/device_count() register a
+        pthread_atfork handler in the NVIDIA driver; once registered in the
+        parent, all forked workers get _cuda_isInBadFork=True and cannot use
+        the GPU.
         """
         per_gpu = self.train_params.get('workers_per_gpu')
         if per_gpu is not None:
-            try:
-                n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-            except Exception:
-                n_gpus = 0
+            cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if cuda_visible is None or cuda_visible.strip() in ("", "NoDeviceFiles", "-1"):
+                n_gpus = 1  # unset or CPU-only: one "slot"
+            else:
+                n_gpus = len([x for x in cuda_visible.split(",") if x.strip()])
             workers = max(1, int(per_gpu)) * max(1, n_gpus)
         else:
             workers = max(1, int(self.train_params.get('threads', 1)))
@@ -105,6 +112,11 @@ class EvalPopulation(object):
             task_queue.put((idx, decoded_nets[idx], decoded_params[idx]))
         for _ in range(n_workers):
             task_queue.put(None)  # one sentinel per worker
+
+        if torch.cuda.is_initialized():
+            self.logger.warning(
+                "CUDA is initialized in the parent process; forked workers will fail to use "
+                "the GPU. Check for parent-side CUDA calls (e.g. tensors/RNG state on CUDA).")
 
         processes = []
         print("\n")
