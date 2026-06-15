@@ -574,3 +574,95 @@ Rama: `refactor/update-2026-staged`. En orden cronológico.
 | `a7b966f` | checkpoint generalizado a módulo agnóstico al motor (`algorithms/checkpoint.py`) |
 | `a0e6216` | checkpoint/resume extendido a la familia GA (GA, NSGA-II/III, MOEA/D) |
 | `d2c9dcb` | `--resume` como clave/flag del lanzador de matrices |
+
+### Fix CUDA-en-padre — scores 0.0 desde gen 2 (post `dff9606`)
+
+#### Síntoma y causa raíz
+
+Toda corrida multi-generacional posterior al commit `dff9606` (checkpoint/resume)
+producía `best_accuracy = 0.0` en **todas** las generaciones ≥ 2, con el error:
+
+```
+Cannot re-initialize CUDA in forked subprocess
+```
+
+La causa: `torch.cuda.get_rng_state_all()` en `_capture_rng` (checkpoint) inicializa
+el contexto CUDA **en el proceso padre** (el proceso de la evolución). El primer
+checkpoint se escribe al finalizar la generación 1. Desde la generación 2 en adelante,
+los workers creados con `fork()` heredan ese contexto y PyTorch los rechaza al
+intentar usar la GPU (en la creación del DataLoader con `pin_memory`).
+
+Este bug estaba **enmascarado** en las baterías de aceptación del Área 6 y GA:
+como el fallo es determinista, la comparación bit-exacta A == B se cumplía (ambas
+corridas fallaban exactamente igual), ocultando que las métricas eran ceros sistemáticos.
+
+#### Lección anti-enmascaramiento
+
+Toda verificación de resume bit-exacto debe acompañarse de un **check de salud**
+que confirme que ningún candidato recibe score 0.0 por error. Un fallo determinista
+pasa comparaciones de igualdad aunque la búsqueda sea completamente inválida.
+
+#### Causa raíz refinada (segunda investigación)
+
+`torch.cuda.is_available()` registra el handler `pthread_atfork` de CUDA al nivel
+del driver aunque `torch.cuda.is_initialized()` permanezca `False`. El commit
+`dff9606` introdujo `_capture_rng()` que llama `torch.cuda.is_available()` en el
+padre → el handler queda registrado → todos los hijos forkeados posteriores ven
+`_cuda_isInBadFork=True` y no pueden usar la GPU.
+
+El fix incorrecto original añadió `and torch.cuda.is_initialized()` pero mantuvo
+`torch.cuda.is_available()` — que es precisamente el culpable.
+
+Verificación empírica:
+```python
+import torch, os
+_ = torch.cuda.is_available()   # registra atfork handler aunque is_initialized()=False
+pid = os.fork()
+if pid == 0: print(torch._C._cuda_isInBadFork())  # → True
+```
+
+#### Fix (quirúrgico)
+
+**`algorithms/checkpoint.py::_capture_rng`** — eliminar `is_available()` y usar
+solo `is_initialized()`:
+
+```python
+'torch_cuda': ([s.numpy() for s in torch.cuda.get_rng_state_all()]
+               if torch.cuda.is_initialized() else None),
+```
+
+`is_initialized()` no hace llamadas al driver CUDA (no registra handler). En el
+padre, CUDA nunca está inicializado explícitamente, por lo que `torch_cuda` queda
+`None`. `_restore_rng` ya toleraba `None`. El estado CUDA del padre es
+irrelevante porque el seeding por candidato (0.6) resiembra CPU+CUDA al inicio
+de cada candidato con `(semilla_global, generación, candidate_id)`.
+
+**`core/evaluation.py::__call__`** — guard de aviso antes de forkear workers:
+
+```python
+if torch.cuda.is_initialized():
+    self.logger.warning("CUDA is initialized in the parent process; forked "
+                        "workers will fail to use the GPU. ...")
+```
+
+Convierte el modo de fallo "silencioso y determinista" en un aviso explícito visible
+en la generación donde ocurra cualquier futura inicialización accidental de CUDA.
+
+#### Alcance del impacto
+
+Cualquier corrida multi-generacional lanzada después del commit `dff9606` debe
+re-ejecutarse. Las corridas de 1 generación (smokes) y las anteriores al Área 6
+no están afectadas.
+
+#### Cambios de código
+
+| Archivo | Cambio |
+|---|---|
+| `algorithms/checkpoint.py` | `_capture_rng`: añade `and torch.cuda.is_initialized()` a la guardia del RNG de CUDA |
+| `core/evaluation.py` | `__call__`: warning si CUDA está inicializado en el padre antes de forkear |
+| `.refactor_baseline/area6_check.sh` | health check V4 añadido tras las corridas A y B |
+| `.refactor_baseline/ga_checkpoint_check.sh` | función `health_check` + llamadas tras A y B de cada algoritmo |
+
+| Commit | Descripción |
+|---|---|
+| *(este commit)* | Fix `_capture_rng` + guard evaluation + hardening baterías (V1 y V5 verificados) |
