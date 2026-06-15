@@ -1,3 +1,5 @@
+# Multi-objective fairness search: (best_accuracy, fairness_spd, fairness_mean_tpr).
+# Training on CIFAR-10; fairness evaluated on FACET (eval_dataset_path below).
 # Configuration file 1 : group 1
 
 QNAS:
@@ -69,9 +71,9 @@ train:
     eval_batch_size: 256
     max_epochs: 50
     epochs_to_eval: 5 
-    eval_window_agg: max   # how best_accuracy is aggregated over the eval window: max | mean | last
+    eval_window_agg: mean  # how best_accuracy is aggregated over the eval window: max | mean | last
     optimizer: AdamW
-    mixed_precision: True
+    precision: bf16        # fp32|fp16|bf16
     device: cuda:0
 
     # Dataset
@@ -99,15 +101,18 @@ train:
     # Multi-objective parameters
     multi_objective: True
     num_objectives: 3
-    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
+    objectives: ['best_accuracy', 'fairness_spd', 'fairness_mean_tpr']
     metrics:
       - name: Accuracy
-      - name: HardwareMetrics
-      - name: ValidationLossFitness
-      - name: ScalarizedFitness
+      - name: FairnessMetric
         params:
-          metric_type: loss
-          max_params: 114090
-          max_inference_time: 1000
+          eval_dataset_name: 'facet'
+          eval_skintone_method: 'soft'
+          eval_dataset_path: 'datasets/facet_data/facet_eval.csv'
+          optimization_objective: 'spd_sum'
+          beta: 0.2
+          cache_dir: '.cache/facet_crops'
+          square_mode: letterbox
+          batch_size_fairness: 128
     artifacts:
       - name: ConfusionMatrix
