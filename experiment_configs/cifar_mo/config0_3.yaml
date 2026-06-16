@@ -1,6 +1,3 @@
-# Multi-objective fairness search: (best_accuracy, fairness_spd, fairness_mean_tpr).
-# Training on person_bin_96 (binary person detection, 96×96); fairness
-# evaluated on FACET (eval_dataset_path in FairnessMetric below).
 # Configuration file 1 : group 1
 
 QNAS:
@@ -56,39 +53,39 @@ QNAS:
       backbone_percentage: [0.1, 0.999]
 
     function_dict:  {'conv_1_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
-                     'conv_1_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
-                     'conv_3_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
-                     'conv_3_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
-                     'conv_3_1_128': {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 128}, 'prob': 1.0/3.0/8.0},
-                     'conv_3_1_256': {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 256}, 'prob': 1.0/3.0/8.0},
-                     'conv_5_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 5, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
-                     'conv_5_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 5, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
-                     'max_pool_2_2': {'function': 'MaxPooling', 'params': {'kernel': 2, 'strides': 2}, 'prob': 1.0/3.0/2.0},
-                     'avg_pool_2_2': {'function': 'AvgPooling', 'params': {'kernel': 2, 'strides': 2}, 'prob': 1.0/3.0/2.0},
-                     'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
+                    'conv_1_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 1, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
+                    'conv_3_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
+                    'conv_3_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
+                    'conv_3_1_128': {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 128}, 'prob': 1.0/3.0/8.0},
+                    'conv_3_1_256': {'function': 'ConvBlock', 'params': {'kernel': 3, 'strides': 1, 'filters': 256}, 'prob': 1.0/3.0/8.0},
+                    'conv_5_1_32':  {'function': 'ConvBlock', 'params': {'kernel': 5, 'strides': 1, 'filters': 32}, 'prob': 1.0/3.0/8.0},
+                    'conv_5_1_64':  {'function': 'ConvBlock', 'params': {'kernel': 5, 'strides': 1, 'filters': 64}, 'prob': 1.0/3.0/8.0},
+                    'max_pool_2_2': {'function': 'MaxPooling', 'params': {'kernel': 2, 'strides': 2}, 'prob': 1.0/3.0/2.0},
+                    'avg_pool_2_2': {'function': 'AvgPooling', 'params': {'kernel': 2, 'strides': 2}, 'prob': 1.0/3.0/2.0},
+                    'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
 
 train:
-    batch_size: 128
-    eval_batch_size: 128
+    batch_size: 256
+    eval_batch_size: 256
     max_epochs: 50
-    epochs_to_eval: 5
-    eval_window_agg: mean  # how best_accuracy is aggregated over the eval window: max | mean | last
+    epochs_to_eval: 5 
+    eval_window_agg: mean   # how best_accuracy is aggregated over the eval window: max | mean | last
     optimizer: AdamW
-    precision: bf16        # fp32|fp16|bf16
+    precision: bf16 # fp32|fp16|bf16
     device: cuda:0
 
-    # Dataset — person_bin_96: binary person detection, 96×96, ImageFolder layout
-    dataset: person_bin_96
-    config_path_dataset: dataset_configs/person_bin_96.yaml
-    data_path: datasets/personbin_data_96
+    # Dataset
+    dataset: Cifar10
+    config_path_dataset: dataset_configs/cifar10.yaml   # <— updated key (points to your YAML)
+    data_path: /path/to/datasets/cifar10        # set this to your local path
     train_split: 0.9
     split_seed: 2025                             # controls split & balanced limiting
     loader_seed: 777                             # controls DataLoader shuffling
-    download: false                              # local dataset, not torchvision-downloadable
-    stats_max_batches: 10                        # unused (stats_mode: known in person_bin_96.yaml)
+    download: true                               # safe even if files already exist
+    stats_max_batches: 10                        # used only if YAML sets stats_mode: sample
     data_augmentation: false
     subtract_mean: true
-    limit_data: false
+    limit_data: true
     limit_data_value: 10000
     num_workers: 4
 
@@ -102,18 +99,10 @@ train:
     # Multi-objective parameters
     multi_objective: True
     num_objectives: 3
-    objectives: ['best_accuracy', 'fairness_spd', 'fairness_mean_tpr']
+    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
     metrics:
       - name: Accuracy
-      - name: FairnessMetric
-        params:
-          eval_dataset_name: 'facet'
-          eval_skintone_method: 'soft'
-          eval_dataset_path: 'datasets/facet_data/facet_eval.csv'
-          optimization_objective: 'spd_sum'
-          beta: 0.2
-          cache_dir: '.cache/facet_crops'
-          square_mode: letterbox
-          batch_size_fairness: 128
+      - name: HardwareMetrics
+      - name: ValidationLossFitness
     artifacts:
       - name: ConfusionMatrix
