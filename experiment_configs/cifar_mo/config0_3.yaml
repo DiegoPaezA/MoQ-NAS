@@ -1,5 +1,6 @@
 # Multi-objective fairness search: (best_accuracy, fairness_spd, fairness_mean_tpr).
-# Training on CIFAR-10; fairness evaluated on FACET (eval_dataset_path below).
+# Training on person_bin_96 (binary person detection, 96×96); fairness
+# evaluated on FACET (eval_dataset_path in FairnessMetric below).
 # Configuration file 1 : group 1
 
 QNAS:
@@ -67,27 +68,27 @@ QNAS:
                      'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
 
 train:
-    batch_size: 256
-    eval_batch_size: 256
+    batch_size: 128
+    eval_batch_size: 128
     max_epochs: 50
-    epochs_to_eval: 5 
+    epochs_to_eval: 5
     eval_window_agg: mean  # how best_accuracy is aggregated over the eval window: max | mean | last
     optimizer: AdamW
     precision: bf16        # fp32|fp16|bf16
     device: cuda:0
 
-    # Dataset
-    dataset: Cifar10
-    config_path_dataset: dataset_configs/cifar10.yaml   # <— updated key (points to your YAML)
-    data_path: /path/to/datasets/cifar10        # set this to your local path
+    # Dataset — person_bin_96: binary person detection, 96×96, ImageFolder layout
+    dataset: person_bin_96
+    config_path_dataset: dataset_configs/person_bin_96.yaml
+    data_path: datasets/personbin_data_96
     train_split: 0.9
     split_seed: 2025                             # controls split & balanced limiting
     loader_seed: 777                             # controls DataLoader shuffling
-    download: true                               # safe even if files already exist
-    stats_max_batches: 10                        # used only if YAML sets stats_mode: sample
+    download: false                              # local dataset, not torchvision-downloadable
+    stats_max_batches: 10                        # unused (stats_mode: known in person_bin_96.yaml)
     data_augmentation: false
     subtract_mean: true
-    limit_data: true
+    limit_data: false
     limit_data_value: 10000
     num_workers: 4
 
