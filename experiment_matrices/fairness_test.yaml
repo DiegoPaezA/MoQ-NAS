@@ -1,8 +1,9 @@
 # Smoke test: multi-objective fairness search (best_accuracy, fairness_spd,
-# fairness_mean_tpr) for all four MO algorithms, 1 repeat × 3 generations.
+# fairness_mean_tpr) for all four MO algorithms, 1 repeat × 5 generations.
 #
-# Training on CIFAR-10 (limit_data: 10000); fairness evaluated serially on
-# FACET (datasets/facet_data/facet_eval.csv) after each parallel generation.
+# Training on person_bin_96 (binary person detection, 96×96, ImageFolder layout);
+# fairness evaluated serially on FACET (datasets/facet_data/facet_eval.csv)
+# after each parallel generation.
 # Fairness eval is serial/spawn — workers_per_gpu controls only training
 # concurrency. Use 5 workers to leave headroom for the fairness inference pass.
 #
@@ -11,16 +12,16 @@
 # Run with:   python launch.py experiment_matrices/fairness_test.yaml
 # Preview:    python launch.py experiment_matrices/fairness_test.yaml --dry-run
 # Resume:     python launch.py experiment_matrices/fairness_test.yaml --resume
-exp_root: experiment_cifar10_fairness_test
-gpus: [0]            # physical GPU 1 (CUDA_VISIBLE_DEVICES=1)
+exp_root: experiment_personbin_fairness_test
+gpus: [0]            # physical GPU 0 (CUDA_VISIBLE_DEVICES=0)
 gpus_per_run: 1      # one GPU per experiment, one experiment at a time
 repeats: 1
 seed_base: 42        # single repeat uses seed 43
 
 defaults:
-  data_path: datasets/cifar10_data
-  dataset: cifar10
-  config_path_dataset: dataset_configs/cifar10.yaml
+  data_path: datasets/personbin_data_96
+  dataset: person_bin_96
+  config_path_dataset: dataset_configs/person_bin_96.yaml
   log_level: INFO
   multi_objective: true
   population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
