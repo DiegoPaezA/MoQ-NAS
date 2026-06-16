@@ -310,8 +310,9 @@ class BaseTrainer:
             training_losses.append(train_results.get('loss', 0))
             training_accuracies.append(train_results.get('accuracy', 0))
 
-            if epoch < start_eval_epoch and (time.time() - t0) > TRAIN_TIMEOUT and phase != 'retrain':
-                self.logger.info("Timeout reached")
+            timeout = int(self.params.get('train_timeout', TRAIN_TIMEOUT))
+            if epoch < start_eval_epoch and (time.time() - t0) > timeout and phase != 'retrain':
+                self.logger.info("Timeout reached (%ds)", timeout)
                 raise TimeoutError()
             
             if self.should_evaluate(epoch, start_eval_epoch):

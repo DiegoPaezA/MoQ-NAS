@@ -187,7 +187,7 @@ class ConfigParameters(object):
             'optimizer', 'data_augmentation', 'network_config',
             'backbone_name', 'dataset', 'data_path', 'limit_data_value',
             'multi_objective', 'objectives', 'config_path_dataset', 'gpu_list',
-            'seed', 'workers_per_gpu', 'threads'
+            'seed', 'workers_per_gpu', 'threads', 'train_timeout',
         ]
         for key in train_override_keys:
             val = self.args.get(key)
