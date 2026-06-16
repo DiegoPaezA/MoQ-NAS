@@ -27,6 +27,7 @@ defaults:
   population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
   num_generations: 5          # short smoke test
   workers_per_gpu: 5          # 5 concurrent training workers; fairness eval is serial after
+  use_cache: true             # cache results to speed up repeated runs (e.g. for debugging)
 
 experiments:
   - {algo: moqnas, config: experiment_configs/cifar_mo/config0_3.yaml, name: moqnas}
