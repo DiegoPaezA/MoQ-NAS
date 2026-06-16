@@ -27,9 +27,9 @@ defaults:
   log_level: INFO
   multi_objective: true       # keep the config's multi-objective setting
   population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
-  num_generations: 5          # GA family: generations; moqnas: overrides max_generations
+  num_generations: 150        # GA family: generations; moqnas: overrides max_generations
   workers_per_gpu: 5          # 5 candidates evaluated concurrently per GPU
-  use_cache: true              # cache results to speed up repeated runs (e.g. for debugging)
+  use_cache: true             # cache results to speed up repeated runs (e.g. for debugging)
 
 experiments:
   - {algo: moqnas, config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: moqnas}
