@@ -68,7 +68,12 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     if args.get('use_cache'):
         # Unified cache (core/eval_cache.py) wraps the evaluator for EVERY
         # algorithm, moqnas included; the legacy per-algorithm caches stay off.
+        noop_names = frozenset(
+            name for name, spec in config.fn_dict.items()
+            if spec.get('function') == 'NoOp'
+        )
         eval_pop = CachedEvaluator(eval_pop, config.train_spec,
+                                   noop_names=noop_names,
                                    log_level=config.train_spec['log_level'])
         logger.info(f"Unified evaluation cache enabled at {eval_pop.cache_path}")
     return config, eval_pop, phase

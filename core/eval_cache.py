@@ -67,15 +67,21 @@ def compute_fingerprint(train_spec: dict) -> str:
     return hashlib.sha256(repr(payload).encode()).hexdigest()[:16]
 
 
-def candidate_key(decoded_net, decoded_params, fingerprint: str):
+def candidate_key(decoded_net, decoded_params, fingerprint: str,
+                  noop_names: frozenset = frozenset()):
     """Composite cache key for one candidate.
+
+    ``noop_names`` is the set of operation names whose builder is NoOp (e.g.
+    ``{'no_op'}``); they are stripped from ``decoded_net`` before hashing so
+    that architecturally identical candidates with different NoOp placements
+    share the same cache entry.
 
     The hyperparameter tuple covers every decoded param except the
     positional ``candidate_id`` (notably the evolved continuous genes such
     as ``backbone_percentage``, which the legacy per-algorithm caches
     ignored).
     """
-    net = tuple(str(fn) for fn in decoded_net)
+    net = tuple(fn for fn in decoded_net if fn not in noop_names)
     hp = tuple(sorted((k, _canonical(v)) for k, v in (decoded_params or {}).items()
                       if k != 'candidate_id'))
     return (net, hp, fingerprint)
@@ -85,10 +91,12 @@ class CachedEvaluator:
     """Drop-in caching wrapper around an ``EvalPopulation``-like callable."""
 
     def __init__(self, eval_func, train_spec: dict, cache_path: str = None,
-                 avg_runs: int = 1, log_level: str = 'INFO'):
+                 avg_runs: int = 1, log_level: str = 'INFO',
+                 noop_names: frozenset = frozenset()):
         self.eval_func = eval_func
         self.avg_runs = max(1, int(avg_runs))
         self.fingerprint = compute_fingerprint(train_spec)
+        self.noop_names = noop_names
         self.cache_path = cache_path or os.path.join(
             train_spec['experiment_path'], 'eval_cache.pkl')
         self.logger = init_log(log_level, name=__name__)
@@ -134,7 +142,8 @@ class CachedEvaluator:
         """Same contract as ``EvalPopulation.__call__``: results keyed by
         position in the submitted batch."""
         n = len(decoded_nets)
-        keys = [candidate_key(decoded_nets[i], decoded_params[i], self.fingerprint)
+        keys = [candidate_key(decoded_nets[i], decoded_params[i], self.fingerprint,
+                              self.noop_names)
                 for i in range(n)]
 
         results = {}
