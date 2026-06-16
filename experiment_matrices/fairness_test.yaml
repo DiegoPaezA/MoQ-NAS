@@ -12,7 +12,7 @@
 # Preview:    python launch.py experiment_matrices/fairness_test.yaml --dry-run
 # Resume:     python launch.py experiment_matrices/fairness_test.yaml --resume
 exp_root: experiment_cifar10_fairness_test
-gpus: [1]            # physical GPU 1 (CUDA_VISIBLE_DEVICES=1)
+gpus: [0]            # physical GPU 1 (CUDA_VISIBLE_DEVICES=1)
 gpus_per_run: 1      # one GPU per experiment, one experiment at a time
 repeats: 1
 seed_base: 42        # single repeat uses seed 43
@@ -24,7 +24,7 @@ defaults:
   log_level: INFO
   multi_objective: true
   population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
-  num_generations: 3          # short smoke test
+  num_generations: 5          # short smoke test
   workers_per_gpu: 5          # 5 concurrent training workers; fairness eval is serial after
 
 experiments:
