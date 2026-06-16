@@ -20,7 +20,7 @@ seed_base: 42        # single repeat uses seed 43
 
 defaults:
   data_path: datasets/personbin_data_96
-  dataset: person_bin_96
+  dataset: personbin
   config_path_dataset: dataset_configs/person_bin_96.yaml
   log_level: INFO
   multi_objective: true
