@@ -666,3 +666,162 @@ no están afectadas.
 | Commit | Descripción |
 |---|---|
 | *(este commit)* | Fix `_capture_rng` + guard evaluation + hardening baterías (V1 y V5 verificados) |
+
+---
+
+### `train_timeout` configurable por experimento (`f74b62e`, `04034c7`)
+
+#### Contexto
+
+El timeout global de entrenamiento vivía exclusivamente en `settings.py::TRAIN_TIMEOUT = 5400`
+(1.5 h). En experimentos con datasets de imagen grande (p. ej. `person_bin_96`, 96×96)
+los candidatos complejos superan ese límite, lo que produce `TimeoutError` durante el
+entrenamiento y deja al candidato sin modelo guardado. El frente de Pareto luego intenta
+referenciar ese candidato como si existiera, generando warnings de métricas no encontradas.
+
+#### Solución
+
+Se añadió `train_timeout` como clave configurable en la cadena de configuración, siguiendo
+el mismo patrón que `workers_per_gpu` y `threads` (introducidos en el Área 5):
+
+- **`core/config.py`**: `'train_timeout'` añadido a `train_override_keys` — la lista de
+  claves que se copian del YAML (o de la CLI) al `train_spec` que recibe el *trainer*.
+- **`run_all_evolution.py`**: `--train_timeout` añadido como argumento de CLI (entero,
+  default `None`).
+- **`core/cnn/trainer.py`**: el timeout se lee de `self.params.get('train_timeout',
+  TRAIN_TIMEOUT)`, usando `TRAIN_TIMEOUT` de `settings.py` solo como fallback.
+- **Configs de experimentos**: los configs que necesiten un límite distinto al global
+  pueden declarar `train_timeout: <segundos>` bajo la sección `train:`. Ejemplo:
+  `experiment_configs/fairness/config0_3.yaml` declara `train_timeout: 10800` (3 h)
+  para `person_bin_96`; los configs `cifar_mo/config0_3.yaml` y
+  `cifar_mo/config0_3_acc_flops.yaml` declaran `train_timeout: 3600` (1 h) de forma
+  explícita, aunque coincida con el default global.
+
+La prioridad de resolución es: argumento de CLI > valor en `train:` del YAML >
+`TRAIN_TIMEOUT` en `settings.py`.
+
+| Commit | Descripción |
+|---|---|
+| `f74b62e` | feat(trainer): make train_timeout configurable per experiment |
+| `04034c7` | config(cifar_mo): add train_timeout to cifar_mo configs |
+
+---
+
+### Canonicalización de la clave de caché eliminando operadores NoOp (`722afdc`)
+
+#### Problema
+
+`core/eval_cache.py::candidate_key` construía la clave de red como
+`tuple(str(fn) for fn in decoded_net)`, es decir, la secuencia completa de nombres de
+operadores incluyendo todos los `"no_op"` en cualquier posición. Sin embargo, el constructor
+del modelo (`core/cnn/model.py`) simplemente **salta** los NoOps (`if func == 'NoOp': continue`)
+en las tres ramas de `network_config` (`default`, `dense`, `backbone`). Esto significa que dos
+cromosomas con las mismas operaciones activas pero diferente distribución de NoOps intermedios
+construyen **redes idénticas** pero reciben **claves de caché distintas**, provocando
+re-entrenamientos innecesarios.
+
+Ejemplo con `truncate_after_noop: false` (configuración por defecto en los experimentos):
+
+```
+["conv_3_1_32", "no_op", "conv_3_1_64", "no_op", …]   → red: conv → conv
+["conv_3_1_32", "conv_3_1_64", "no_op", "no_op", …]   → red: conv → conv (idéntica)
+```
+
+Antes del fix: dos claves distintas → dos entrenamientos. Después: misma clave → un solo
+entrenamiento, el segundo es un cache hit.
+
+#### Solución
+
+El conjunto de nombres NoOp se deriva del `function_dict` del YAML del experimento —
+que ya define explícitamente qué operaciones tienen `'function': 'NoOp'` — sin añadir
+ningún parámetro nuevo:
+
+```python
+# run_all_evolution.py — al construir CachedEvaluator
+noop_names = frozenset(
+    name for name, spec in config.fn_dict.items()
+    if spec.get('function') == 'NoOp'
+)
+eval_pop = CachedEvaluator(..., noop_names=noop_names, ...)
+```
+
+`candidate_key` filtra esos nombres antes de construir la tupla:
+
+```python
+net = tuple(fn for fn in decoded_net if fn not in noop_names)
+```
+
+Ventajas del enfoque:
+- No hardcodea `"no_op"`: funciona con cualquier nombre de operador NoOp.
+- Funciona si hay múltiples operaciones con `'function': 'NoOp'` en el espacio de búsqueda.
+- No requiere cambios en los YAMLs de configuración.
+
+#### Compatibilidad con cachés existentes
+
+Las entradas previas en `eval_cache.pkl` quedan con claves antiguas (incluyen NoOps) y no
+producirán hits. No hay corrupción de datos: simplemente no se reutilizarán y el caché se
+rellenará de nuevo con las claves correctas.
+
+#### Verificación
+
+```python
+noop_names = frozenset({'no_op'})
+net_a = ['conv_3_1_32', 'no_op', 'conv_3_1_64', 'no_op', 'no_op']  # NoOp intercalado
+net_b = ['conv_3_1_32', 'conv_3_1_64', 'no_op', 'no_op', 'no_op']  # NoOp al final
+
+candidate_key(net_a, params, fp, noop_names) == candidate_key(net_b, params, fp, noop_names)
+# → True  (mismas operaciones activas → misma clave)
+
+candidate_key(net_a, params, fp)  # sin filtro (comportamiento legacy)
+# → clave distinta para net_a y net_b (False)
+```
+
+| Commit | Descripción |
+|---|---|
+| `722afdc` | fix(cache): canonicalize eval cache key by stripping NoOp operators |
+
+---
+
+### Fix: symlink `best_so_far` falla en generación 1 (`algorithms/qnas/moqnas.py`)
+
+#### Síntoma
+
+Al finalizar la generación 1, `go_next_gen` emitía el warning:
+
+```
+Target for symlink experiment_.../archive/0_10 does not exist. Cannot create link.
+```
+
+a pesar de que la carpeta `archive/0_10` **sí existía** al terminar la generación.
+
+#### Causa raíz
+
+`go_next_gen` hace dos llamadas a `delete_old_dirs_v2` únicamente en la generación 1:
+
+```python
+# orden original (incorrecto)
+delete_old_dirs_v2(..., generation=1, keep_ids=...)   # ← crea symlink aquí
+if self.current_gen == 1:
+    delete_old_dirs_v2(..., generation=0, keep_ids=...)  # ← mueve archive/0_10 aquí (tarde)
+```
+
+La llamada con `generation=1` intenta crear el symlink `best_so_far → archive/0_10`
+**antes** de que la llamada con `generation=0` haya movido `results/gen_0/0_10 →
+archive/0_10`. En la generación 0 no se llama a `go_next_gen`, así que sus artefactos
+quedan en `results/gen_0/` hasta que la gen 1 los archiva — pero el orden de llamadas
+hacía que el symlink se intentara crear antes de que el archivo existiera.
+
+#### Fix
+
+Invertir el orden: archivar primero los artefactos de la gen 0 y crear el symlink después.
+
+```python
+# orden corregido
+if self.current_gen == 1:
+    delete_old_dirs_v2(..., generation=0, keep_ids=...)  # ← mueve archive/0_10 primero
+delete_old_dirs_v2(..., generation=1, keep_ids=...)      # ← symlink encuentra el target
+```
+
+El cambio afecta **exclusivamente** a la generación 1 (la única que ejecuta el bloque
+`if self.current_gen == 1`). Las generaciones 2 en adelante hacen una sola llamada,
+igual que antes.

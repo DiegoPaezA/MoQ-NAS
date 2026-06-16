@@ -646,11 +646,12 @@ class MOQNAS(QNAS):
         )
         is_snapshot = (self.current_gen % 5 == 0) and (self.current_gen > 0)
         # 7. Clean up old model directories, keeping only those in the global archive.
-        delete_old_dirs_v2(self.experiment_path, self.current_gen, 
-                        keep_ids=self.pareto_global_ids.copy(), is_snapshot_gen=is_snapshot)
+        # Gen 0 artifacts must be moved first so they are in archive before the symlink
+        # created by the current-gen call (gen 1 is the first go_next_gen call).
         if self.current_gen == 1:
-            # On the first run, also clean up directories from generation 0.
             delete_old_dirs_v2(self.experiment_path, 0, keep_ids=self.pareto_global_ids.copy())
+        delete_old_dirs_v2(self.experiment_path, self.current_gen,
+                        keep_ids=self.pareto_global_ids.copy(), is_snapshot_gen=is_snapshot)
 
         # 8. Save other necessary data from the parent class and advance the generation counter.
         self.save_data()
