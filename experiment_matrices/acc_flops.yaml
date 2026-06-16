@@ -15,8 +15,8 @@
 # Preview:    python launch.py experiment_matrices/acc_flops.yaml --dry-run
 # Resume:     python launch.py experiment_matrices/acc_flops.yaml --resume
 exp_root: experiment_cifar10_acc_flops
-gpus: [1]            # physical GPU 1 (CUDA_VISIBLE_DEVICES=1)
-gpus_per_run: 1      # one GPU per experiment, one experiment at a time
+gpus: [0,1]            # physical GPU 1 (CUDA_VISIBLE_DEVICES=1)
+gpus_per_run: 2      # one GPU per experiment, one experiment at a time
 repeats: 3
 seed_base: 42        # repeats use seeds 43, 44, 45
 
@@ -28,7 +28,7 @@ defaults:
   multi_objective: true       # keep the config's multi-objective setting
   population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
   num_generations: 5          # GA family: generations; moqnas: overrides max_generations
-  workers_per_gpu: 10         # 10 candidates evaluated concurrently per GPU
+  workers_per_gpu: 5          # 5 candidates evaluated concurrently per GPU
   use_cache: true              # cache results to speed up repeated runs (e.g. for debugging)
 
 experiments:
