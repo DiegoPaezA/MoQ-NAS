@@ -92,6 +92,7 @@ train:
 
     # Hardware settings - parallelization
     threads: 20
+    train_timeout: 3600 # 1 hour timeout for training each candidate (to prevent hanging indefinitely)
 
     # Network structure Configuration
     network_config: default
