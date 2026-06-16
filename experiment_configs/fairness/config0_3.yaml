@@ -94,6 +94,7 @@ train:
 
     # Hardware settings - parallelization
     threads: 20
+    train_timeout: 10800  # per-candidate limit in seconds (3 h); 96×96 images need more than the 1.5 h default
 
     # Network structure Configuration
     network_config: default
