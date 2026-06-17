@@ -714,7 +714,9 @@ class MOQNAS(QNAS):
                 j) Prepare (p0_params, p0_nets, f0, p0_raws) for next iteration
         3. Return final global Pareto archive
         """
-        start_time = time.time()
+        self._session_start = time.time()
+        if not hasattr(self, '_elapsed_so_far'):
+            self._elapsed_so_far = 0.0
         if getattr(self, '_resumed', False):
             # Resumed from a checkpoint: the survivors of the completed
             # generation g play the parent role; the loop enters at g+1.
@@ -803,15 +805,17 @@ class MOQNAS(QNAS):
             if self.current_gen > 0 and (self.current_gen % 5 == 0):
                 curr_time = time.time()
                 h, m, est_h, est_m = calculate_time(
-                    start_time, curr_time, self.current_gen, self.max_generations, end_evol=False
+                    self._session_start, curr_time, self.current_gen, self.max_generations, end_evol=False
                 )
                 self.logger.info(
                     "Gen %d: elapsed %dh %dm; ETA %dh %dm",
                     self.current_gen, h, m, est_h, est_m,
                 )
         save_pkl(self.unique_networks_path, self.unique_networks_db)
-        total_h, total_m = calculate_time(start_time, time.time())
-        self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
+        total_seconds = self._elapsed_so_far + (time.time() - self._session_start)
+        total_h, rem = divmod(total_seconds, 3600)
+        total_m, _ = divmod(rem, 60)
+        self.logger.info("Total evolution time: %d hours and %d minutes (all sessions)", int(total_h), int(total_m))
 
         # 3) Return final global Pareto archive
         return self.pareto_global_population, self.pareto_global_fitnesses

@@ -570,7 +570,9 @@ class GA(object):
         """
         Main evolution loop. Repeats until maximum generations is reached or early stopping is triggered.
         """
-        start_time = time.time()
+        self._session_start = time.time()
+        if not hasattr(self, '_elapsed_so_far'):
+            self._elapsed_so_far = 0.0
         self.logger.info("Starting evolution for %d generations", self.num_generations)
 
         if getattr(self, '_resumed', False):
@@ -585,21 +587,21 @@ class GA(object):
             self.generate_offspring()
             self.go_next_gen()
             if self.early_stopping and self.check_early_stopping():break
-            
+
             if self.current_gen > 0 and (self.current_gen % 5 == 0):
                 curr_time = time.time()
                 h, m, est_h, est_m = calculate_time(
-                    start_time, curr_time, self.current_gen, self.num_generations, end_evol=False
+                    self._session_start, curr_time, self.current_gen, self.num_generations, end_evol=False
                 )
                 self.logger.info(
                     "Gen %d: elapsed %dh %dm; ETA %dh %dm",
                     self.current_gen, h, m, est_h, est_m,
                 )
-        
-        total_time = time.time() - start_time
-        hours, rem = divmod(total_time, 3600)
+
+        total_seconds = self._elapsed_so_far + (time.time() - self._session_start)
+        hours, rem = divmod(total_seconds, 3600)
         minutes, _ = divmod(rem, 60)
-        self.logger.info(f"Total evolution time: {hours} hours and {minutes} minutes")
+        self.logger.info("Total evolution time: %d hours and %d minutes (all sessions)", int(hours), int(minutes))
         self.logger.info("Best solution found at generation %d with fitness %.4f",
                         self.best_so_far_id[0] if self.best_so_far_id else -1, self.best_so_far)
         return self.population, self.fitnesses, self.best_so_far, self.best_so_far_id

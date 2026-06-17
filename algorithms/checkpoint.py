@@ -35,6 +35,7 @@ import pickle
 import random
 import shutil
 import tempfile
+import time
 
 import numpy as np
 import torch
@@ -67,9 +68,14 @@ def _restore_rng(rng: dict) -> None:
 
 def save_checkpoint(engine) -> None:
     """Serialize the full search state at the current generation boundary."""
+    elapsed = (
+        getattr(engine, '_elapsed_so_far', 0.0)
+        + (time.time() - getattr(engine, '_session_start', time.time()))
+    )
     state = {
         'format_version': FORMAT_VERSION,
         'completed_gen': int(engine.current_gen),
+        'elapsed_seconds': elapsed,
         'common': {
             'total_eval': getattr(engine, 'total_eval', 0),
             'best_so_far': getattr(engine, 'best_so_far', None),
@@ -140,6 +146,7 @@ def load_checkpoint(engine) -> int:
     engine.best_so_far_id = c['best_so_far_id']
     engine.early_stopping_counter = c['early_stopping_counter']
     engine.current_gen = state['completed_gen']
+    engine._elapsed_so_far = state.get('elapsed_seconds', 0.0)
 
     engine._restore_state(state['engine_state'])
 

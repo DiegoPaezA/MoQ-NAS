@@ -831,7 +831,9 @@ class QNAS(object):
 
     def evolve(self):
         """Runs the main evolutionary loop."""
-        start_time = time.time()
+        self._session_start = time.time()
+        if not hasattr(self, '_elapsed_so_far'):
+            self._elapsed_so_far = 0.0
         max_gen = self.generations
         if self.current_gen > 0:  # Adjust for resumed runs
             max_gen += (self.current_gen + 1)
@@ -841,7 +843,7 @@ class QNAS(object):
             # --- Log ETA periodically ---
             if self.current_gen > 0 and (self.current_gen % 5 == 0):
                 h, m, est_h, est_m = calculate_time(
-                    start_time, time.time(), self.current_gen, max_gen, end_evol=False)
+                    self._session_start, time.time(), self.current_gen, max_gen, end_evol=False)
                 self.logger.info("Gen %d: elapsed %dh %dm; ETA %dh %dm",
                                 self.current_gen, h, m, est_h, est_m)
 
@@ -875,5 +877,7 @@ class QNAS(object):
                 break
 
         save_pkl(self.unique_networks_path, self.unique_networks_db)
-        total_h, total_m = calculate_time(start_time, time.time())
-        self.logger.info("Total evolution time: %d hours and %d minutes", total_h, total_m)
+        total_seconds = self._elapsed_so_far + (time.time() - self._session_start)
+        total_h, rem = divmod(total_seconds, 3600)
+        total_m, _ = divmod(rem, 60)
+        self.logger.info("Total evolution time: %d hours and %d minutes (all sessions)", int(total_h), int(total_m))
