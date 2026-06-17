@@ -1052,44 +1052,46 @@ class NetworkGraph(nn.Module):
         }
         self.backbone_expected_size = _default_backbone_input.get(self.backbone_name, None)
 
+    # Blocks that consume in_channels and produce filters output channels.
+    _PRIMARY_BLOCKS = {
+        'ConvBlock', 'DWConvBlock', 'SEConvBlock', 'CBAMConvBlock',
+        'ResidualV1CBAM', 'MBConv', 'MBConvV2', 'MBConv_EPPGA',
+        'ResidualV1', 'ResidualV1Pr',
+    }
+
+    def _build_sequential_layers(self, net_list, fn_dict, in_channels):
+        """Build a layer list from net_list, propagating in_channels through primary blocks."""
+        layers = []
+        for name in net_list:
+            parameters = fn_dict[name]
+            func = parameters['function']
+            if func == 'NoOp':
+                continue
+            if func in self._PRIMARY_BLOCKS:
+                parameters['params']['in_channels'] = in_channels
+                in_channels = parameters['params']['filters']
+            elif func == 'CBAMBlock':
+                parameters['params']['in_channels'] = in_channels
+            layers.append(functions_dict[func](**parameters['params']))
+        return layers
+
     def create_functions(self, net_list, fn_dict, cbam=False):
-        # Define sets for blocks that need special handling.
-        primary_blocks = {
-            'ConvBlock', 'DWConvBlock', 'SEConvBlock', 'ResidualV1CBAM',
-            'MBConv', 'MBConvV2', 'MBConv_EPPGA', 'ResidualV1', 'ResidualV1Pr'
-        }
-        
         if self.network_config == 'default':
             in_channels = self.in_channels
-            self.layers = []
             if cbam:
                 net_list.insert(0, 'conv_1_1_32')
-                conv_1_1_info = {
+                fn_dict.update({
                     'conv_1_1_32': {
                         'function': 'ConvBlock',
                         'params': {'kernel': 1, 'strides': 1, 'filters': 32}
                     }
-                }
-                fn_dict.update(conv_1_1_info)
-            
-            for name in net_list:
-                parameters = fn_dict[name]
-                func = parameters['function']
-                if func == 'NoOp':
-                    continue
-                if func in primary_blocks:
-                    parameters['params']['in_channels'] = in_channels
-                    in_channels = parameters['params']['filters']
-                elif func == 'CBAMBlock':
-                    parameters['params']['in_channels'] = in_channels
+                })
 
-                self.layers.append(functions_dict[func](**parameters['params']))
-            
+            self.layers = self._build_sequential_layers(net_list, fn_dict, in_channels)
             self.model = nn.Sequential(*self.layers)
             self.fc = None
 
         elif self.network_config == 'dense':
-            # (Dense branch as before.)
             cumulative_channels = self.in_channels
             self.layers = []
             stem_params = {'in_channels': cumulative_channels, 'filters': 32, 'stride': 1}
@@ -1114,7 +1116,6 @@ class NetworkGraph(nn.Module):
             self.fc = None
 
         elif self.network_config == 'backbone':
-            # If the backbone is not set, load and set it up.
             if self.backbone is None:
                 if self.backbone_name == 'mobilenet_v3_small':
                     pretrained_model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
@@ -1127,45 +1128,27 @@ class NetworkGraph(nn.Module):
                     # ResNet-18 children: conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool, fc.
                     # We remove avgpool and fc to use the convolutional part.
                     backbone_layers = list(pretrained_model.children())[:-2]
-
                 else:
                     raise ValueError(f"Unsupported backbone: {self.backbone_name}")
                 num_layers = len(backbone_layers)
                 num_to_use = max(1, int(self.backbone_percentage * num_layers))
-                selected_layers = backbone_layers[:num_to_use]
-                self.backbone = nn.Sequential(*selected_layers)
+                self.backbone = nn.Sequential(*backbone_layers[:num_to_use])
                 for param in self.backbone.parameters():
                     param.requires_grad = self.backbone_trainable
-                    
-                    if not self.backbone_trainable:
-                        self.backbone.eval()  # no BN running-stat drift during evolution
-                    
+                if not self.backbone_trainable:
+                    self.backbone.eval()  # no BN running-stat drift during evolution
+
                 # Forward a dummy input to determine output channels.
                 if self.backbone_expected_size:
                     b = self.backbone_expected_size
                     dummy_shape = (1, self.input_shape[1], b, b)
                 else:
                     dummy_shape = self.input_shape
-                dummy_input = torch.zeros(dummy_shape)
                 with torch.no_grad():
-                    backbone_out = self.backbone(dummy_input)
-                self.backbone_out_channels = backbone_out.shape[1]
-            # Reuse the cached backbone output channels.
-            in_channels = self.backbone_out_channels
+                    self.backbone_out_channels = self.backbone(torch.zeros(dummy_shape)).shape[1]
 
-            # Build additional layers from the search space.
-            self.layers = []
-            for name in net_list:
-                parameters = fn_dict[name]
-                func = parameters['function']
-                if func == 'NoOp':
-                    continue
-                if func in primary_blocks:
-                    parameters['params']['in_channels'] = in_channels
-                    in_channels = parameters['params']['filters']
-                elif func == 'CBAMBlock':
-                    parameters['params']['in_channels'] = in_channels
-                self.layers.append(functions_dict[func](**parameters['params']))
+            self.layers = self._build_sequential_layers(
+                net_list, fn_dict, self.backbone_out_channels)
             self.model = nn.Sequential(*self.layers)
             self.fc = None
 
