@@ -39,7 +39,7 @@ class QNAS(object):
     """
 
     def __init__(self, eval_func, experiment_path, objectives, log_file, log_level,
-                data_file, use_cache=True):
+                data_file, use_cache=False):
         """Initializes the core QNAS algorithm object.
 
         Note: This sets up the framework. The specific evolutionary parameters and

@@ -22,7 +22,7 @@ class NSGA2(GA):
         - Global Pareto front archive with crowding-based filtering.
         - History recording of all Pareto fronts per generation.
     """
-    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=True):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=False):
         """
         Initialize NSGA2 instance.
 
