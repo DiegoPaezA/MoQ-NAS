@@ -25,7 +25,7 @@ class GA(object):
         evaluated: Cache for previously evaluated individuals.
         eval_history: History of evaluations for each individual.
     """
-    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=True):
+    def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache=False):
         """
         Initialize the GA evolution.
 

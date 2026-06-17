@@ -21,7 +21,7 @@ class MOEAD(NSGA2):
                 log_file,
                 log_level,
                 data_file,
-                use_cache=True,
+                use_cache=False,
                 divisions=None,            # Das & Dennis lattice p (auto if None)
                 T=20,                      # neighborhood size
                 scalar_method="tchebycheff",  # "tchebycheff" or "weighted_sum"

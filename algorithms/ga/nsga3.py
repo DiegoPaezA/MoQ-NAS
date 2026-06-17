@@ -17,7 +17,7 @@ class NSGA3(NSGA2):
     """
 
     def __init__(self, eval_func, experiment_path, objectives, log_file, log_level, data_file,
-                use_cache=True, ref_divisions=None, maximize_first=True):
+                use_cache=False, ref_divisions=None, maximize_first=True):
         super().__init__(eval_func, experiment_path, objectives, log_file, log_level, data_file, use_cache)
         self.maximize_first = maximize_first
         self.ref_divisions = ref_divisions  # if None -> auto based on pop size and M
