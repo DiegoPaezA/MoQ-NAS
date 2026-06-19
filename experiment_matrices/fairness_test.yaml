@@ -1,18 +1,18 @@
 # Smoke test: multi-objective fairness search (best_accuracy, fairness_spd,
-# fairness_mean_tpr) for all four MO algorithms, 1 repeat × 5 generations.
+# fairness_mean_tpr) for all four MO algorithms, 3 repeat × 100 generations.
 #
-# Training on person_bin_96 (binary person detection, 96×96, ImageFolder layout);
+# Training on person_bin_48 (binary person detection, 48×48, ImageFolder layout);
 # fairness evaluated serially on FACET (datasets/facet_data/facet_eval.csv)
 # after each parallel generation.
 # Fairness eval is serial/spawn — workers_per_gpu controls only training
-# concurrency. Use 5 workers to leave headroom for the fairness inference pass.
+# concurrency. Use 8 workers to leave headroom for the fairness inference pass.
 #
 # Precision: bf16 (set in config0_3_48.yaml).
 #
 # Run with:   python launch.py experiment_matrices/fairness_test.yaml
 # Preview:    python launch.py experiment_matrices/fairness_test.yaml --dry-run
 # Resume:     python launch.py experiment_matrices/fairness_test.yaml --resume
-exp_root: experiment_personbin_fairness_test
+exp_root: experiment_personbin_fairness_48
 gpus: [0,1]            # physical GPU 0 (CUDA_VISIBLE_DEVICES=0)
 gpus_per_run: 2      # one GPU per experiment, one experiment at a time
 repeats: 3
@@ -24,9 +24,9 @@ defaults:
   config_path_dataset: dataset_configs/person_bin_48.yaml
   log_level: INFO
   multi_objective: true
-  population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
+  population_size: 24         # used by nsga2/nsga3/moead (ignored by moqnas)
   num_generations: 100          # short smoke test
-  workers_per_gpu: 5          # 5 concurrent training workers; fairness eval is serial after
+  workers_per_gpu: 10          # 10 concurrent training workers; fairness eval is serial after
   use_cache: true             # cache results to speed up repeated runs (e.g. for debugging)
 
 experiments:
