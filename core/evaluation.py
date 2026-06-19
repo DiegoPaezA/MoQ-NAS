@@ -17,6 +17,16 @@ from utils.seeding import seed_candidate
 
 worker_data_loader = None
 
+# Worst-case penalty values for fairness objectives when a candidate fails
+# (timeout, OOM, etc.) — must be the least-preferred value for each goal:
+#   minimize objectives → large positive (0.0 would appear as "perfect fairness")
+#   maximize objectives → 0.0
+_FAIRNESS_PENALTY = {
+    'fairness_spd':      1.0,   # minimize: 0=perfect fairness, 1=worst disparity
+    'fairness_mean_tpr': 0.0,   # maximize: 0=worst TPR
+    'fairness_score':    0.0,   # maximize: 0=worst score
+}
+
 class EvalPopulation(object):
     """
     Evaluate a population using a two-stage process.
@@ -187,12 +197,15 @@ class EvalPopulation(object):
                         val = f_metrics.get(internal_key)
                         
                         if val is not None:
-                            results[idx][obj_name] = val 
+                            results[idx][obj_name] = val
                             log_parts.append(f"{obj_name}: {val:.4f}")
                         else:
-                            self.logger.warning(f"Metric '{internal_key}' not found for candidate {idx}")
-                            results[idx][obj_name] = 0.0 # Default fallback
-                            log_parts.append(f"{obj_name}: N/A")
+                            penalty = _FAIRNESS_PENALTY.get(obj_name, 0.0)
+                            self.logger.warning(
+                                f"Metric '{internal_key}' not found for candidate {idx}; "
+                                f"assigning penalty {penalty}")
+                            results[idx][obj_name] = penalty
+                            log_parts.append(f"{obj_name}: penalty={penalty}")
 
                     log_msg = ", ".join(log_parts)
                     self.logger.info(f"Candidate {idx} - {log_msg}")
@@ -319,7 +332,7 @@ class EvalPopulation(object):
         
         # If no config or no metrics, return zeros
         if not metric_config or not self.fairness_metric_names:
-            return {i: {name: 0.0 for name in self.fairness_metric_names} for i in range(len(model_specs))}
+            return {i: {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names} for i in range(len(model_specs))}
         
         fairness_params = metric_config.get('params', {}) or {}
         # Fairness evaluation follows the run's precision policy (Area 4);
@@ -338,13 +351,13 @@ class EvalPopulation(object):
 
         indices = [i for i, spec in enumerate(model_specs) if spec]
         if not indices:
-            return {i: {name: 0.0 for name in self.fairness_metric_names} for i in range(len(model_specs))}
+            return {i: {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names} for i in range(len(model_specs))}
 
         slots = max(0, num_gpus * max(1, int(processes_per_gpu)))
         if slots == 0:
             merged = {}
             for i in range(len(model_specs)):
-                merged.setdefault(i, {name: 0.0 for name in self.fairness_metric_names})
+                merged.setdefault(i, {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names})
             return merged
 
         shards = [[] for _ in range(slots)]
@@ -380,8 +393,8 @@ class EvalPopulation(object):
         for p in procs:
             p.join()
 
-        # Fill any missing entries
+        # Fill any missing entries (failed candidates get worst-case penalty)
         for i in range(len(model_specs)):
-            merged.setdefault(i, {name: 0.0 for name in self.fairness_metric_names})
+            merged.setdefault(i, {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names})
 
         return merged
