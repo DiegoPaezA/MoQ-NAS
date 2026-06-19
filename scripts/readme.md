@@ -47,50 +47,66 @@ python scripts/fairness_baseline/prepare_data.py --build_facet
 
 ---
 
-### 2.1) Create 96×96 and 128×128 Versions (Square Mirrors)
+### 2.1) Create Resized Square Mirrors
 
-After building `personbin_data/` and `facebin_data/`, you can generate **square, resized** mirrors of the datasets (keeping the same `train/val/{class}/...` structure).  
+After building `personbin_data/` and `facebin_data/`, you can generate **square, resized** mirrors at any target size (keeping the same `train/val/{class}/...` structure).
+
 Two square strategies are supported:
 
-- `center_crop` : crops the center to square, then resizes (keeps subject centered).
-- `letterbox` (default): pads to square (no content lost), then resizes.
+- `center_crop`: crops the center to square, then resizes (keeps subject centered).
+- `letterbox` (default): pads to square with no content lost, then resizes.
 
-You can change output size via `--resize_target` (e.g., 96 or 128).
+The output directory defaults to `<src_dir>_<resize_target>` if not specified explicitly.
 
-#### Option A — Build originals and the resized mirrors in one go
+#### Option A — Build originals and resized mirrors in one go
 ```bash
-# Build PERSON and FACE, then create 96×96 mirrors (no cropping)
-python scripts/fairness_baseline/prepare_data.py   --build_person --person_out_dir datasets/personbin_data   --build_face   --face_out_dir   datasets/facebin_data   --make_person_96 --person96_out_dir datasets/personbin_data_96   --make_face_96   --face96_out_dir   datasets/facebin_data_96   --resize_target 96 --resize_mode letterbox --jpg_quality 90
-
-# Same but produce 128×128 mirrors
-python scripts/fairness_baseline/prepare_data.py   --build_person --person_out_dir datasets/personbin_data   --build_face   --face_out_dir   datasets/facebin_data   --make_person_96 --person96_out_dir datasets/personbin_data_128   --make_face_96   --face96_out_dir   datasets/facebin_data_128   --resize_target 128 --resize_mode letterbox --jpg_quality 90
+# Build PERSON and FACE, then create 96×96 mirrors
+python scripts/fairness_baseline/prepare_data.py \
+  --build_person --person_out_dir datasets/personbin_data \
+  --build_face   --face_out_dir   datasets/facebin_data \
+  --make_person_resized --make_face_resized \
+  --resize_target 96 --resize_mode letterbox --jpg_quality 90
 ```
 
 #### Option B — Create mirrors from already-built roots
 ```bash
-# Create 96×96 from existing PERSON and FACE datasets (no cropping)
-python scripts/fairness_baseline/prepare_data.py   --make_person_96 --person_src_for_resize datasets/personbin_data --person96_out_dir datasets/personbin_data_96   --make_face_96   --face_src_for_resize   datasets/facebin_data   --face96_out_dir   datasets/facebin_data_96   --resize_target 96 --resize_mode letterbox --jpg_quality 90
+# Create a 96×96 mirror of the PERSON dataset
+python scripts/fairness_baseline/prepare_data.py \
+  --make_person_resized \
+  --person_src_for_resize datasets/personbin_data \
+  --resize_target 96 --resize_mode letterbox --jpg_quality 90
+# → output: datasets/personbin_data_96/
 
-# Create 128×128 with letterboxing (no cropping)
-python scripts/fairness_baseline/prepare_data.py   --make_person_96 --person_src_for_resize datasets/personbin_data --person96_out_dir datasets/personbin_data_128   --make_face_96   --face_src_for_resize   datasets/facebin_data   --face96_out_dir   datasets/facebin_data_128   --resize_target 128 --resize_mode letterbox --jpg_quality 90
+# Create a 48×48 mirror from the existing 96×96 dataset
+python scripts/fairness_baseline/prepare_data.py \
+  --make_person_resized \
+  --person_src_for_resize datasets/personbin_data_96 \
+  --resize_target 48 --resize_mode letterbox --jpg_quality 90
+# → output: datasets/personbin_data_48/
+
+# Override the output directory explicitly
+python scripts/fairness_baseline/prepare_data.py \
+  --make_person_resized \
+  --person_src_for_resize datasets/personbin_data \
+  --person_resized_out_dir datasets/personbin_data_128 \
+  --resize_target 128 --resize_mode letterbox --jpg_quality 90
 ```
 
-**Resulting layout:**
+**Resulting layout (same for every target size):**
 ```
-datasets/personbin_data_96/
+datasets/personbin_data_<N>/
   train/{person,non_person}/...
   val/{person,non_person}/...
 
-datasets/facebin_data_96/
+datasets/facebin_data_<N>/
   train/{face,non_face}/...
   val/{face,non_face}/...
 ```
 
 > Notes:
+> - `--resize_target` accepts any integer (e.g., 48, 64, 96, 128).
 > - Adjust `--jpg_quality` (1–100) to trade disk size vs. fidelity (default: 90).
-> - `--resize_target` accepts any integer (e.g., 64, 96, 128). Recommended defaults:
->   - 96×96 for fast experiments with ResNet/MobileNet/ConvNeXt.
->   - 128×128 if you observe accuracy drops (e.g., EfficientNetV2-S).
+> - Each target size needs its own `dataset_configs/person_bin_<N>.yaml` and experiment config pointing to the matching `data_path`. See `dataset_configs/person_bin_48.yaml` and `dataset_configs/person_bin_96.yaml` as examples.
 
 
 
