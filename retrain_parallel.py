@@ -60,21 +60,36 @@ def parse_pareto_ids(exp_path: str, top_n: int | None = None, sort_by: str | Non
 def load_candidate_params(archive_dir: str, cid: str, logger):
     """
     Safely loads network parameters, handling all potential errors.
+    Returns (net_list, backbone_name, backbone_percentage, evolution_metrics).
+    evolution_metrics contains objective values measured during evolution
+    (e.g. total_flops, best_accuracy, fairness_spd) so they can be attached
+    to the retrain results without recomputing them.
     """
+    # Objective and hardware metrics measured during evolution that are worth
+    # keeping in the retrain summary. Config params (batch_size, seed, etc.) excluded.
+    _METRIC_KEYS = {
+        'best_accuracy', 'total_flops', 'total_params', 'cuda_inference_time',
+        'model_memory_usage', 'training_time', 'best_validation_loss',
+        'fairness_spd', 'fairness_mean_tpr', 'fairness_score',
+    }
+    _SKIP = {'net_list', 'fn_dict', 'backbone_name', 'backbone_percentage',
+             'generation', 'individual'}
     params_file = os.path.join(archive_dir, cid, "training_params.txt")
     try:
         with open(params_file, "r") as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
             logger.error(f"Content of {params_file} is not a valid dictionary for candidate {cid}. Skipping.")
-            return None, None, None
+            return None, None, None, {}
         net_list = data.get("net_list", [])
         backbone = data.get("backbone_name")
         backbone_pct = data.get("backbone_percentage", 0.0)
-        return net_list, backbone, backbone_pct
+        evolution_metrics = {k: v for k, v in data.items()
+                             if k in _METRIC_KEYS and v is not None}
+        return net_list, backbone, backbone_pct, evolution_metrics
     except Exception as e:
         logger.error(f"Failed to load or parse {params_file} for candidate {cid}. Error: {e}. Skipping.")
-        return None, None, None
+        return None, None, None, {}
 
 
 def worker(task_args):
@@ -90,7 +105,7 @@ def worker(task_args):
     
     try:
         archive_dir = os.path.join(args.experiment_path, "archive")
-        net_list, backbone, backbone_pct = load_candidate_params(archive_dir, cid, logger)
+        net_list, backbone, backbone_pct, evolution_metrics = load_candidate_params(archive_dir, cid, logger)
 
         if net_list is None:
             # If params fail to load, return an error status
@@ -115,6 +130,12 @@ def worker(task_args):
             v = getattr(args, k, None)
             if v is not None: params[k] = v
 
+        if args.network_config:
+            params['network_config'] = args.network_config
+        if not args.keep_metrics:
+            params['metrics'] = [{'name': 'Accuracy'}]
+            params.pop('artifacts', None)
+
         logger.info(f"Creating DataLoader for {cid} on {device}")
         loader = input.GenericDataLoader(params=params)
         train_loader, val_loader = loader.get_loader(pin_memory_device=device)
@@ -132,6 +153,8 @@ def worker(task_args):
             res = master.retrain(params=params, fn_dict=fn_dict, net_list=net_list,
                                 train_loader=train_loader, val_loader=val_loader,
                                 test_loader=test_loader)
+            if isinstance(res, dict):
+                res['evolution_metrics'] = evolution_metrics
             results[f"retrain_{rep+1}"] = res
         
         # 3. Simply return the result tuple.
@@ -190,6 +213,17 @@ def main(arguments):
                     logger.info(f"Successfully finished retraining for candidate {cid}.")
                     final_results[cid] = res
 
+        # Merge with any existing results so multiple selection rules accumulate
+        results_path = os.path.join(arguments.experiment_path, 'retrain_results_parallel.txt')
+        if os.path.isfile(results_path):
+            try:
+                import json as _json
+                with open(results_path) as _f:
+                    existing = _json.load(_f)
+                final_results = {**existing, **final_results}
+            except Exception:
+                pass  # corrupt/missing file: overwrite silently
+
         save_results_file(arguments.experiment_path, final_results,
                             file_name='retrain_results_parallel.txt')
         
@@ -228,6 +262,13 @@ if __name__ == '__main__':
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5)
     parser.add_argument('--patience_retrain', type=int, default=25)
     parser.add_argument('--delta_fraction', type=float, default=0.005)
-    
+    parser.add_argument('--network_config', type=str, default=None,
+                        choices=['default', 'dense', 'backbone'],
+                        help='Override network_config from the evolution config.')
+    parser.add_argument('--keep_metrics', action='store_true',
+                        help='Keep the full metric suite from the evolution config '
+                             '(e.g. HardwareMetrics, FairnessMetric). '
+                             'Default: use Accuracy only during retrain.')
+
     arguments = parser.parse_args()
     main(arguments)
