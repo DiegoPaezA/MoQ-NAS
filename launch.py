@@ -61,9 +61,12 @@ def expand(matrix: dict, resume: bool = False):
     Each cell: {experiment_path, seed, gpu(None yet), argv(list)}.
 
     ``resume`` (matrix key ``resume: true`` OR the launcher ``--resume``
-    flag) appends ``--resume`` to every cell, so relaunching an
-    interrupted batch is rerunning the same matrix: each run picks up from
-    its own ``<experiment_path>/checkpoint.pkl``.
+    flag) appends ``--resume`` to cells that already have a
+    ``<experiment_path>/checkpoint.pkl``, so relaunching an interrupted
+    batch is rerunning the same matrix: each interrupted run picks up
+    from its own checkpoint while cells that never started launch fresh
+    (run_all_evolution.py raises FileNotFoundError if --resume is passed
+    without an existing checkpoint).
     """
     defaults = matrix.get('defaults', {}) or {}
     repeats = int(matrix.get('repeats', 1))
@@ -89,7 +92,7 @@ def expand(matrix: dict, resume: bool = False):
             for k, v in merged.items():
                 argv += _arg_tokens(k, v)
             argv += flags
-            if resume:
+            if resume and _checkpoint_gen(exp_path) is not None:
                 argv.append('--resume')
             yield {'experiment_path': exp_path, 'seed': seed, 'gpu': None, 'argv': argv}
 
