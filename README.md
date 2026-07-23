@@ -112,7 +112,7 @@ These fairness metrics are then saved alongside other evaluation results, allowi
 Clone the repository and install the required dependencies.
 
 ```bash
-git clone https://github.com/your-username/MoQ-NAS.git
+git clone https://github.com/DiegoPaezA/MoQ-NAS.git
 cd MoQ-NAS
 pip install -r requirements.txt
 ```
