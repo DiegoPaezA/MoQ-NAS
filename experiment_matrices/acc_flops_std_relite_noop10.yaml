@@ -1,0 +1,64 @@
+# Multi-objective search on (best_accuracy, total_flops) — CONTROL CELL.
+# MOQNAS ONLY.
+#
+# Standard search space (11 operators) matched to acc_flops_mixed.yaml on every
+# factor EXCEPT the operator vocabulary, so that comparing this experiment
+# against experiment_cifar10_acc_flops_mixed isolates the effect of the search
+# space itself.
+#
+# WHY MOQNAS ONLY (verified empirically, not assumed):
+#   mo_crossover_strategy, noop_max_prob and noop_ramp_cap govern MOQNAS's
+#   quantum probability vector — a mechanism nsga2/nsga3/moead do not have.
+#   Checked log_QNAS.txt for experiment_cifar10_acc_flops/nsga2/nsga2_repeat_1:
+#   zero occurrences of "crossover", "elite", "quantum", "directional", "noop".
+#   These fields are silently ignored by nsga2/nsga3/moead, so for THEM the
+#   only factor in this config that differs from experiment_cifar10_acc_flops
+#   is the operator vocabulary itself — meaning experiment_cifar10_acc_flops
+#   vs experiment_cifar10_acc_flops_mixed is ALREADY an almost-clean
+#   vocabulary-only comparison for nsga2/nsga3/moead. Running them again under
+#   this config would add nothing and cost 3x the GPU time for no new
+#   information. See experiment_matrices/acc_flops_random_elite.yaml for the
+#   companion crossover-only cell, also moqnas-only for the same reason.
+#   Also verified train_timeout was never a binding constraint for any
+#   algorithm in acc_flops (max observed training_time ~742s, nsga3, cap was
+#   3600s) — raising it to 7200 here changes nothing empirically; it's kept
+#   only to match acc_flops_mixed's config byte-for-byte for moqnas.
+#
+# Matched to acc_flops_mixed: mo_crossover_strategy=random_elite,
+# no_op initial prob = 10% and noop_max_prob = 0.10 (flat cap),
+# train_timeout = 7200, workers_per_gpu = 5.
+# Differs only in: fn_list (11 standard operators vs 18 mixed) and the
+# resulting initial_probs. Compute/pooling/no_op budget is 80/10/10 in both.
+#
+# Contrast with the confounded pair (moqnas only — see above for why this
+# distinction does not apply to nsga2/nsga3/moead):
+#   experiment_cifar10_acc_flops        vs mixed -> 5 factors differ (unusable for causal claims)
+#   this experiment                     vs mixed -> 1 factor differs  (operator vocabulary)
+#
+# Config: experiment_configs/cifar_mo/config0_6_acc_flops_noop10.yaml
+# (objectives: [best_accuracy, total_flops]). FLOPs are deterministic, so these
+# runs are fully reproducible.
+#
+# Run with:   python launch.py experiment_matrices/acc_flops_std_relite_noop10.yaml
+# Preview:    python launch.py experiment_matrices/acc_flops_std_relite_noop10.yaml --dry-run
+# Resume:     python launch.py experiment_matrices/acc_flops_std_relite_noop10.yaml --resume
+exp_root: experiment_cifar10_acc_flops_std_relite_noop10
+gpus: [0,1]
+gpus_per_run: 2
+repeats: 3
+seed_base: 200       # seeds 201, 202, 203 — no overlap with acc_flops (42) or mixed (100)
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  log_level: INFO
+  multi_objective: true
+  population_size: 20         # unused by moqnas (reads population from the config)
+  num_generations: 150        # moqnas: overrides max_generations
+  workers_per_gpu: 5          # matches acc_flops_mixed (acc_flops used 10);
+                              # affects cuda_inference_time via GPU contention
+  use_cache: true
+
+experiments:
+  - {algo: moqnas, config: experiment_configs/cifar_mo/config0_6_acc_flops_noop10.yaml, name: moqnas}
