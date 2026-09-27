@@ -90,7 +90,14 @@ def load_config_robust(args):
         train_spec['limit_data'] = True
     if args.results_csv:
         train_spec['results_csv'] = args.results_csv
-    
+
+    # --- Run seed (for repeated baselines) ---
+    # Keeps split_seed fixed (identical train/val split across repetitions)
+    # while varying weight init and batch order per run.
+    if args.seed is not None:
+        train_spec['run_seed'] = args.seed
+        train_spec['loader_seed'] = args.seed
+
     # Store other flags
     train_spec['freeze_backbone'] = args.freeze_backbone
     train_spec['from_scratch'] = args.from_scratch  # <--- NEW: Store flag in spec
@@ -137,10 +144,12 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
     output_dir.mkdir(parents=True, exist_ok=True)
     
     dataset_name = params.get('dataset', 'dataset')
-    
+
     # Modify filename if training from scratch to avoid overwriting
     scratch_suffix = "_scratch" if from_scratch else ""
-    checkpoint_path = output_dir / f"{dataset_name}_{arch}{scratch_suffix}.pt"
+    run_seed = params.get('run_seed')
+    seed_suffix = f"_seed{run_seed}" if run_seed is not None else ""
+    checkpoint_path = output_dir / f"{dataset_name}_{arch}{scratch_suffix}{seed_suffix}.pt"
     
     best_val_acc = 0.0
     max_epochs = int(params.get('max_epochs', 10))
@@ -212,8 +221,9 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
         with open(results_path, 'a', newline='') as f:
             writer = csv.writer(f)
             if write_header:
-                writer.writerow(['arch', 'dataset', 'best_val_acc', 'checkpoint_path'])
-            writer.writerow([arch, dataset_name, f"{best_val_acc:.4f}", str(checkpoint_path.resolve())])
+                writer.writerow(['arch', 'dataset', 'seed', 'best_val_acc', 'checkpoint_path'])
+            writer.writerow([arch, dataset_name, run_seed if run_seed is not None else '',
+                              f"{best_val_acc:.4f}", str(checkpoint_path.resolve())])
         print(f"Saved best accuracy result to {results_path}")
 
 def main():
@@ -250,6 +260,11 @@ def main():
     parser.add_argument('--device', type=str, default=None)
     parser.add_argument('--num_workers', type=int, default=None)
     parser.add_argument('--dataset', type=str, default=None)
+    parser.add_argument('--seed', type=int, default=None,
+                        help="Run seed for repeated baselines. Overrides weight-init and "
+                             "batch-order randomness while keeping split_seed (train/val split) "
+                             "fixed, so repetitions are comparable. Also tags checkpoint "
+                             "filenames and results_csv rows so repeated runs don't collide.")
 
     args = parser.parse_args()
 
@@ -259,7 +274,7 @@ def main():
     
     device_str = train_spec.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
     device = torch.device(device_str)
-    set_seed(train_spec.get('split_seed', 42))
+    set_seed(train_spec.get('run_seed', train_spec.get('split_seed', 42)))
     
     print(f"Device: {device}")
     print(f"Dataset config: {train_spec.get('config_path_dataset')}")
