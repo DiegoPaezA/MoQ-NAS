@@ -1,0 +1,101 @@
+# Retrain protocol F13-v1, reconstructed from the F13 retrains as they were executed
+# (training_params.txt of data/qnas/experiment_v3_cifar10 exp0-15 and data/medmnist/qnas/*_2025,
+# plus the code in git up to 2025-09-10). See docs/ESTRATEGIA_REENTRENAMIENTO_COMPARACION_LITERATURA.md §3.
+#
+# Applies identically to MoQ-NAS, NSGA-II and NSGA-III (Q-NAS is NOT retrained).
+# Every value must be passed explicitly to the retrain; nothing is inherited from the
+# search log_params_evolution.txt (search logs differ: fp16 vs bf16, eval_window_agg, dataset config paths).
+#
+# Keys marked NEEDS_OVERRIDE are not accepted by retrain_parallel.py yet (see fixes 4.2, 4.3, 4.10, P1 table).
+
+protocol: F13-v1
+
+common:
+  max_epochs: 300
+  epochs_to_eval: 300              # retrain evaluates every epoch
+  patience_retrain: 300            # = max_epochs -> no early stopping
+  delta_fraction: 0.005            # irrelevant with patience = max_epochs
+  lr_scheduler: multistep          # MultiStepLR, milestones at 50 % / 75 % of max_epochs, gamma 0.1
+  optimizer: AdamW
+  learning_rate: 0.001             # NEEDS_OVERRIDE
+  weight_decay: 0.01               # NEEDS_OVERRIDE  (F13-v1 used PyTorch AdamW defaults; the logged 1e-4 was ignored)
+  # precision: NOT common -> per case, equal to the precision of that case's search (see `cases` below).
+  grad_clip_norm: null             # NEEDS_OVERRIDE  (no gradient clipping in F13-v1; current trainer always clips at 1.0)
+  eval_window_agg: max             # NEEDS_OVERRIDE  (reported val accuracy = best epoch)
+  data_augmentation: true          # TrivialAugmentWide(31) + ToTensor + Normalize (no crop/flip)
+  train_split: 0.9                 # NEEDS_OVERRIDE  (explicit; CIFAR-10 -> 45k/5k, test = official 10k)
+  split_seed: 2025                 # deliberate deviation: F13-v1 split was unseeded; same ratio/stratification
+  limit_data: false
+  num_workers: 8
+  seeds: [1, 2, 3]                 # NEEDS_OVERRIDE  (fix 4.3); screening uses seed 1 only
+  checkpoint_rule: best_val_accuracy   # test evaluated once, with this checkpoint
+  keep_scheduler_first_epoch_skip: true  # F13-v1 trainer skipped the scheduler step on the first val epoch; do not fix 4.8 under this protocol
+
+# Precision = the one used by the search of each case (identical for all algorithms within a case).
+# NEEDS_OVERRIDE: pass --precision explicitly; never inherit it from the search log.
+cases:
+  C1_triobj:        {precision: fp16}   # moqnas_v2 exp22, nsga2 exp4, nsga3 exp1: mixed_precision: true
+  AF_std_biobj:     {precision: bf16}   # experiment_cifar10_acc_flops (all algorithms): precision: bf16
+  C2_medmnist:      {precision: fp16}   # 4 datasets x 3 algorithms: mixed_precision: true
+  C3_fairness:      {precision: fp16}   # personbin MoQ-NAS search: mixed_precision: true
+  C3_baselines:     {precision: fp16}   # fixed architectures were trained in fp32 (train.py); retrain them in fp16, as the MoQ-NAS fairness search
+
+datasets:
+  cifar10:
+    dataset: cifar10
+    data_path: datasets/cifar10_data
+    config_path_dataset: dataset_configs/cifar10.yaml     # fix 4.10: older logs point to configs/
+    batch_size: 256
+    eval_batch_size: 256
+  pathmnist:
+    dataset: pathmnist
+    data_path: datasets/pathmnist_data
+    config_path_dataset: dataset_configs/pathmnist.yaml
+    batch_size: 128
+    eval_batch_size: 128
+  octmnist:
+    dataset: octmnist
+    data_path: datasets/octmnist_data
+    config_path_dataset: dataset_configs/octmnist.yaml
+    batch_size: 128
+    eval_batch_size: 128
+  tissuemnist:
+    dataset: tissuemnist
+    data_path: datasets/tissuemnist_data
+    config_path_dataset: dataset_configs/tissuemnist.yaml
+    batch_size: 128
+    eval_batch_size: 128
+  organamnist:
+    dataset: organamnist
+    data_path: datasets/organamnist_data
+    config_path_dataset: dataset_configs/organamnist.yaml
+    batch_size: 128
+    eval_batch_size: 128
+  person_bin_96:
+    dataset: person_bin_96
+    data_path: datasets/personbin_data_96
+    config_path_dataset: dataset_configs/person_bin_96.yaml
+    batch_size: 64
+    eval_batch_size: 64
+
+# Case 3 (fairness) uses its own profiles, selected with --profile. Values override `common`.
+# Same profile for MoQ-NAS and for the fixed baselines (scripts/fairness_baseline/train.py).
+# FACET evaluation (FairnessMetric) runs at the training resolution (96) with the case precision;
+# --keep_metrics is required so the metric is built in the retrain (fixes 4.9 / master.py injection).
+profiles:
+  fairness_R1:          # search budget, as the MoQ-NAS fairness search (Dec 2025 - Feb 2026 code)
+    max_epochs: 50
+    epochs_to_eval: 50
+    patience_retrain: 50
+    lr_scheduler: None
+    learning_rate: 0.001
+    weight_decay: 0.0001   # the search code already read weight_decay from the config (after 2025-09-20)
+    limit_data: true
+    limit_data_value: 10000
+    keep_metrics: true
+  fairness_R2:          # full data; F13-v1 optimisation; epochs fixed after the pilot
+    max_epochs: null      # REQUIRED: pass --max-epochs after the pilot
+    epochs_to_eval: null  # set equal to max_epochs
+    patience_retrain: null
+    limit_data: false
+    keep_metrics: true
