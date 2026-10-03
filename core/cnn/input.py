@@ -212,14 +212,17 @@ class GenericDataLoader:
         # Deterministic DataLoader shuffling
         g = _make_gen(int(self.params.get("loader_seed", self.seed)))
         num_workers = int(self.params.get("num_workers", 4))
-        common = dict(num_workers=num_workers, pin_memory=True, generator=g)
+        # Pinned memory only helps (and only works) with CUDA; without it torch
+        # tries to initialise CUDA and fails on CPU-only machines.
+        use_pin = torch.cuda.is_available() and str(pin_memory_device or "cuda").startswith("cuda")
+        common = dict(num_workers=num_workers, pin_memory=use_pin, generator=g)
         # Retrain is CPU/augmentation-bound: keep workers alive across epochs.
         # Off by default elsewhere so the search keeps its process footprint.
         persistent = _coerce_bool(self.params.get("persistent_workers",
                                                   self.params.get("phase") == "retrain"))
         if num_workers > 0 and persistent:
             common.update(persistent_workers=True, prefetch_factor=4)
-        if _supports_pin_memory_device() and pin_memory_device:
+        if use_pin and _supports_pin_memory_device() and pin_memory_device:
             common["pin_memory_device"] = pin_memory_device
 
         drop_last = True if self.params["dataset"].lower() == "organamnist" else False
