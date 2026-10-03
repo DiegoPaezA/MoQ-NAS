@@ -617,6 +617,48 @@ python retrain_parallel.py --experiment_path <exp_root>/exp22_repeat_1 \
 
 ---
 
+## 4b. Smoke tests en el Mac (2026-10-03)
+
+Se pueden correr en el Mac (Apple M5 Pro, CPU; el código no usa MPS). Sirven para validar el camino del código, no
+para medir tiempos ni accuracy.
+
+Entorno (`conda` env `moqnas`, mismas versiones que el clúster salvo scipy/numpy):
+```bash
+conda create -y -n moqnas python=3.10
+~/miniconda3/envs/moqnas/bin/python -m pip install torch==2.5.1 torchvision==0.20.1 pandas==2.2.3 \
+    scikit-learn==1.6.1 medmnist==3.0.2 PyYAML==6.0.1 tqdm matplotlib seaborn pymoo scikit-image pillow
+~/miniconda3/envs/moqnas/bin/python -m pip install -r requirements.txt
+# el wheel de scipy de PyPI no carga en este macOS (Darwin 27): usar el de conda-forge
+~/miniconda3/envs/moqnas/bin/python -m pip uninstall -y scipy numpy
+conda install -y -n moqnas -c conda-forge "scipy=1.15" "numpy=2.2.6"
+```
+Datos locales (en `MoQ-NAS/datasets` y `.cache`, ignorados por git): `cifar10_data`, `organamnist_data`,
+`personbin_data_96` copiados del clúster, y un **subconjunto de FACET** de 600 filas (60 por tono, con sus recortes
+en caché) marcado con `datasets/facet_data/README_SMOKE_SUBSET.txt`. Las salidas del smoke van a una copia de las
+entradas, nunca a `data/`.
+
+```bash
+python launch_retrain_protocol.py --runs-root <copia>/runs --logs-dir <copia>/logs \
+    --cases C1_triobj AF_std_biobj C2_medmnist --datasets cifar10 organamnist --roles all \
+    --seeds 1 --tag F13v1 --smoke
+python launch_retrain_protocol.py --runs-root <copia>/runs --logs-dir <copia>/logs \
+    --cases C3_fairness_three --roles all --profile fairness_R1 --seeds 1 --tag fairR1 --smoke
+```
+`--smoke`: 2 épocas, 2 000 imágenes, el candidato más liviano (menos FLOPs) de cada caso, tag `<tag>_smoke`.
+
+Resultado: **OK en los 4 casos** (Caso 1 fp16, acc-FLOPs bf16, MedMNIST fp16 con `auc_score`/`acc_medmnist`,
+fairness R1 con FACET a 96 px y TPR por los 10 tonos) y en `train.py` + `evaluate.py` de baselines. Los parámetros
+aplicados (`training_params.txt`) coinciden con el protocolo. Fallos que encontró el smoke y quedaron corregidos:
+- `core/cnn/input.py`: `pin_memory=True` fijo intentaba inicializar CUDA en máquinas sin GPU → solo con CUDA.
+- **`MedMNIST_Metrics` rompía todo retrain de MedMNIST**: se calculaba también en las épocas de train/val, pero
+  su evaluador compara contra las etiquetas del test oficial (`AssertionError` por tamaño). Ahora es una métrica
+  `test_only` y el trainer solo la usa en la fase de test.
+
+Notas: en CPU el fp16/bf16 se emula y es muy lento con redes grandes (por eso `--smoke` elige la más liviana). En
+`train.py` de baselines el autocast se desactiva en CPU, así que su ruta fp16 + GradScaler solo se prueba en el
+clúster. Si se mata el lanzador, los workers de `ProcessPoolExecutor` quedan huérfanos: matarlos aparte.
+Nombres en los resultados de fairness del retrain: D_group = `fairness_score` (= `spd_sum`), MeanTPR = `mean_tpr`.
+
 ## 5. Checklist en el clúster (antes de lanzar)
 
 0. **Inventario:** correr `scripts/check_retrain_inventory.py` (§2.0) y subir con `rsync --files-from` lo que falte.

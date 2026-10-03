@@ -119,11 +119,14 @@ class BaseTrainer:
         self.post_processing_metrics = [
             m for m in metrics if m.is_post_processing or 'epoch_results' in m.compute.__code__.co_varnames
         ]
-        self.primary_metrics = [m for m in metrics if m not in self.post_processing_metrics]
+        # Test-only metrics (e.g. MedMNIST_Metrics, whose evaluator is bound to the
+        # official test labels) are skipped during train/validation epochs.
+        batch_metrics = [m for m in metrics if m not in self.post_processing_metrics]
+        self.primary_metrics = [m for m in batch_metrics if not getattr(m, 'test_only', False)]
 
         # Clones are only needed for primary metrics.
         self.val_primary_metrics = [m.__class__(**m._init_args) for m in self.primary_metrics]
-        self.test_primary_metrics = [m.__class__(**m._init_args) for m in self.primary_metrics]
+        self.test_primary_metrics = [m.__class__(**m._init_args) for m in batch_metrics]
 
         self.artifacts = artifacts # List of artifact instances to compute after training
 

@@ -36,6 +36,9 @@ class MedMNIST_Metrics(BaseMetric):
     Computes dataset-specific metrics (AUC and Accuracy) for MedMNIST datasets.
     """
     name = "medmnist_metrics"
+    # The evaluator is bound to the official test split: compute it only in the
+    # test phase, never on train/validation epochs (different sample counts).
+    test_only = True
 
     def __init__(self, dataset_name: str, data_path: str, **kwargs):
         """

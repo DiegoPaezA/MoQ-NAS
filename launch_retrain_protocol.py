@@ -118,10 +118,24 @@ def load_jobs(args, protocol):
 
     cli = {'max_epochs': args.max_epochs, 'epochs_to_eval': args.max_epochs,
            'patience_retrain': args.max_epochs} if args.max_epochs else {}
+    if args.smoke:
+        # Code-path check only: 2 epochs on a 2k-image subset, one candidate per case.
+        cli.update(max_epochs=2, epochs_to_eval=2, patience_retrain=2,
+                   limit_data=True, limit_data_value=2000)
+    if args.smoke:
+        # Cheapest candidate first, so the smoke test checks the code path quickly.
+        def cost(r):
+            return (float(r.get('flops') or 0) or float(r.get('params') or 0))
+        rows = sorted(rows, key=cost)
     jobs = OrderedDict()
     for r in rows:
         job = jobs.setdefault(r['local_dir'], {'meta': r, 'ids': []})
         job['ids'].append(r['id'])
+    if args.smoke:
+        first_per_case = OrderedDict()
+        for local_dir, job in jobs.items():
+            first_per_case.setdefault(job['meta']['case'], (local_dir, job))
+        jobs = OrderedDict((ld, dict(job, ids=job['ids'][:1])) for ld, job in first_per_case.values())
     out = []
     for local_dir, job in jobs.items():
         m = job['meta']
@@ -161,7 +175,12 @@ def main():
                     help='Candidates trained concurrently inside one job (retrain_parallel workers).')
     ap.add_argument('--python', default=sys.executable)
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--smoke', action='store_true',
+                    help="Smoke test: 2 epochs, 2000 images, first run and first candidate of each case; "
+                         "tag becomes <tag>_smoke so real results are never touched.")
     args = ap.parse_args()
+    if args.smoke:
+        args.tag = f"{args.tag}_smoke"
 
     with open(args.protocol) as f:
         protocol = yaml.safe_load(f)
