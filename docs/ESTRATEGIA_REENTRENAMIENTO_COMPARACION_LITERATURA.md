@@ -659,6 +659,29 @@ Notas: en CPU el fp16/bf16 se emula y es muy lento con redes grandes (por eso `-
 clúster. Si se mata el lanzador, los workers de `ProcessPoolExecutor` quedan huérfanos: matarlos aparte.
 Nombres en los resultados de fairness del retrain: D_group = `fairness_score` (= `spd_sum`), MeanTPR = `mean_tpr`.
 
+## 4c. Smoke tests en el clúster, GPU 1 (2026-10-03, commit `5ab720f`)
+
+Script: `retrain_2026/smoke/run_smoke.sh` (copia aislada de las entradas en `retrain_2026/smoke/runs`, logs en
+`retrain_2026/smoke/logs`, `CUDA_DEVICE_ORDER=PCI_BUS_ID`, GPU 1 compartida con otro usuario). Duración total ≈ 25 min.
+
+| Caso | Corrida / candidato | Precisión aplicada | Estado | Métricas extra |
+|---|---|---|---|---|
+| Caso 1 | exp22_r3 / 83_18 | fp16 | OK | — |
+| acc-FLOPs | moqnas_r2 / 134_2 | bf16 | OK | — |
+| MedMNIST Path / OCT / Tissue / OrganA | 135_4 / 118_4 / 135_0 / 143_9 | fp16 | OK (los 4) | `auc_score` en los 4 |
+| Fairness R1, 3 obj. / 2 obj. | 40_16 / 77_12 | fp16 | OK | `fairness_score` (D_group), `mean_tpr` |
+| Baselines resnet18, ConvNeXt-T, EfficientNetV2-S | `train.py` fp16 + multistep | fp16 | OK, sin NaN | `evaluate.py` FACET fp16: SPD 0.26 / 0.20 / 0.19 |
+
+Todas con `weight_decay` 0.01 (0.0001 en fairness R1), sin clipping, `env.gpu = NVIDIA L40S`. Las accuracies no
+significan nada (2 épocas, 2 000 imágenes).
+
+Observación útil para el coste: la **primera época tarda 63–80 s y la segunda 0.4–2.6 s**. El arranque de los
+workers del DataLoader es caro: `retrain_parallel.py` usa `spawn`, así que cada worker importa torch y recibe el
+dataset serializado. Con `persistent_workers` (arreglo 4.6) se paga una vez por loader y semilla. Antes se pagaba en
+cada época, lo que explica los ≈ 24 s/época de los smoke retrains de junio, independientes de los FLOPs. Así, el
+coste fijo por candidato y semilla es ≈ 1–1.5 min, y el resto escala con épocas y tamaño de la red. El piloto (6 redes,
+300 épocas, 45 k imágenes) dará el coste real.
+
 ## 5. Checklist en el clúster (antes de lanzar)
 
 0. **Inventario:** correr `scripts/check_retrain_inventory.py` (§2.0) y subir con `rsync --files-from` lo que falte.
