@@ -24,6 +24,19 @@ CONFIG_PERSON="dataset_configs/person_bin_96.yaml"
 # Data paths
 DATA_PERSON="datasets/personbin_data_96"
 
+# --- Training protocol (retrain_2026; must match the MoQ-NAS fairness retrain) ---
+# Defaults = profile fairness_R1 of retrain_matrices/protocol_F13v1.yaml (search budget).
+# For R2 (full data) export e.g.: RUN_TAG=fairR2 LIMIT_DATA_VALUE= SCRATCH_EPOCHS=<pilot>
+#   LR_SCHEDULER=multistep WEIGHT_DECAY=0.01
+# The original fp32 baselines are kept: outputs go to <OUTPUT_DIR>_<RUN_TAG>.
+RUN_TAG="${RUN_TAG:-fairR1}"
+PRECISION="${PRECISION:-fp16}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-0.0001}"
+LR_SCHEDULER="${LR_SCHEDULER:-none}"
+LIMIT_DATA_VALUE="${LIMIT_DATA_VALUE-10000}"   # empty -> full training set
+SCRATCH_EPOCHS="${SCRATCH_EPOCHS:-50}"
+
 # ---------------------
 
 # 1. Define Defaults
@@ -62,12 +75,19 @@ for arg in "$@"; do
             MODE_DESC="FULL-TRAINING (From Scratch)"
             
             # Set Epochs for From Scratch
-            MAX_EPOCHS=50
+            MAX_EPOCHS=$SCRATCH_EPOCHS
             ;;
     esac
 done
 
+OUTPUT_DIR="${OUTPUT_DIR}_${RUN_TAG}"
+LIMIT_ARGS=""
+if [[ -n "$LIMIT_DATA_VALUE" ]]; then
+    LIMIT_ARGS="--limit_data --limit_data_value $LIMIT_DATA_VALUE"
+fi
+
 echo "✅ Running Mode: $MODE_DESC"
+echo "✅ Protocol: tag=$RUN_TAG precision=$PRECISION batch=$BATCH_SIZE wd=$WEIGHT_DECAY scheduler=$LR_SCHEDULER limit=${LIMIT_DATA_VALUE:-full}"
 echo "✅ Max Epochs: $MAX_EPOCHS"
 echo "✅ Optional Args: $OPTIONAL_ARGS"
 
@@ -104,8 +124,11 @@ for seed in "${SEEDS[@]}"; do
             --results_csv "$RUN_OUTPUT_DIR/personbin_results_acc.csv" \
             --archs $arch \
             --max_epochs $MAX_EPOCHS \
-            --limit_data \
-            --limit_data_value 10000 \
+            $LIMIT_ARGS \
+            --batch_size $BATCH_SIZE \
+            --weight_decay $WEIGHT_DECAY \
+            --precision $PRECISION \
+            --lr_scheduler $LR_SCHEDULER \
             --seed $seed \
             $OPTIONAL_ARGS > "$LOG_FILE_PERSONBIN" 2>&1
 
@@ -124,6 +147,7 @@ for seed in "${SEEDS[@]}"; do
         --img_size $IMG_SIZE \
         --resize_mode $RESIZE_MODE \
         --beta 0.2 \
+        --precision $PRECISION \
         --cache_dir .cache/facet_crops
 
     echo "✅ Evaluation complete for seed $seed."

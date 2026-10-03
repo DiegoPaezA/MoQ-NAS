@@ -15,6 +15,7 @@ import torch.nn as nn
 from typing import Dict, List, Union, Any
 from . import model, trainer, model_resnet
 from utils.helpers import setup_dataset_info
+from core.precision import resolve_precision
 
 from .artifacts import ConfusionMatrix
 from .metrics import Accuracy, HardwareMetrics, MedMNIST_Metrics, FairnessMetric
@@ -68,6 +69,11 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
             if metric_name == "FairnessMetric":
                 params['model'] = model_instance
                 params['device'] = device
+                # Mirror EvalPopulation (search): evaluate FACET at the training
+                # resolution and with the run's precision policy. Without this the
+                # retrain path fell back to img_size=224 and fp32.
+                params.setdefault('img_size', input_shape[-1])
+                params.setdefault('precision', resolve_precision(config))
 
             metric_instances.append(MetricClass(**params))
     

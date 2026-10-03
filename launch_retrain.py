@@ -52,12 +52,18 @@ def load_pareto_front(repeat_dir: str) -> list[dict]:
         raise ValueError(
             f"No rank-1 Pareto front at generation {last_gen} in {repeat_dir}"
         )
-    # Normalize numpy scalars to Python native types
+    # Normalize numpy scalars to Python native types. Legacy NSGA runs store
+    # 'accuracy'/'params'/'inference_time' and keep failed evaluations as
+    # all-zero records; map the keys and drop those records.
+    legacy_keys = {'accuracy': 'best_accuracy', 'params': 'total_params',
+                   'inference_time': 'cuda_inference_time'}
     front = []
     for rec in records:
         entry = {}
         for k, v in rec.items():
-            entry[k] = str(v) if k == 'id' else float(v)
+            entry[legacy_keys.get(k, k)] = str(v) if k == 'id' else float(v)
+        if all(v == 0.0 for k, v in entry.items() if k != 'id'):
+            continue
         front.append(entry)
 
     # Filter to candidates that exist on disk
@@ -290,10 +296,14 @@ def _build_argv(repeat_dir: str, candidate_ids: list[str], merged: dict) -> list
         'lr_scheduler', 'optimizer', 'batch_size', 'eval_batch_size', 'log_level',
         'num_workers', 'save_checkpoints_epochs', 'patience_retrain', 'delta_fraction',
         'max_parallel_workers', 'network_config',
+        'config_path_dataset', 'precision', 'learning_rate', 'weight_decay', 'grad_clip_norm',
+        'train_split', 'split_seed', 'eval_window_agg', 'limit_data_value', 'tag',
     ]
     for key in kv_args:
         if key in merged:
             argv += [f'--{key}', str(merged[key])]
+    if merged.get('seeds'):
+        argv += ['--seeds', *[str(s) for s in merged['seeds']]]
 
     # Boolean flags
     for flag in ('data_augmentation', 'limit_data', 'keep_metrics'):
