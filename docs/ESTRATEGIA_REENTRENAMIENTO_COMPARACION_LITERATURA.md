@@ -183,8 +183,19 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    - **por presupuesto**: la red de menor error de validación con params ≤ {0.25, 0.5, 1.0, 1.5} M (Tier A) y
      MACs ≤ {50, 100, 250, 500} M (Tier B). Estos presupuestos cubren el rango de los frentes de MoQ-NAS y coinciden con
      los de LightMix, LEMONADE y NSGANetV1 (0.2–1.8 M); no cambiarlos después de ver resultados.
-4. **Confirmación (3 semillas)** de los representantes. Solo esta etapa alimenta la tabla del paper (media ± sd de
-   test error).
+4. **Confirmación (3 semillas nuevas)** de los representantes: semillas 11, 12 y 13, distintas de la del
+   screening (semilla 1), igual para los tres algoritmos. La corrida del screening no cuenta como réplica: los
+   representantes se eligieron por su validación en esa semilla, y reutilizarla sesgaría la media hacia arriba (el
+   mismo criterio que en R1 de fairness). Solo esta etapa alimenta la tabla del paper (media ± sd de test error).
+   La semilla 1 basta en el screening porque la variación entre semillas de una misma red es pequeña (sd ≈
+   0.05–0.36 pp en los F13 de Q-NAS) frente a las diferencias entre arquitecturas del frente (varios pp).
+
+   ```bash
+   # etapa 1 (screening) y etapa 2 (confirmación, tras elegir representantes con la validación)
+   python launch_retrain_protocol.py --cases C1_triobj --roles all --seeds 1 --tag F13v1 --gpus 0 1
+   python launch_retrain_protocol.py --cases C1_triobj --runs <run> --ids <ids elegidos> \
+       --roles all --seeds 11 12 13 --tag F13v1 --gpus 0 1
+   ```
 
 Opcional (extensión de robustez, solo si el re-Pareto muestra mucha inversión de orden): añadir el rango 2 de no
 dominancia de la última generación (`pareto_history.pkl[gen][2]`) al screening.
