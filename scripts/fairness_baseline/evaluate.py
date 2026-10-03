@@ -90,6 +90,7 @@ def evaluate_one_model(arch: str, ckpt_path: str, device: torch.device, args: ar
         batch_size=args.batch_size,
         positive_class_idx=1,
         eval_skintone_method='soft',
+        precision=args.precision,
     )
     
     results = fairness_metric.compute()
@@ -119,6 +120,8 @@ def main():
 
     # Image Transform Settings (Must match training)
     parser.add_argument('--img_size', type=int, default=224, help="Input size (e.g. 96, 224)")
+    parser.add_argument('--precision', type=str, default='fp32', choices=['fp32', 'fp16', 'bf16'],
+                        help="Inference precision for FACET (use the same as the MoQ-NAS retrain).")
     parser.add_argument('--resize_mode', type=str, default='letterbox', choices=['letterbox', 'center_crop'], 
                         help="Resize strategy used during training.")
 

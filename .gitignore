@@ -203,3 +203,6 @@ exp*/
 # Logs
 logs/
 .refactor_baseline/
+
+# retrain_2026 stage: inputs/outputs live on the cluster and are downloaded for analysis
+retrain_2026/

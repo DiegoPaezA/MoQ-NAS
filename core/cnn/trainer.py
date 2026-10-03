@@ -111,6 +111,10 @@ class BaseTrainer:
         # GradScaler exists ONLY for fp16; bf16 has fp32's dynamic range and
         # needs no loss scaling, so bf16/fp32 take the plain backward path.
         self.scaler = GradScaler(self.device.type, enabled=True) if self.precision == 'fp16' else None
+        # Gradient clipping max norm; None disables it (the F13 retrain protocol
+        # predates clipping). Default 1.0 keeps the search behaviour unchanged.
+        clip = self.params.get('grad_clip_norm', 1.0)
+        self.grad_clip_norm = float(clip) if clip is not None else None
         # --- Pluggable Metrics System ---
         self.post_processing_metrics = [
             m for m in metrics if m.is_post_processing or 'epoch_results' in m.compute.__code__.co_varnames
@@ -128,6 +132,7 @@ class BaseTrainer:
         self.best_accuracy = 0.0
         self.best_validation_loss = float('inf')
         self.best_epoch = 0
+        self.best_acc_epoch = 0  # epoch of the best-val-accuracy checkpoint
         self.no_improve_count = 0
         self.best_model_state_dict = None
         self.best_model_path = os.path.join(self.params['model_path'], 'best_model.pth')
@@ -195,13 +200,15 @@ class BaseTrainer:
                     self.optimizer.zero_grad()
                     if self.scaler is not None:  # fp16: scale, unscale before clipping
                         self.scaler.scale(loss).backward()
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        if self.grad_clip_norm is not None:
+                            self.scaler.unscale_(self.optimizer)
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:  # bf16 / fp32: no loss scaling, same clipping
                         loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        if self.grad_clip_norm is not None:
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
                         self.optimizer.step()
 
                 bs = inputs.size(0) if hasattr(inputs, "size") else 1
@@ -237,6 +244,12 @@ class BaseTrainer:
             return {}
 
         self.model = self.reset_and_load_best_model(self.best_model_path)
+        # reset_and_load_best_model builds a NEW module; metrics holding a model
+        # reference (FairnessMetric) must point to it, or they would evaluate the
+        # last-epoch weights instead of the best checkpoint.
+        for metric in self.post_processing_metrics:
+            if hasattr(metric, 'model'):
+                metric.model = self.model
 
         batch_processors = self.test_primary_metrics + self.artifacts
         for processor in batch_processors:
@@ -299,6 +312,7 @@ class BaseTrainer:
         
         training_losses, training_accuracies = [], []
         validation_losses, validation_accuracies = [], []
+        learning_rates, epoch_times = [], []
 
         phase = self.params.get('phase')
         if phase == 'retrain':
@@ -306,6 +320,8 @@ class BaseTrainer:
             self.scheduler = self._initialize_scheduler()
 
         for epoch in range(1, max_epochs + 1):
+            t_epoch = time.time()
+            learning_rates.append(self.optimizer.param_groups[0]['lr'])
             train_results = self._run_epoch(self.train_loader, is_training=True, metric_set=self.primary_metrics)
             training_losses.append(train_results.get('loss', 0))
             training_accuracies.append(train_results.get('accuracy', 0))
@@ -319,12 +335,14 @@ class BaseTrainer:
                 val_results = self._run_epoch(self.val_loader, is_training=False, metric_set=self.val_primary_metrics)
                 validation_losses.append(val_results.get('loss', 0))
                 validation_accuracies.append(val_results.get('accuracy', 0))
+                epoch_times.append(time.time() - t_epoch)  # train + validation of this epoch
                 
                 current_accuracy = val_results.get('accuracy', 0.0)
                 current_loss = val_results.get('loss', float('inf'))
 
                 if current_accuracy > self.best_accuracy:
                     self.best_accuracy = current_accuracy
+                    self.best_acc_epoch = epoch
                     create_info_file(self.params['model_path'], {'best_accuracy': self.best_accuracy}, 'best_accuracy.txt')
                     self.best_model_state_dict = copy.deepcopy(self.model.state_dict())
                     torch.save(self.model.state_dict(), self.best_model_path)
@@ -377,6 +395,9 @@ class BaseTrainer:
         
         # 1. Run the test phase if needed (retrain/resnet)
         test_results = {}
+        if phase == 'retrain':
+            # Keep the final weights too (best_model.pth holds the best-val checkpoint).
+            torch.save(self.model.state_dict(), os.path.join(self.params['model_path'], 'last.pt'))
         if (phase == 'retrain' or phase == 'resnet') and self.test_loader is not None:
             test_results = self._run_test_phase()
 
@@ -404,6 +425,10 @@ class BaseTrainer:
             'validation_accuracies': validation_accuracies,
             'best_accuracy': self.best_accuracy,
             'best_epoch': self.best_epoch,
+            'best_acc_epoch': self.best_acc_epoch,
+            'epochs_run': len(training_losses),
+            'learning_rates': learning_rates,
+            'epoch_times': epoch_times,
             'training_time': total_training_time,
             'test_accuracy': test_results.get('accuracy'),
             'test_loss': test_results.get('loss'),

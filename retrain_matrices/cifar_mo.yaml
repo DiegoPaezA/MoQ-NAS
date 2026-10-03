@@ -1,3 +1,7 @@
+# NOTE (retrain_2026): superseded by launch_retrain_protocol.py + protocol_F13v1.yaml, which pass
+# every hyperparameter explicitly. Kept for reference; patience fixed below (it used to stop
+# the cosine schedule early).
+#
 # Retrain matrix for the acc_flops multi-objective experiments.
 # Each experiment × repeat cell selects candidates from the Pareto front
 # using weighted scalarization and dispatches retrain_parallel.py.
@@ -27,7 +31,7 @@ defaults:
   eval_batch_size: 256
   log_level: INFO
   num_workers: 4
-  patience_retrain: 50
+  patience_retrain: 200   # = max_epochs: early stopping on val loss cut training while the LR was still high
   data_augmentation: true
   # keep_metrics: true  # uncomment to include HardwareMetrics etc. from evolution config
 

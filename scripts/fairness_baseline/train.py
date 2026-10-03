@@ -14,6 +14,9 @@ sys.path.append(str(project_root))
 
 from core.cnn import input as cnn_input
 from core.fairness.models import make_baseline_model, REGISTRY
+from core.precision import resolve_precision
+from torch.amp import GradScaler, autocast
+from torch.optim.lr_scheduler import MultiStepLR
 
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -77,6 +80,12 @@ def load_config_robust(args):
         train_spec['max_epochs'] = args.max_epochs
     if args.learning_rate:
         train_spec['learning_rate'] = args.learning_rate
+    if args.weight_decay is not None:
+        train_spec['weight_decay'] = args.weight_decay
+    if args.precision:
+        train_spec['precision'] = args.precision
+    if args.lr_scheduler:
+        train_spec['lr_scheduler'] = args.lr_scheduler
     if args.device:
         train_spec['device'] = args.device
     if args.num_workers:
@@ -139,6 +148,20 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=wd)
     criterion = nn.CrossEntropyLoss()
+
+    # Precision policy shared with the MoQ-NAS trainer: autocast + GradScaler for
+    # fp16, autocast only for bf16, plain fp32 otherwise (the historical default).
+    precision = resolve_precision(params)
+    use_amp = precision in ('fp16', 'bf16') and device.type == 'cuda'
+    amp_dtype = torch.bfloat16 if precision == 'bf16' else torch.float16
+    scaler = GradScaler('cuda') if (precision == 'fp16' and device.type == 'cuda') else None
+
+    max_epochs = int(params.get('max_epochs', 10))
+    scheduler = None
+    if str(params.get('lr_scheduler', 'none')).lower() == 'multistep':
+        # Same rule as the MoQ-NAS trainer: milestones at 50 % / 75 %, gamma 0.1.
+        scheduler = MultiStepLR(optimizer, milestones=[int(0.5 * max_epochs), int(0.75 * max_epochs)], gamma=0.1)
+    print(f"[{arch}] precision={precision} lr={lr} weight_decay={wd} scheduler={params.get('lr_scheduler', 'none')}")
     
     output_dir = Path(params['experiment_path'])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -152,7 +175,6 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
     checkpoint_path = output_dir / f"{dataset_name}_{arch}{scratch_suffix}{seed_suffix}.pt"
     
     best_val_acc = 0.0
-    max_epochs = int(params.get('max_epochs', 10))
 
     for epoch in range(1, max_epochs + 1):
         model.train()
@@ -172,10 +194,16 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
             labels = labels.long()
 
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+            with autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+            if scaler is not None:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
             
             train_loss += loss.item() * inputs.size(0)
             _, predicted = outputs.max(1)
@@ -197,7 +225,8 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
                     labels = labels.squeeze()
                 labels = labels.long()
                 
-                outputs = model(inputs)
+                with autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+                    outputs = model(inputs)
                 _, predicted = outputs.max(1)
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
@@ -210,6 +239,11 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
             best_val_acc = val_acc
             print(f"  -> New best val acc: {best_val_acc:.2f}%. Saving model to {checkpoint_path}")
             torch.save(model.state_dict(), checkpoint_path)
+
+        # The MoQ-NAS trainer skips the scheduler step on its first validation
+        # epoch (F13 behaviour); mirror it so both groups share the exact schedule.
+        if scheduler is not None and epoch > 1:
+            scheduler.step()
 
     print(f"--- Finished Training for [{arch}]. Best model saved to {checkpoint_path} ---")
     
@@ -257,6 +291,11 @@ def main():
     parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--max_epochs', type=int, default=None)
     parser.add_argument('--learning_rate', type=float, default=None)
+    parser.add_argument('--weight_decay', type=float, default=None)
+    parser.add_argument('--precision', type=str, default=None, choices=['fp32', 'fp16', 'bf16'],
+                        help="Training precision (default fp32, as the original baselines).")
+    parser.add_argument('--lr_scheduler', type=str, default=None, choices=['none', 'multistep'],
+                        help="LR schedule (default none, as the original baselines).")
     parser.add_argument('--device', type=str, default=None)
     parser.add_argument('--num_workers', type=int, default=None)
     parser.add_argument('--dataset', type=str, default=None)
