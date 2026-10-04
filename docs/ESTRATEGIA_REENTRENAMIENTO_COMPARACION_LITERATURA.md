@@ -861,6 +861,43 @@ Cómo usarlo en el paper:
   Su efecto sobre las métricas por tono de piel no está estudiado: sería un factor nuevo en el análisis de fairness.
 - El código lo impide: `augmentation_policy` distinto de `ta` da error para person/face/MedMNIST.
 
+## 4f. Dos servidores: dualgpu1 y dualgpu2 (2026-10-04)
+
+Desde el screening, la etapa corre en dos servidores (2× L40S compartidas en cada uno). Cada **caso completo** va en un
+solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se entrenen en las mismas condiciones:
+
+| Caso | Servidor | Lanzado | Comando (relanzarlo igual si hay un corte) |
+|---|---|---|---|
+| Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
+| acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
+
+Los tiempos de entrenamiento no se comparan entre casos (servidor, carga de otros usuarios y temperatura distintos);
+dentro de un caso, sí.
+
+**Compatibilidad entre servidores (verificada):**
+- Mismo CIFAR-10 (md5 de `cifar-10-batches-py` idéntico) y mismas torch 2.5.1 / torchvision 0.20.1 (CUDA en L40S).
+- Difieren numpy (dualgpu1 2.2.6, dualgpu2 1.26.4) y sklearn (1.6.1 frente a 1.3.2). El split 45k/5k
+  (`StratifiedShuffleSplit`, `split_seed 2025`) sale **idéntico** en los dos (md5 de los índices
+  `67966c29c45d99cff798756623b892db`). Si se cambia el entorno de alguno, repetir esta verificación.
+- Cada resultado guarda en `env` el hostname, el commit y las versiones de python, torch, torchvision, numpy y sklearn.
+  El launcher imprime host y commit al empezar, y avisa si hay archivos versionados con cambios locales.
+
+**Reglas para mantener el código sincronizado:**
+- Los dos servidores corren la rama `retrain-2026` en el mismo commit que GitHub. Los cambios se hacen en el Mac,
+  se llevan con `git bundle` a un servidor, se hace `git push` desde allí y el otro servidor hace `git pull`
+  (dualgpu1 y dualgpu2 no se ven entre sí; los dos sí ven GitHub por SSH).
+- **No cambiar el código que afecta al entrenamiento mientras haya un screening corriendo**: el launcher arranca un
+  `retrain_parallel.py` nuevo por cada trabajo, y sus workers (`spawn`) vuelven a importar el código del disco, así que
+  un `git pull` a mitad del screening afecta a las redes que empiezan después. Solo se pueden traer a mitad de
+  camino cambios que no tocan el entrenamiento (p. ej., metadatos en `env`); en otro caso, esperar a que termine.
+- No editar archivos versionados directamente en los servidores (dualgpu2 tenía `run_retrain.sh` modificado; se
+  descartó el 2026-10-04 con backup en `~/MoQ-NAS_dualgpu2_local_changes_2026-10-04.tgz`).
+
+**Resultados:** el análisis se hace en el Mac. `scripts/sync_retrain_results.sh` (repo de análisis) baja
+`retrain_2026/` y `logs/retrain.log` de cada servidor a `retrain_2026/cluster/<host>/` (un espejo por servidor,
+sin borrar nada y sin pesos salvo con `--with-weights`). El Caso 1 se lee del espejo de dualgpu1 y acc-FLOPs del de
+dualgpu2 (dualgpu1 también tiene una copia de las corridas de acc-FLOPs, pero sin resultados).
+
 ## 5. Checklist en el clúster (antes de lanzar)
 
 0. **Inventario:** correr `scripts/check_retrain_inventory.py` (§2.0) y subir con `rsync --files-from` lo que falte.
