@@ -14,17 +14,23 @@ Resolution order for each job (later wins):
 
 Usage (from the MoQ-NAS repo root on the cluster):
     python launch_retrain_protocol.py --cases C1_triobj --roles best_acc knee compact strat10 front \\
-        --seeds 1 --tag F13v1 --gpus 0 1 --dry-run
+        --seeds 1 --tag F13v1c --gpus 0 1 --dry-run
     python launch_retrain_protocol.py --cases C3_fairness_two C3_fairness_three --roles all \\
         --profile fairness_R1 --seeds 1 2 3 --tag fairR1 --gpus 0 1
 
 Outputs, inside each run folder: archive/<id>/retrain_<tag>_s<seed>/,
 retrain_results_<tag>.txt and retrain_failures_<tag>.csv. One log per job and a
 launch manifest go to --logs-dir.
+
+Candidates whose requested seeds are all already OK in retrain_results_<tag>.txt
+are skipped (--redo retrains them). A tag never mixes augmentation policies: if an
+existing retrain_<tag>_s<seed>/training_params.txt used another policy, the launch
+is refused (logs without the key predate the option and count as 'ta').
 """
 
 import argparse
 import csv
+import json
 import os
 import subprocess
 import sys
@@ -78,6 +84,39 @@ def resolve(protocol: dict, dataset: str, case: str, profile: str | None, cli: d
         raise ValueError(f"Protocol leaves {missing} undefined for case={case}, dataset={dataset}, "
                          f"profile={profile}. Pass them explicitly (e.g. --max-epochs).")
     return spec
+
+
+def done_seeds(run_path: str, tag: str) -> dict[str, set]:
+    """Candidate id -> seeds already retrained with status OK under this tag."""
+    path = os.path.join(run_path, f'retrain_results_{tag}.txt')
+    if not os.path.isfile(path):
+        return {}
+    with open(path) as f:
+        results = json.load(f)
+    return {cid: {rep.get('seed') for rep in reps.values() if rep.get('status') == 'OK'}
+            for cid, reps in results.items()}
+
+
+def logged_augmentation_policy(params_path: str) -> str | None:
+    """augmentation_policy recorded in a retrain training_params.txt ('ta' if the key is absent)."""
+    if not os.path.isfile(params_path):
+        return None
+    with open(params_path) as f:
+        for line in f:
+            key, _, value = line.partition(':')
+            if key.strip() == 'augmentation_policy':
+                return value.strip()
+    return 'ta'
+
+
+def check_augmentation(run_path: str, ids: list[str], seeds: list[int], tag: str, policy: str):
+    for cid in ids:
+        for seed in seeds:
+            params_path = os.path.join(run_path, 'archive', cid, f'retrain_{tag}_s{seed}', 'training_params.txt')
+            logged = logged_augmentation_policy(params_path)
+            if logged is not None and logged != policy:
+                raise ValueError(f"Tag '{tag}' already holds a retrain with augmentation_policy={logged!r} "
+                                 f"({params_path}); this protocol resolves to {policy!r}. Use another tag.")
 
 
 def build_argv(run_path: str, ids: list[str], spec: dict, seeds: list[int], tag: str,
@@ -146,9 +185,19 @@ def load_jobs(args, protocol):
         run_path = os.path.join(args.runs_root, local_dir)
         if not os.path.isfile(os.path.join(run_path, 'log_params_evolution.txt')):
             raise FileNotFoundError(f"Run not found: {run_path} (check --runs-root)")
+        check_augmentation(run_path, job['ids'], args.seeds, args.tag, spec.get('augmentation_policy', 'ta'))
+        ids = job['ids']
+        if not args.redo:
+            done = done_seeds(run_path, args.tag)
+            skipped = [cid for cid in ids if set(args.seeds) <= done.get(cid, set())]
+            ids = [cid for cid in ids if cid not in skipped]
+            if skipped:
+                print(f"# skip (already OK under {args.tag}): {local_dir} {' '.join(skipped)}", file=sys.stderr)
+            if not ids:
+                continue
         out.append(dict(local_dir=local_dir, case=m['case'], dataset=m['dataset'], algo=m['algo'],
-                        run=m['run'], ids=job['ids'], spec=spec,
-                        argv=build_argv(run_path, job['ids'], spec, args.seeds, args.tag,
+                        run=m['run'], ids=ids, spec=spec,
+                        argv=build_argv(run_path, ids, spec, args.seeds, args.tag,
                                         args.workers_per_job, args.python)))
     return out
 
@@ -177,6 +226,8 @@ def main():
     ap.add_argument('--workers-per-job', type=int, default=2,
                     help='Candidates trained concurrently inside one job (retrain_parallel workers).')
     ap.add_argument('--python', default=sys.executable)
+    ap.add_argument('--redo', action='store_true',
+                    help='Retrain candidates even if all requested seeds are already OK under --tag.')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--smoke', action='store_true',
                     help="Smoke test: 2 epochs, 2000 images, first run and first candidate of each case; "
@@ -198,7 +249,8 @@ def main():
 
     if args.dry_run:
         for j in jobs:
-            print(f"# {j['case']} {j['algo']} {j['run']} ids={len(j['ids'])} precision={j['spec']['precision']}")
+            print(f"# {j['case']} {j['algo']} {j['run']} ids={len(j['ids'])} precision={j['spec']['precision']} "
+                  f"augmentation={j['spec'].get('augmentation_policy')}")
             print(' '.join(j['argv']))
         return 0
 
