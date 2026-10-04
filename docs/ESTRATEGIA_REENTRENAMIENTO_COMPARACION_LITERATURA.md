@@ -595,6 +595,9 @@ python retrain_parallel.py --experiment_path <exp_root>/exp22_repeat_1 \
 - **Recomendación:** no tocarlo para P1 (los números internos de Q-NAS se obtuvieron sin esto y se pierde la
   comparabilidad); implementarlo detrás de un flag (`augmentation_policy: ta | standard | standard+cutout`) y
   usarlo solo en P2.
+- **Actualización (2026-10-04):** implementado (commit `04e2fa5`). Tras el piloto 2, `standard_cutout` pasa a ser la
+  opción por defecto para CIFAR-10 en P1 (§4e). Las filas de Q-NAS F13 (solo `ta`) se mantienen como referencia y
+  deben ir marcadas con su augmentation.
 
 ### 4.6 Throughput: el retrain está limitado por la CPU
 - Los smoke retrains tardaron ≈ 120 s por 5 épocas (≈ 24 s/época) **independientemente** de los FLOPs
@@ -790,12 +793,35 @@ usuario puede cambiar.
 
 ## 4e. Augmentation de CIFAR-10: piloto 2 y brecha de protocolo con la literatura (2026-10-04)
 
-**Decisión pendiente, se resolverá con el piloto 2.** Dos candidatas para el protocolo CIFAR-10 (Caso 1 y acc-FLOPs):
+**Decisión (2026-10-04, tras el piloto 2): se adopta la opción (c) para todos los reentrenamientos de CIFAR-10**
+(Caso 1 y acc-FLOPs, los tres algoritmos). Queda fijada en `datasets.cifar10` de `protocol_F13v1.yaml`
+(`augmentation_policy: standard_cutout`), así que ya no hace falta `--profile cifar_aug_c`; tag `F13v1c`.
+MedMNIST y fairness siguen con `ta` (tag `F13v1`, `fairR1`/`fairR2`). Las 6 redes del piloto 2 cuentan como
+screening del Caso 1: el launcher salta los candidatos que ya están OK con el mismo tag y se niega a mezclar
+políticas de augmentation dentro de un tag. Por eso el tag `F13v1` en CIFAR-10 queda solo para el piloto 1.
+
+Resultado del piloto 2 (test, semilla 1, misma GPU y concurrencia que el piloto 1):
+
+| Red (exp22) | F13-v1 (P1) | Opción (c) (P2) | Δ test (pp) | Δ tiempo de entrenamiento |
+|---|---|---|---|---|
+| r1 130_14 (`best_acc`) | 91.80 | 92.89 | +1.09 | +15.0 % |
+| r2 66_5 (`best_acc`) | 91.08 | 92.15 | +1.07 | +14.4 % |
+| r3 79_19 (`best_acc`) | 90.86 | 91.73 | +0.87 | +13.1 % |
+| r3 127_14 (`compact`) | 89.48 | 90.69 | +1.21 | +10.2 % |
+| r1 98_1 (`compact`) | 88.41 | 89.54 | +1.13 | +8.9 % |
+| r2 139_15 (`compact`) | 87.26 | 89.21 | +1.95 | +10.5 % |
+| **Media** | 89.82 | 91.04 | **+1.22** (6/6 mejoran) | **+12.6 %** (suma de tiempos) |
+
+Se cumplen las tres condiciones del criterio: mejora en la mayoría (6/6), mejora media ≥ 0.3 pp y tiempo
+≤ +20 % (máximo +15 %). El tiempo es orientativo: la GPU se comparte con otros usuarios. Las proyecciones de §4d
+hay que subirlas ≈ 13 % en los Tiers A y B.
+
+Las dos candidatas que se compararon para el protocolo CIFAR-10 (Caso 1 y acc-FLOPs):
 - **F13-v1** (`augmentation_policy: ta`): solo TrivialAugmentWide, tal como se ejecutó F13. Piloto 1, tag `F13v1`.
 - **Opción (c)** (perfil `cifar_aug_c`, `augmentation_policy: standard_cutout`): RandomCrop(32, pad 4) +
   HorizontalFlip + TrivialAugmentWide + Cutout(16). Lo demás, igual que F13-v1. Piloto 2, tag `F13v1c`.
 
-Piloto 2: mismas 6 redes, misma GPU (1), misma concurrencia (3 trabajos × 2) y misma semilla que el piloto 1 →
+Diseño del piloto 2: mismas 6 redes, misma GPU (1), misma concurrencia (3 trabajos × 2) y misma semilla que el piloto 1 →
 comparación pareada del efecto de la augmentation sobre test accuracy, y también de su costo (CPU y tiempo).
 Criterio de decisión, fijado antes de ver resultados: adoptar (c) si mejora el test en la mayoría de las 6 redes y
 en media, sin aumentar el tiempo de forma relevante (> 20 %). Si la mejora es marginal (< 0.3 pp de media),
