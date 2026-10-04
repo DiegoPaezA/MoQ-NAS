@@ -681,6 +681,64 @@ cada época, lo que explica los ≈ 24 s/época de los smoke retrains de junio, 
 coste fijo por candidato y semilla es ≈ 1–1.5 min, y el resto escala con épocas y tamaño de la red. El piloto (6 redes,
 300 épocas, 45 k imágenes) dará el coste real.
 
+## 4d. Piloto y reporte de tiempos (2026-10-03/04, GPU 1, commit `40e31f0`)
+
+**Piloto:** 6 redes de MoQ-NAS del Caso 1 (best_acc + compact de exp22 r1–r3), protocolo F13-v1 completo (300 épocas,
+45k/5k, fp16, semilla 1), las 6 en paralelo en la GPU 1, que también usaba otro usuario. Tag `F13v1`: cuentan como
+screening. Inicio 21:06, fin 01:59 → **4.9 h de reloj** para 6 redes, sin fallos.
+
+| Red | Rol | Params | GFLOPs | Proxy | **Test** | Ganancia | Mejor val (época) | h por red | s/época (mediana) |
+|---|---|---|---|---|---|---|---|---|---|
+| 130_14 | best_acc r1 | 1.71 M | 2.24 | 77.3 | **91.80** | +14.5 | 92.42 (288) | 4.87 | 58 |
+| 66_5 | best_acc r2 | 0.92 M | 1.80 | 77.4 | **91.08** | +13.7 | 91.36 (202) | 4.80 | 58 |
+| 79_19 | best_acc r3 | 0.89 M | 1.31 | 78.8 | **90.86** | +12.1 | 91.38 (226) | 3.85 | 47 |
+| 127_14 | compact r3 | 0.32 M | 0.36 | 75.6 | **89.48** | +13.9 | 89.60 (205) | 2.75 | 32 |
+| 98_1 | compact r1 | 0.25 M | 0.21 | 73.5 | **88.41** | +14.9 | 88.68 (282) | 2.31 | 27 |
+| 139_15 | compact r2 | 0.26 M | 0.44 | 72.8 | **87.26** | +14.5 | 87.70 (219) | 3.31 | 39 |
+
+- Ganancia proxy → test: **+12.1 a +14.9 pp**. Spearman proxy vs test = 0.77 (n = 6): el proxy ordena razonablemente,
+  pero no perfectamente.
+- La mejor validación llega en las épocas 202–288, después de las bajadas de LR (150, 225). Con el early stopping
+  antiguo (`patience 50` sobre val loss) se habrían cortado antes: confirma el arreglo 4.1.
+- Las redes de mejor accuracy quedan en 90.9–91.8 % con 0.9–1.7 M params, algo por debajo de Q-NAS 2-C1 (92.96 %,
+  1.6 M) y CGP-CNN (93.25 %, 1.52 M), que usan otros protocolos. Las compactas, en 87.3–89.5 % con 0.25–0.32 M params.
+
+**Calibración del modelo de tiempos (una GPU, compartida como ahora):**
+- Rendimiento agregado de la GPU con varias redes en paralelo: **≈ 15.2 TFLOP/s** (trabajo total del piloto / 4.9 h).
+  Con 2 redes al final se mantuvo en ≈ 15 → el piloto estuvo limitado por la GPU.
+- Lado CPU (carga y aumentación de datos): **≥ 10.7k imágenes/s** sumando todas las redes. Una red pequeña no baja de
+  ~27 s/época en CIFAR-10 completo con la máquina cargada.
+- Costo fijo ≈ 2–2.5 min por red y semilla (arranque de workers, CUDA, test), amortizado al correr en paralelo.
+- Correr **en paralelo** rinde mucho más que en serie: la suma de los tiempos individuales fue 21.9 h, frente a 4.9 h
+  de reloj. Recomendado: 6 redes a la vez por GPU, las más pesadas primero.
+- Modelo: horas ≈ máx(Σ FLOPs de entrenamiento / 15.2 TFLOP/s, Σ imágenes procesadas / 10.7k img/s) + costo fijo.
+
+**Proyección en UNA GPU** (condiciones actuales; si la GPU queda libre, será más rápido):
+
+| Grupo | Bloque | Entrenamientos | Días | Límite |
+|---|---|---|---|---|
+| **Revisor** | Caso 1 · screening reducido (`strat10` + reps, sin el piloto) | 84 | **1.8** | GPU |
+| | Caso 1 · screening del frente filtrado completo (alternativa) | 497 | 16.5 | GPU |
+| | Caso 1 · confirmación (≈ 25 reps × semillas 11–13) | 75 | **2.5** (≈ 5 si se suman los reps por presupuesto) | GPU |
+| | acc-FLOPs · screening del frente (147) | 147 | **2.4** | CPU |
+| | acc-FLOPs · confirmación (≈ 25 reps × 3) | 75 | **1.2** (≈ 2.4 con reps por presupuesto) | CPU |
+| Extra | Fairness R1: frente 121 + 5 baselines, × 3, 10k img, 50 ép. | 378 | 1.7 | GPU |
+| | Fairness R2 reducido: 9 reps + 5 baselines × 3, 100 ép. | 42 | 2.5 | GPU |
+| | Fairness R2 completo, 100 / 300 ép. | 378 | 30 / 89 | GPU |
+| | MedMNIST: solo reps de MoQ-NAS, 1 semilla | 32 | 1.2 | CPU |
+| | MedMNIST: screening `strat10` + reps / confirmación × 3 | 360 / 303 | 12.9 / 12.3 | CPU / GPU |
+
+Totales:
+- **Lo que pide el revisor**, con el screening reducido del Caso 1: **≈ 8 días** (≈ 11 con los representantes por
+  presupuesto). Con el screening completo del Caso 1: ≈ 23–26 días.
+- Más fairness R1 + R2 reducido + MedMNIST reducido: **+ ≈ 5.4 días**.
+- Fairness R2 completo y MedMNIST completo suman 1–3 meses: no son viables con una GPU.
+
+Incertidumbres: la confirmación depende de cuántos representantes salgan del re-Pareto; el bloque acc-FLOPs y
+MedMNIST están limitados por CPU, y el ritmo de CPU medido es conservador en MedMNIST (imágenes de 28×28, más
+baratas de aumentar) y quizá optimista en fairness (96×96 con RandomResizedCrop); el reparto de la GPU con el otro
+usuario puede cambiar.
+
 ## 5. Checklist en el clúster (antes de lanzar)
 
 0. **Inventario:** correr `scripts/check_retrain_inventory.py` (§2.0) y subir con `rsync --files-from` lo que falte.
