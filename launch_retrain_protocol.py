@@ -182,7 +182,7 @@ def load_jobs(args, protocol):
         for local_dir, job in jobs.items():
             first_per_case.setdefault(job['meta']['case'], (local_dir, job))
         jobs = OrderedDict((ld, dict(job, ids=job['ids'][:1])) for ld, job in first_per_case.values())
-    out = []
+    out, n_skipped = [], 0
     for local_dir, job in jobs.items():
         m = job['meta']
         spec = resolve(protocol, m['dataset'], m['case'], args.profile, cli)
@@ -195,6 +195,7 @@ def load_jobs(args, protocol):
             done = done_seeds(run_path, args.tag)
             skipped = [cid for cid in ids if set(args.seeds) <= done.get(cid, set())]
             ids = [cid for cid in ids if cid not in skipped]
+            n_skipped += len(skipped)
             if skipped:
                 print(f"# skip (already OK under {args.tag}): {local_dir} {' '.join(skipped)}", file=sys.stderr)
             if not ids:
@@ -203,7 +204,7 @@ def load_jobs(args, protocol):
                         run=m['run'], ids=ids, spec=spec,
                         argv=build_argv(run_path, ids, spec, args.seeds, args.tag,
                                         args.workers_per_job, args.python)))
-    return out
+    return out, n_skipped
 
 
 def main():
@@ -242,8 +243,11 @@ def main():
 
     with open(args.protocol) as f:
         protocol = yaml.safe_load(f)
-    jobs = load_jobs(args, protocol)
+    jobs, n_skipped = load_jobs(args, protocol)
     if not jobs:
+        if n_skipped:
+            print(f"Nothing to do: all {n_skipped} candidate(s) already OK under tag {args.tag} (--redo to retrain).")
+            return 0
         sys.exit('No jobs after filtering.')
 
     n_trainings = sum(len(j['ids']) for j in jobs) * len(args.seeds)
