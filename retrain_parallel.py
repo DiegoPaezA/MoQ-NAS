@@ -158,7 +158,7 @@ def _apply_protocol_overrides(params, args):
         "limit_data", "lr_scheduler", "optimizer", "data_augmentation",
         "num_workers", "save_checkpoints_epochs", "patience_retrain", "delta_fraction",
         "config_path_dataset", "precision", "learning_rate", "weight_decay",
-        "train_split", "split_seed", "eval_window_agg", "limit_data_value",
+        "train_split", "split_seed", "eval_window_agg", "limit_data_value", "augmentation_policy",
     ]
     for k in override_keys:
         v = getattr(args, k, None)
@@ -415,6 +415,10 @@ if __name__ == '__main__':
                         help='Aggregation of the reported validation accuracy over the evaluated epochs '
                              '(retrain evaluates every epoch). Default: max (best epoch).')
     parser.add_argument('--data_augmentation', action='store_true')
+    parser.add_argument('--augmentation_policy', type=str, default=None,
+                        choices=['ta', 'standard', 'standard_cutout'],
+                        help="Train augmentation for CIFAR-like datasets: 'ta' (F13), 'standard' "
+                             "(crop+flip+TA) or 'standard_cutout' (+ cutout 16). Default: keep the log value ('ta').")
     parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5)
     parser.add_argument('--patience_retrain', type=int, default=25)

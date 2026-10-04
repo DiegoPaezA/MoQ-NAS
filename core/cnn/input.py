@@ -173,7 +173,8 @@ class GenericDataLoader:
 
         # Transforms (centralized)
         self.train_transform, self.eval_transform = build_transforms(
-            self.spec, _coerce_bool(self.params.get("data_augmentation", False))
+            self.spec, _coerce_bool(self.params.get("data_augmentation", False)),
+            augmentation_policy=str(self.params.get("augmentation_policy", "ta")),
         )
 
         # Persist info once
