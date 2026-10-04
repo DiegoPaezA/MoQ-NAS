@@ -86,6 +86,18 @@ def resolve(protocol: dict, dataset: str, case: str, profile: str | None, cli: d
     return spec
 
 
+def git_state() -> tuple[str, list[str]]:
+    """Short HEAD commit and the tracked files with local changes (both servers must run the same code)."""
+    repo = os.path.dirname(os.path.abspath(__file__))
+    try:
+        head = subprocess.check_output(['git', '-C', repo, 'rev-parse', '--short', 'HEAD'], text=True).strip()
+        dirty = subprocess.check_output(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'],
+                                        text=True).split('\n')
+        return head, [line[3:] for line in dirty if line.strip()]
+    except Exception:
+        return 'unknown', []
+
+
 def done_seeds(run_path: str, tag: str) -> dict[str, set]:
     """Candidate id -> seeds already retrained with status OK under this tag."""
     path = os.path.join(run_path, f'retrain_results_{tag}.txt')
@@ -250,6 +262,11 @@ def main():
             return 0
         sys.exit('No jobs after filtering.')
 
+    head, dirty = git_state()
+    print(f"# host={os.uname().nodename} commit={head}", file=sys.stderr)
+    if dirty:
+        print(f"# WARNING: tracked files with local changes: {' '.join(dirty)}. Results would not match "
+              f"commit {head}; commit or discard them so both servers run the same code.", file=sys.stderr)
     n_trainings = sum(len(j['ids']) for j in jobs) * len(args.seeds)
     print(f"# protocol={protocol.get('protocol')} profile={args.profile} tag={args.tag} "
           f"jobs={len(jobs)} candidates={sum(len(j['ids']) for j in jobs)} seeds={args.seeds} "

@@ -121,10 +121,17 @@ def _environment_info():
     import subprocess
     info = {
         'hostname': platform.node(),
+        'python': platform.python_version(),
         'torch': torch.__version__,
         'cuda': torch.version.cuda,
         'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu',
     }
+    # Libraries that differ between the GPU servers (split via sklearn/numpy, augmentation via torchvision).
+    for name in ('torchvision', 'numpy', 'sklearn'):
+        try:
+            info[name] = __import__(name).__version__
+        except Exception:
+            info[name] = 'unknown'
     try:
         repo = os.path.dirname(os.path.abspath(__file__))
         info['git_commit'] = subprocess.check_output(
