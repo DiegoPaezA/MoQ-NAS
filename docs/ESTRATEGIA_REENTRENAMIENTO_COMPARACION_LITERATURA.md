@@ -211,15 +211,28 @@ Por qué vale la pena aunque en el paper sea "solo" la ablación de espacio: **e
 objetivos coincide con NSGA-Net y NSGANetV1 (error + FLOPs)**, que son los dos comparadores multiobjetivo
 evolutivos más citados.
 
-### Tier C — Caso 2, MedMNIST `[-Acc, Params, Time_CUDA]` (prioridad 3)
+### Tier C — Caso 2, MedMNIST `[-Acc, Params, Time_CUDA]` (comparación con MedMNIST v2)
 
 `medmnist/moqnas_last/experiment_{ds}_medmnist/moqnas/exp1_repeat_{1,2,3}` y
 `medmnist/NSGA/experiment_{ds}_{nsga2,nsga3}/{algo}/exp1_repeat_{1,2,3}` para
 `ds ∈ {pathmnist, octmnist, tissuemnist, organamnist}`. Representantes: 23–26 por dataset (≈101 en total).
 
-- Mínimo: representantes × 3 semillas ≈ **300 entrenamientos** (cortos con el protocolo MedMNIST de 100 épocas).
-- Ampliado: `strat10` (360 redes) × 1 semilla, solo si el presupuesto lo permite.
-- Orden sugerido: OrganA y Path primero (más pequeños/rápidos), TissueMNIST al final (165 k imágenes de train).
+**Plan decidido (2026-10-04): comparación con el benchmark MedMNIST v2, incluyendo NSGA-II/III y con P-Med-A
+como control.**
+- **Qué se reentrena:** los representantes por proxy (`best_acc`, `knee`, `compact`) de cada una de las 36 corridas
+  (3 algoritmos × 3 corridas × 4 datasets) = **101 redes** (MoQ-NAS 32, NSGA-II 34, NSGA-III 35). En MedMNIST no hay
+  screening: los representantes salen de la regla del CSV, la misma para los tres algoritmos.
+- **Dos protocolos por red, 1 semilla cada uno:**
+  1. **F13-v1** (el del estudio: 300 épocas, AdamW, TrivialAugment), tag `F13v1`: ≈ **4.1 días** en una GPU.
+  2. **P-Med-A** (control, perfil `medmnist_v2`: protocolo exacto de las ResNet de MedMNIST v2: 100 épocas, Adam
+     1e-3, ×0.1 en 50 y 75, batch 128, sin augmentation), tag `PMedA`: ≈ **1.4 días**.
+  Total ≈ **5.5 días**. Con 3 semillas por red serían ≈ 16.5 días: no viable en una GPU.
+- **Variabilidad:** se reporta media ± sd sobre las **3 corridas de búsqueda independientes** de cada algoritmo, que
+  ya incluye la variabilidad de la búsqueda y del entrenamiento. No hace falta repetir semillas por red porque los
+  representantes no se eligen con resultados del reentrenamiento: no hay sesgo de selección. MedMNIST v2 reporta
+  una sola corrida por método.
+- Orden sugerido: OrganA y Path primero (más pequeños y rápidos), TissueMNIST al final (165 k imágenes de train).
+- Ampliación opcional, solo si sobra tiempo: `strat10` (360 redes) × 1 semilla con F13-v1 (≈ 13 días).
 
 ### Tier D — Caso 3, fairness: frente completo × 3 semillas en dos regímenes (decisión 2026-10-03)
 
@@ -926,6 +939,33 @@ El argumento que sí sostienen los datos es de **eficiencia**: frentes completos
 frente a 2 670 de Large-scale Evolution).
 
 ### 6.3 Tabla 2 — MedMNIST (28×28), ACC / AUC
+
+**Decisión (2026-10-04): comparar directamente con el benchmark MedMNIST v2 [34].** Como casi no hay trabajos
+multiobjetivo en MedMNIST, la tabla de MedMNIST se construye contra los 7 métodos del paper oficial: ResNet-18 y
+ResNet-50 a 28 y 224, auto-sklearn, AutoKeras y Google AutoML Vision. Todos usan los splits oficiales y reportan
+ACC y AUC.
+
+Encuadre (para no sobre-afirmar):
+- Esos métodos son **mono-objetivo**. No es una comparación de multiobjetivo contra multiobjetivo, sino de **nivel
+  de desempeño frente a un benchmark establecido, más eficiencia**: "las redes del frente alcanzan ACC/AUC
+  comparables a ResNet y AutoML con un orden de magnitud menos de parámetros" (< 2 M frente a ≈ 11 M en ResNet-18 y
+  ≈ 23.5 M en ResNet-50). La comparación multiobjetivo propiamente dicha sigue siendo contra NSGA-II/III (mismo
+  protocolo) y contra la literatura multiobjetivo de CIFAR-10 (Tabla 1).
+- **MoQ-NAS, NSGA-II y NSGA-III aparecen los tres**, con el mismo protocolo y los mismos representantes por regla:
+  la tabla muestra también la comparación interna después del reentrenamiento.
+- **Dos filas por algoritmo:**
+  - **F13-v1** (protocolo del estudio): fila principal, con la columna de protocolo declarada (300 épocas, AdamW,
+    TrivialAugment). Tiene más presupuesto y augmentation que las ResNet de MedMNIST v2.
+  - **P-Med-A** (control): protocolo idéntico al de las ResNet de MedMNIST v2 (100 épocas, Adam 1e-3, ×0.1 en las
+    épocas 50 y 75, batch 128, sin augmentation, mejor checkpoint de validación). Si las redes siguen siendo
+    competitivas aquí, la conclusión no depende del protocolo de reentrenamiento. Única diferencia conocida: fp16
+    (la precisión del caso); MedMNIST v2 no la indica.
+- Comparar con las filas **28×28** de ResNet, que es la resolución usada. Las de 224×224 son solo contexto.
+- Reportar **ACC y AUC** (evaluador oficial de `medmnist`, ya integrado: `acc_medmnist`, `auc_score`).
+- Nuestros valores: media ± sd sobre las 3 corridas de búsqueda por algoritmo (1 semilla por red; ver Tier C).
+  MedMNIST v2: una sola corrida por método. Indicarlo en la nota de la tabla.
+- AutoKeras y Google AutoML Vision no reportan parámetros: "n/d".
+- Filas propias de Q-NAS [29], [30]: referencia con su protocolo (F13), sin reentrenar.
 
 **Comparadores multiobjetivo en MedMNIST (todos por verificar).** La literatura multiobjetivo en MedMNIST es escasa;
 estos son los candidatos encontrados:
