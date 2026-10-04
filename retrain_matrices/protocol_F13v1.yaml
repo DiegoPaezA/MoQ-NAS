@@ -23,6 +23,7 @@ common:
   grad_clip_norm: null             # NEEDS_OVERRIDE  (no gradient clipping in F13-v1; current trainer always clips at 1.0)
   eval_window_agg: max             # NEEDS_OVERRIDE  (reported val accuracy = best epoch)
   data_augmentation: true          # TrivialAugmentWide(31) + ToTensor + Normalize (no crop/flip)
+  augmentation_policy: ta          # F13 as executed (TrivialAugment only)
   train_split: 0.9                 # NEEDS_OVERRIDE  (explicit; CIFAR-10 -> 45k/5k, test = official 10k)
   split_seed: 2025                 # deliberate deviation: F13-v1 split was unseeded; same ratio/stratification
   limit_data: false
@@ -83,6 +84,10 @@ datasets:
 # FACET evaluation (FairnessMetric) runs at the training resolution (96) with the case precision;
 # --keep_metrics is required so the metric is built in the retrain (fixes 4.9 / master.py injection).
 profiles:
+  cifar_aug_c:          # Candidate (option c, under evaluation with pilot 2, tag F13v1c): literature CIFAR-10
+                        # augmentation on top of F13-v1: RandomCrop(32, pad 4) + HorizontalFlip + TrivialAugmentWide
+                        # + Cutout(16). Everything else stays F13-v1. Decide after comparing with pilot 1 (tag F13v1).
+    augmentation_policy: standard_cutout
   fairness_R1:          # search budget, as the MoQ-NAS fairness search (Dec 2025 - Feb 2026 code)
     max_epochs: 50
     epochs_to_eval: 50

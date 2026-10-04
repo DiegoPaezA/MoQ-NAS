@@ -46,6 +46,7 @@ VALUE_KEYS = {
     'eval_window_agg': 'eval_window_agg', 'train_split': 'train_split', 'split_seed': 'split_seed',
     'limit_data_value': 'limit_data_value', 'num_workers': 'num_workers',
     'batch_size': 'batch_size', 'eval_batch_size': 'eval_batch_size',
+    'augmentation_policy': 'augmentation_policy',
 }
 FLAG_KEYS = ('data_augmentation', 'limit_data', 'keep_metrics')
 # Keys every job must define after resolution (fail fast instead of falling back to CLI defaults).
