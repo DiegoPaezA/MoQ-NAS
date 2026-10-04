@@ -113,7 +113,9 @@ def load_jobs(args, protocol):
     if args.runs:
         rows = [r for r in rows if r['local_dir'] in args.runs]
     if 'all' not in args.roles:
-        rows = [r for r in rows if any(role in r['role'].split('+') for role in args.roles)]
+        # 'strat5' selects the boolean strat5 column (5 per run incl. proxy representatives)
+        rows = [r for r in rows if any(role in r['role'].split('+') for role in args.roles)
+                or ('strat5' in args.roles and str(r.get('strat5', '')).lower() == 'true')]
     if args.ids:
         rows = [r for r in rows if r['id'] in args.ids]
 

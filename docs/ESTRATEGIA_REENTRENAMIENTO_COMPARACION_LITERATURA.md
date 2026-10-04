@@ -217,22 +217,29 @@ evolutivos más citados.
 `medmnist/NSGA/experiment_{ds}_{nsga2,nsga3}/{algo}/exp1_repeat_{1,2,3}` para
 `ds ∈ {pathmnist, octmnist, tissuemnist, organamnist}`. Representantes: 23–26 por dataset (≈101 en total).
 
-**Plan decidido (2026-10-04): comparación con el benchmark MedMNIST v2, incluyendo NSGA-II/III y con P-Med-A
-como control.**
-- **Qué se reentrena:** los representantes por proxy (`best_acc`, `knee`, `compact`) de cada una de las 36 corridas
-  (3 algoritmos × 3 corridas × 4 datasets) = **101 redes** (MoQ-NAS 32, NSGA-II 34, NSGA-III 35). En MedMNIST no hay
-  screening: los representantes salen de la regla del CSV, la misma para los tres algoritmos.
-- **Dos protocolos por red, 1 semilla cada uno:**
-  1. **F13-v1** (el del estudio: 300 épocas, AdamW, TrivialAugment), tag `F13v1`: ≈ **4.1 días** en una GPU.
-  2. **P-Med-A** (control, perfil `medmnist_v2`: protocolo exacto de las ResNet de MedMNIST v2: 100 épocas, Adam
-     1e-3, ×0.1 en 50 y 75, batch 128, sin augmentation), tag `PMedA`: ≈ **1.4 días**.
-  Total ≈ **5.5 días**. Con 3 semillas por red serían ≈ 16.5 días: no viable en una GPU.
-- **Variabilidad:** se reporta media ± sd sobre las **3 corridas de búsqueda independientes** de cada algoritmo, que
-  ya incluye la variabilidad de la búsqueda y del entrenamiento. No hace falta repetir semillas por red porque los
-  representantes no se eligen con resultados del reentrenamiento: no hay sesgo de selección. MedMNIST v2 reporta
-  una sola corrida por método.
+**Plan decidido (2026-10-04): comparación con el benchmark MedMNIST v2, incluyendo NSGA-II/III, en dos etapas,
+con P-Med-A como control.** Mismo método que el Caso 1, para que la selección de representantes no dependa del proxy.
+1. **Screening `strat5`, 1 semilla (semilla 1), F13-v1, tag `F13v1`:** 5 redes por corrida, repartidas a lo largo del
+   eje de parámetros e incluyendo siempre los representantes por proxy (columna booleana `strat5` del CSV) →
+   36 corridas × 5 = **180 redes** (45 por dataset): ≈ **6.4 días** en una GPU.
+   `python launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --seeds 1 --tag F13v1 --gpus 1 ...`
+2. **Selección de representantes con la validación del reentrenamiento** (nunca con test), por corrida, con reglas
+   fijadas antes de ver el test: mejor accuracy de validación, knee (distancia al ideal en el plano normalizado
+   (error_val, log params)) y compacto (menos parámetros con accuracy ≥ máx − 5 pp) → ≈ 100 redes.
+3. **Confirmación con 1 semilla nueva (semilla 11), F13-v1:** ≈ **4.1 días**. La corrida del screening no se reutiliza
+   (con ella se eligió). La variabilidad se reporta como media ± sd sobre las **3 corridas de búsqueda
+   independientes** de cada algoritmo, que incluye la variabilidad de búsqueda y de entrenamiento. MedMNIST v2
+   reporta una corrida por método. Con 3 semillas serían ≈ 8 días más.
+4. **Control P-Med-A** (perfil `medmnist_v2`: protocolo exacto de las ResNet de MedMNIST v2: 100 épocas, Adam 1e-3,
+   ×0.1 en 50 y 75, batch 128, sin augmentation) sobre los mismos representantes, 1 semilla (11), tag `PMedA`:
+   ≈ **1.4 días**.
+
+Total MedMNIST ≈ **11.9 días** en una GPU (screening 6.4 + confirmación 4.1 + control 1.4).
+Limitación a declarar: en **OCTMNIST la validación y el test difieren mucho** (en los F13 previos de Q-NAS, val ≈ 95 %
+frente a test ≈ 77 %). Elegir con la validación del reentrenamiento es mejor que con el proxy, pero en OCT esa elección
+se traslada peor al test.
 - Orden sugerido: OrganA y Path primero (más pequeños y rápidos), TissueMNIST al final (165 k imágenes de train).
-- Ampliación opcional, solo si sobra tiempo: `strat10` (360 redes) × 1 semilla con F13-v1 (≈ 13 días).
+- Ampliación opcional, solo si sobra tiempo: screening `strat10` (360 redes) en lugar de `strat5` (≈ +6.5 días).
 
 ### Tier D — Caso 3, fairness: frente completo × 3 semillas en dos regímenes (decisión 2026-10-03)
 
@@ -315,6 +322,35 @@ batches, con el split fijo (como ya hace `train.py`, líneas 95–96). Requiere 
 - Representantes (balanced / fairness-prioritized / best-acc): elegirlos **después**, con la regla del paper
   (`W_BAL`, `W_FAIR` de `scripts/case3_revision_analysis.py`) aplicada a las medias de R2, o mantener los actuales
   y decirlo explícitamente.
+
+#### R2 reducido (opción recomendada en una GPU)
+
+R2 completo (todo el frente × 3 semillas con datos completos) cuesta 30–89 días en una GPU: no es viable. **R2
+reducido** responde la pregunta a nivel de arquitectura con un costo acotado:
+- **Qué se entrena:** los **9 representantes del Caso 3 del paper** (Tabla VI; `reports/case3_revision/05_case3_representatives.csv`):
+  best_accuracy, lowest_dgroup, best_mean_tpr, balanced y fairness_prioritized de cada formulación. En la de
+  2 objetivos, 20_16 es a la vez balanced y fairness_prioritized. Más los **5 baselines desde cero** (resnet18,
+  resnet50, efficientnet_v2_s, convnext_tiny, mobilenet_v3_large).
+- **Datos:** `personbin_data_96` completo (≈ 84k train / 9.4k val; test = val de COCO, 3 908) y FACET completo para
+  fairness, a 96 px y fp16.
+- **Protocolo (perfil `fairness_R2`):** optimización de F13-v1 (AdamW lr 1e-3, wd 0.01, multistep al 50/75 %), fp16, sin
+  clipping, batch 64, augmentation del branch person (RandomResizedCrop + flip + TrivialAugment), checkpoint por
+  validación de COCO. **Mismo protocolo para los baselines** (`run_fairness_baseline.sh` con `RUN_TAG=fairR2r
+  LIMIT_DATA_VALUE= SCRATCH_EPOCHS=<E> LR_SCHEDULER=multistep WEIGHT_DECAY=0.01`; fp16 y batch 64 por defecto).
+- **Semillas 1, 2, 3** en ambos grupos → 14 arquitecturas × 3 = **42 entrenamientos**.
+- **Épocas:** fijarlas con un mini-piloto (el representante más pesado, 47_4 con 7.1 GFLOPs, y resnet50, ~150 épocas,
+  mirando dónde se estabiliza la validación; ≈ 0.5 días). Costo de R2 reducido en una GPU (limitado por la GPU):
+  **100 épocas ≈ 2.5 días**, 200 ≈ 5.1, 300 ≈ 7.6.
+- Comando de los representantes:
+  `python launch_retrain_protocol.py --cases C3_fairness_two C3_fairness_three --roles best_accuracy lowest_dgroup best_mean_tpr balanced fairness_prioritized --profile fairness_R2 --max-epochs <E> --seeds 1 2 3 --tag fairR2r --gpus 1`
+- **Qué responde:** si, con datos completos, los representantes mantienen su posición frente a los baselines en
+  accuracy, D_group y MeanTPR (afirmaciones por arquitectura, con media ± sd de 3 semillas).
+- **Qué no responde:** el análisis a nivel de frente con datos completos (HV en el espacio común y estabilidad del
+  orden R1 → R2). Eso queda solo en R1, que sí reentrena todo el frente.
+- **Limitación a declarar:** estos representantes se eligieron en el paper con las métricas de FACET de la búsqueda,
+  y FACET es también el conjunto de evaluación. R2 entrena modelos nuevos e independientes, lo que reduce el
+  optimismo, pero no lo elimina. Una alternativa más estricta sería partir FACET en una mitad de selección y otra de
+  evaluación, estratificadas por tono de piel; cambiaría los representantes del paper, así que no se recomienda ahora.
 
 #### Coste y orden
 
@@ -962,7 +998,8 @@ Encuadre (para no sobre-afirmar):
     (la precisión del caso); MedMNIST v2 no la indica.
 - Comparar con las filas **28×28** de ResNet, que es la resolución usada. Las de 224×224 son solo contexto.
 - Reportar **ACC y AUC** (evaluador oficial de `medmnist`, ya integrado: `acc_medmnist`, `auc_score`).
-- Nuestros valores: media ± sd sobre las 3 corridas de búsqueda por algoritmo (1 semilla por red; ver Tier C).
+- Nuestros valores: media ± sd sobre las 3 corridas de búsqueda por algoritmo (representantes elegidos tras el
+  screening `strat5`, confirmación con 1 semilla nueva; ver Tier C).
   MedMNIST v2: una sola corrida por método. Indicarlo en la nota de la tabla.
 - AutoKeras y Google AutoML Vision no reportan parámetros: "n/d".
 - Filas propias de Q-NAS [29], [30]: referencia con su protocolo (F13), sin reentrenar.
