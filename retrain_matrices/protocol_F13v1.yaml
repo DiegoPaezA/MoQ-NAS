@@ -84,6 +84,18 @@ datasets:
 # FACET evaluation (FairnessMetric) runs at the training resolution (96) with the case precision;
 # --keep_metrics is required so the metric is built in the retrain (fixes 4.9 / master.py injection).
 profiles:
+  medmnist_v2:          # P-Med-A control for MedMNIST: ResNet protocol of the MedMNIST v2 benchmark
+                        # (Yang et al., Sci. Data 2023): 100 epochs, Adam lr 1e-3, x0.1 at epochs 50 and 75,
+                        # batch 128 (dataset entry), no augmentation, best-val checkpoint. Precision stays the
+                        # case precision (fp16); MedMNIST v2 does not state it. Tag e.g. PMedA.
+    max_epochs: 100
+    epochs_to_eval: 100
+    patience_retrain: 100
+    optimizer: Adam
+    learning_rate: 0.001
+    weight_decay: 0.0
+    lr_scheduler: multistep
+    data_augmentation: false
   cifar_aug_c:          # Candidate (option c, under evaluation with pilot 2, tag F13v1c): literature CIFAR-10
                         # augmentation on top of F13-v1: RandomCrop(32, pad 4) + HorizontalFlip + TrivialAugmentWide
                         # + Cutout(16). Everything else stays F13-v1. Decide after comparing with pilot 1 (tag F13v1).
