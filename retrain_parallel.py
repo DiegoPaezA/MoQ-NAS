@@ -6,10 +6,12 @@ import yaml
 import multiprocessing as mp
 import torch
 import traceback
-from concurrent.futures import ProcessPoolExecutor
+import json
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.cnn import input, master
-from utils.helpers import load_log_params_evolution, init_log, save_results_file
+from utils.helpers import load_log_params_evolution, init_log
 
 
 def parse_pareto_ids(exp_path: str, top_n: int | None = None, sort_by: str | None = None):
@@ -271,19 +273,33 @@ def worker(task_args):
 
 def _merge_results(path, new_results):
     """Merge per candidate and per seed, so later seeds never overwrite earlier ones."""
-    import json
     merged = {}
     if os.path.isfile(path):
         try:
             with open(path) as f:
                 merged = json.load(f)
         except Exception:
-            backup = path + '.corrupt'
+            backup = f"{path}.corrupt_{time.strftime('%Y%m%d_%H%M%S')}"
             os.replace(path, backup)
             merged = {}
     for cid, reps in new_results.items():
         merged.setdefault(cid, {}).update(reps)
     return merged
+
+
+def _save_results_atomic(path, results):
+    """Write via a temporary file + os.replace, so a crash or power cut never leaves a truncated JSON."""
+    tmp = f"{path}.tmp"
+    with open(tmp, 'w') as f:
+        json.dump(results, f, indent=4)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    dir_fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _append_failures(path, rows):
@@ -332,31 +348,32 @@ def main(arguments):
             device = devices[i % len(devices)]
             tasks.append((cid, train_spec, fn_dict, arguments, device, log_file))
 
-        final_results, all_failures = {}, []
+        results_name = ('retrain_results_parallel.txt' if arguments.tag == 'parallel'
+                        else f'retrain_results_{arguments.tag}.txt')
+        results_path = os.path.join(arguments.experiment_path, results_name)
+        failures_path = os.path.join(arguments.experiment_path, f'retrain_failures_{arguments.tag}.csv')
+        all_failures = []
 
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            future_results = executor.map(worker, tasks)
+            futures = [executor.submit(worker, task) for task in tasks]
             logger.info(f"Starting retraining for {len(tasks)} models on {len(devices)} devices...")
-            for cid, res, failures in future_results:
+            # Persist each candidate as soon as it finishes: after a crash or power cut only the
+            # trainings in flight are lost, and the launcher skips the candidates already saved.
+            for future in as_completed(futures):
+                cid, res, failures = future.result()
                 all_failures.extend(failures)
+                _append_failures(failures_path, failures)
                 if isinstance(res, dict) and "error" in res and len(res) == 1:
                     logger.error(f"--- Worker Error for Candidate {cid} ---\n{res['error']}\n"
                                  f"-------------------------------------------")
                     continue
-                final_results[cid] = res
+                _save_results_atomic(results_path, _merge_results(results_path, {cid: res}))
                 bad = [f"{k}:{v.get('status')}" for k, v in res.items() if v.get('status') != 'OK']
                 if bad:
                     logger.error(f"Candidate {cid} finished with failures: {bad}")
                 else:
-                    logger.info(f"Successfully finished retraining for candidate {cid}.")
+                    logger.info(f"Successfully finished retraining for candidate {cid}; saved to {results_name}.")
 
-        results_name = ('retrain_results_parallel.txt' if arguments.tag == 'parallel'
-                        else f'retrain_results_{arguments.tag}.txt')
-        results_path = os.path.join(arguments.experiment_path, results_name)
-        final_results = _merge_results(results_path, final_results)
-        save_results_file(arguments.experiment_path, final_results, file_name=results_name)
-        _append_failures(os.path.join(arguments.experiment_path, f'retrain_failures_{arguments.tag}.csv'),
-                         all_failures)
         if all_failures:
             logger.error(f"{len(all_failures)} failed repetition(s); see retrain_failures_{arguments.tag}.csv")
             return 2

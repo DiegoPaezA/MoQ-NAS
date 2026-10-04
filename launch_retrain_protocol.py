@@ -91,8 +91,12 @@ def done_seeds(run_path: str, tag: str) -> dict[str, set]:
     path = os.path.join(run_path, f'retrain_results_{tag}.txt')
     if not os.path.isfile(path):
         return {}
-    with open(path) as f:
-        results = json.load(f)
+    try:
+        with open(path) as f:
+            results = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON ({exc}). Inspect it (and any .tmp / .corrupt_* file next "
+                         f"to it) before relaunching; nothing was launched.") from None
     return {cid: {rep.get('seed') for rep in reps.values() if rep.get('status') == 'OK'}
             for cid, reps in results.items()}
 
