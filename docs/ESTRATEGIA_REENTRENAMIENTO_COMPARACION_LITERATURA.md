@@ -604,9 +604,8 @@ python retrain_parallel.py --experiment_path <exp_root>/exp22_repeat_1 \
 - Guardar por entrenamiento: commit de git, versiones de PyTorch/CUDA, GPU, semillas, split y configuración de
   augmentation/optimizador/scheduler. Las curvas ya guardan loss/acc de train y val por época; añadir la LR y el
   tiempo por época. Guardar también `last.pt` además de `best_model.pth`.
-- **Latencia (solo tabla hardware-aware):** volver a medir Time_CUDA de los representantes con un procedimiento
-  fijo (`eval()`, `inference_mode`, precisión y batch fijos, warm-up, `torch.cuda.synchronize()`, mediana de
-  varias repeticiones, misma L40S).
+- **Latencia (solo tabla hardware-aware):** volver a medir Time_CUDA de los representantes con la GPU dedicada y un
+  procedimiento fijo; ver §8.1 (la latencia de la búsqueda no es reproducible).
 
 ### 4.12 El texto del paper no describe bien el objetivo de accuracy de los experimentos acc-FLOPs
 - El paper (y la tesis) dicen que el objetivo es la **mejor** val accuracy de las últimas 5 épocas. Es cierto en
@@ -923,6 +922,52 @@ MeanTPR, el frente reentrenado con datos completos permitiría añadirlo como pu
 - Los GPU-días de la búsqueda dependen del entorno de ejecución (ver la nota del 92.2 % de la ablación); no
   comparar GPU-días entre papers como si fueran del mismo hardware.
 - Valores marcados como TODO en §6: verificar en el PDF antes de citarlos.
+- **La latencia (Time_CUDA) medida durante la búsqueda no es reproducible** (ver §8.1). Afecta al objetivo del
+  Caso 1 (tri-objetivo) y del Caso 2 (MedMNIST).
+
+### 8.1 Limitación: medición de la latencia (Time_CUDA) en GPU compartida
+
+**Cómo se midió en la búsqueda.** `HardwareMetrics` mide la latencia al terminar el entrenamiento de cada
+candidato: lote de 10 imágenes, 5 iteraciones de calentamiento, media de 10 repeticiones con
+`torch.cuda.synchronize()` (`core/cnn/metrics/hardware.py`, `core/cnn/metrics/base_hardware.py`). Las corridas del
+Caso 1 tenían `threads: 20` en 2 GPUs, es decir ~10 candidatos entrenándose a la vez en cada GPU
+(`core/evaluation.py::_num_workers`). Cada latencia se midió mientras otros candidatos entrenaban en la misma GPU, y
+posiblemente con procesos de otros usuarios en el clúster.
+
+**Evidencia de que no es reproducible** (`reports/ablation_search_space/`): las mismas 307 arquitecturas, medidas en
+dos ejecuciones de la misma búsqueda:
+
+| Objetivo | Valores idénticos | Cambio entre ejecuciones (mediana [Q1–Q3], máx.) | Spearman |
+|---|---|---|---|
+| Accuracy, FLOPs, parámetros | 100 % | ×1 | 1.00 |
+| **Latencia CUDA** | **0 %** | **×4.3 [×2.7–×10.4], máx. ×139** | **0.30** |
+
+El frente no dominado en (accuracy, latencia) cambia casi por completo entre ejecuciones (Jaccard 0.10–0.33 por
+corrida; archivo 58), mientras que en (accuracy, FLOPs) es idéntico (Jaccard 1.0).
+
+**Qué implica.**
+- El objetivo Time_CUDA de los Casos 1 y 2 tiene **mucho ruido de medición**, que depende de la carga de la GPU en el
+  momento de medir y no solo de la arquitectura. Como afectó por igual a MoQ-NAS, NSGA-II y NSGA-III (mismo
+  protocolo y misma concurrencia), la comparación entre algoritmos no queda sesgada en una dirección conocida. Pero
+  el HV y los frentes que incluyen la latencia heredan ese ruido, y los valores individuales de latencia no deben
+  interpretarse como la latencia real de cada red.
+- Declararlo en el paper como limitación: la latencia se midió bajo ejecución concurrente en GPU compartida y es
+  poco reproducible. FLOPs y parámetros son medidas deterministas y sirven como proxies de complejidad robustos.
+  Mencionarlo también como motivo para usar FLOPs en la ablación de espacio.
+- **La latencia no entra en la tabla de comparación con la literatura** (además, depende del hardware de cada
+  paper). Se usan parámetros y MACs.
+- **Los resultados de accuracy/AUC/fairness no se ven afectados** por compartir la GPU: el cálculo es el mismo, solo
+  cambia el tiempo. Por eso los reentrenamientos sí pueden ejecutarse en paralelo.
+
+**Si se reporta latencia de los representantes reentrenados** (solo en una tabla hardware-aware aparte), volver a
+medirla con la GPU **dedicada**:
+1. comprobar con `nvidia-smi` que no hay ningún otro proceso en esa GPU antes y durante la medición (el clúster es
+   compartido: buscar o coordinar una ventana libre);
+2. `model.eval()` + `torch.inference_mode()`, precisión del caso y lote fijos (reportar el tamaño de lote);
+3. calentamiento suficiente (≥ 50 iteraciones), `torch.cuda.synchronize()` antes y después de cada medida;
+4. muchas repeticiones (≥ 200) y reportar **mediana** y p95, no la media;
+5. misma GPU (L40S), mismo entorno (versión de torch/CUDA) y misma resolución para todos los algoritmos;
+6. repetir la medición en al menos dos momentos distintos para comprobar la estabilidad.
 
 ---
 
