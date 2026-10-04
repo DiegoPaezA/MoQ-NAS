@@ -739,6 +739,53 @@ MedMNIST están limitados por CPU, y el ritmo de CPU medido es conservador en Me
 baratas de aumentar) y quizá optimista en fairness (96×96 con RandomResizedCrop); el reparto de la GPU con el otro
 usuario puede cambiar.
 
+## 4e. Augmentation de CIFAR-10: piloto 2 y brecha de protocolo con la literatura (2026-10-04)
+
+**Decisión pendiente, se resolverá con el piloto 2.** Dos candidatas para el protocolo CIFAR-10 (Caso 1 y acc-FLOPs):
+- **F13-v1** (`augmentation_policy: ta`): solo TrivialAugmentWide, tal como se ejecutó F13. Piloto 1, tag `F13v1`.
+- **Opción (c)** (perfil `cifar_aug_c`, `augmentation_policy: standard_cutout`): RandomCrop(32, pad 4) +
+  HorizontalFlip + TrivialAugmentWide + Cutout(16). Lo demás, igual que F13-v1. Piloto 2, tag `F13v1c`.
+
+Piloto 2: mismas 6 redes, misma GPU (1), misma concurrencia (3 trabajos × 2) y misma semilla que el piloto 1 →
+comparación pareada del efecto de la augmentation sobre test accuracy, y también de su costo (CPU y tiempo).
+Criterio de decisión, fijado antes de ver resultados: adoptar (c) si mejora el test en la mayoría de las 6 redes y
+en media, sin aumentar el tiempo de forma relevante (> 20 %). Si la mejora es marginal (< 0.3 pp de media),
+quedarse con F13-v1, que tiene respaldo previo en la tesis. La decisión se aplica igual a los tres algoritmos.
+
+**Brecha de protocolo con la literatura (para la tabla y el texto del paper).** Incluso con (c), el reentrenamiento
+de este trabajo es más corto y más simple que el de los métodos de referencia:
+
+| Método | Épocas | Augmentation | Optimizador / LR | Extras de regularización | Datos de entrenamiento | Fuente |
+|---|---|---|---|---|---|---|
+| **Este trabajo, F13-v1** | **300** | TrivialAugment | AdamW 1e-3, wd 0.01, multistep | ninguno | 45k (5k para validación) | código / logs ✔ |
+| **Este trabajo, opción (c)** | **300** | crop + flip + TrivialAugment + cutout 16 | ídem | ninguno | 45k | código ✔ |
+| NSGA-Net (micro) | 600 | cutout | (verificar) | drop-path programado, cabeza auxiliar | (verificar) | paper ✔ / TODO macro |
+| NSGANetV1 | 600 (batch 96) | cutout | SGD, cosine, wd 5e-4 | drop-path programado, cabeza auxiliar (0.4) | (verificar) | paper, Tabla I y §IV-B ✔ |
+| LEMONADE | 600 (batch 64) | cutout + mixup | SGD, lr 0.025, cosine, wd 5e-4 | — | (verificar) | resumen del paper, verificar |
+| CNN-GA | 350 | crop + flip (96.78 % con cutout) | SGD 0.1, momentum 0.9, decaimiento en 1/149/249 | — | (verificar) | paper ✔ |
+| CARS, EEEA-Net, LightMix | (verificar; habitual "estilo DARTS": 600, cutout, drop-path, aux) | | | | | TODO |
+
+Cómo usarlo en el paper:
+- Añadir a la tabla de literatura una columna o nota de **protocolo final** (épocas, cutout, cabeza auxiliar,
+  drop-path) para que se vea que parte de la diferencia de error viene del presupuesto y la regularización del
+  reentrenamiento, no de la búsqueda.
+- Frase prudente propuesta (ajustar a los números reales): *"All retrained architectures use a single, shorter
+  protocol (300 epochs, no auxiliary head or drop-path), whereas most published multi-objective NAS results are
+  obtained with 600-epoch schedules and additional regularisation; the reported gaps should therefore be read as
+  upper bounds on the difference attributable to the search."*
+- Si se quiere cuantificar esa brecha, una prueba barata y opcional: reentrenar con 600 épocas solo los 2–3
+  representantes de mejor accuracy (≈ 10 h en una GPU) y reportar la diferencia frente a 300 épocas.
+
+**¿La opción (c) sirve para fairness? No se recomienda.**
+- La rama `person` ya usa una augmentation fuerte, al estilo ImageNet: RandomResizedCrop(96, escala 0.08–1) +
+  HorizontalFlip + TrivialAugmentWide. Crop y flip ya están incluidos (y con un recorte más agresivo que el padding de
+  4 px).
+- R1 debe reproducir el protocolo de la búsqueda de fairness; cambiar su augmentation rompe esa comparación. R2 debe
+  usar la misma augmentation que R1 para que la diferencia entre ambos se deba solo a los datos.
+- El cutout de 16 px es pequeño en imágenes de 96×96 (~3 % del área) y puede ocultar zonas de piel de forma aleatoria.
+  Su efecto sobre las métricas por tono de piel no está estudiado: sería un factor nuevo en el análisis de fairness.
+- El código lo impide: `augmentation_policy` distinto de `ta` da error para person/face/MedMNIST.
+
 ## 5. Checklist en el clúster (antes de lanzar)
 
 0. **Inventario:** correr `scripts/check_retrain_inventory.py` (§2.0) y subir con `rsync --files-from` lo que falte.
