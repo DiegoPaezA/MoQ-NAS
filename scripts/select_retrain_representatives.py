@@ -10,7 +10,8 @@ After the 1-seed screening, per search run:
        budgets: lowest validation error with params <= {0.25, 0.5, 1.0, 1.5} M (C1_triobj)
                 or MACs <= {50, 100, 250, 500} M (AF_std_biobj)
      All rules are applied to the re-Pareto front of the case objectives:
-       C1_triobj:    (val error, params, Time_CUDA)      AF_std_biobj: (val error, MACs)
+       C1_triobj:    (val error, params)                 AF_std_biobj: (val error, MACs)
+     Case 1 leaves out the search Time_CUDA, which is not reproducible (doc §8.1; decision 2026-10-05).
 
 The output is a candidates CSV (same columns as literature_retrain_candidates.csv plus the rules and the
 validation accuracy) that launch_retrain_protocol.py takes with --candidates, for the confirmation with
@@ -22,7 +23,7 @@ Usage:
       --runs-root ../retrain_2026/cluster/dualgpu1/retrain_2026/runs \\
       --out retrain_matrices/confirm_C1_triobj_F13v1c.csv
   (--partial selects only in the runs whose screening is complete, for checks before the end;
-   --objectives overrides the front objectives, e.g. 'val_err params' for Case 1 without Time_CUDA.)
+   --objectives overrides the front objectives, e.g. 'val_err params cuda_time' for the search objectives.)
 """
 
 import argparse
@@ -35,7 +36,7 @@ from collections import OrderedDict
 
 CASES = {
     # objectives of the re-Pareto front (all minimised), screened roles, budget axis and budgets
-    'C1_triobj': dict(objectives=('val_err', 'params', 'cuda_time'),
+    'C1_triobj': dict(objectives=('val_err', 'params'),  # no Time_CUDA: not reproducible (doc §8.1)
                       roles=('best_acc', 'knee', 'compact', 'strat10'),
                       budget_key='params', budgets=(0.25e6, 0.5e6, 1.0e6, 1.5e6), budget_unit='M params'),
     'AF_std_biobj': dict(objectives=('val_err', 'macs'),
@@ -140,8 +141,8 @@ def main():
     ap.add_argument('--out', required=True, help='Confirmation candidates CSV (a .md report is written next to it).')
     ap.add_argument('--partial', action='store_true', help='Select only in the runs whose screening is complete.')
     ap.add_argument('--objectives', nargs='+', choices=['val_err', 'params', 'macs', 'cuda_time'], default=None,
-                    help="Override the front objectives (e.g. 'val_err params' to leave the search Time_CUDA out "
-                         "of the Case 1 front). Default: the case objectives.")
+                    help="Override the front objectives (e.g. 'val_err params cuda_time' to include the search "
+                         "Time_CUDA in the Case 1 front). Default: the case objectives.")
     args = ap.parse_args()
     spec = dict(CASES[args.case])
     if args.objectives:
