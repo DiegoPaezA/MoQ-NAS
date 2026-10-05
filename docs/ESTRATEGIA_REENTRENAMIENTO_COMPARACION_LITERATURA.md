@@ -893,6 +893,13 @@ dentro de un caso, sí.
 - No editar archivos versionados directamente en los servidores (dualgpu2 tenía `run_retrain.sh` modificado; se
   descartó el 2026-10-04 con backup en `~/MoQ-NAS_dualgpu2_local_changes_2026-10-04.tgz`).
 
+**Vigilancia de memoria (desde 2026-10-05):** cada screening tiene un `scripts/retrain_oom_watchdog.sh` corriendo
+en su servidor. Cada minuto cuenta los fallos por falta de memoria (`FAILED_OOM`, "out of memory" o un worker
+terminado de golpe) en los `retrain_failures_<tag>.csv` del caso. Ante el primero detiene el launcher (todo el
+árbol de procesos) y lo relanza con **4 entrenamientos en paralelo** (`--jobs-per-gpu 2 --workers-per-job 2`); las
+redes ya OK se saltan y las que fallaron se reentrenan. Solo reduce una vez y sale cuando el launcher termina. Log:
+`retrain_2026/watchdog/<nombre>.log`.
+
 **Resultados:** el análisis se hace en el Mac. `scripts/sync_retrain_results.sh` (repo de análisis) baja
 `retrain_2026/` y `logs/retrain.log` de cada servidor a `retrain_2026/cluster/<host>/` (un espejo por servidor,
 sin borrar nada y sin pesos salvo con `--with-weights`). El Caso 1 se lee del espejo de dualgpu1 y acc-FLOPs del de
