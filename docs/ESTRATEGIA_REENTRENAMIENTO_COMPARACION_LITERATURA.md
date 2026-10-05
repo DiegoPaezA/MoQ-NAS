@@ -173,8 +173,9 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    `front` + `strat10` + representantes (el frente filtrado completo: 504 redes en el Tier A y 147 en el Tier B).
    Si el presupuesto no alcanza, usar solo `strat10` (90 + 90). En cualquier caso, **el mismo criterio para los tres
    algoritmos**.
-2. **Re-Pareto con la validación del retrain** (nunca con test): frentes en (error_val, params), (error_val, MACs)
-   y, para el Caso 1, (error_val, params, Time_CUDA). Cuantificar cuántas soluciones cambian de dominancia.
+2. **Re-Pareto con la validación del retrain** (nunca con test): frentes en (error_val, params) para el Caso 1 y
+   (error_val, MACs) para acc-FLOPs. El Caso 1 deja fuera la Time_CUDA de la búsqueda, que no es reproducible
+   (§8.1; decisión del 2026-10-05). Cuantificar cuántas soluciones cambian de dominancia.
 3. **Representantes por reglas fijadas antes de ver el test**, aplicadas al frente reentrenado:
    - `A`: menor error de validación;
    - `P`: menos parámetros; `F`: menos MACs;
@@ -209,10 +210,11 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    proxy–validación y la red elegida por cada regla. Una red elegida por varias reglas se confirma una sola vez
    (`role` = reglas unidas con `+`).
 
-   **Decisión pendiente (2026-10-05):** en el Caso 1 el frente incluye la Time_CUDA de la búsqueda, que no es
-   reproducible (§8.1). En la revisión con las 3 corridas de MoQ-NAS completas, solo cambia el knee (K) en 2 de 3
-   corridas si el frente es (error_val, params) (`--objectives val_err params`); las demás reglas eligen las mismas
-   redes. Decidirlo antes de ver el test.
+   **Decisión (2026-10-05, antes de ver el test):** el frente del Caso 1 es (error_val, params), sin la Time_CUDA de
+   la búsqueda, porque esa latencia no es reproducible (§8.1). En la revisión con las 3 corridas de MoQ-NAS, frente
+   a incluirla solo cambia el knee (K), en 2 de 3 corridas: con Time_CUDA, el K de `exp22_repeat_1` (53_10) quedaba en
+   el frente únicamente por su latencia, aunque 11_2 lo supera en error y en params. Es el valor por defecto del
+   script; `--objectives val_err params cuda_time` reproduce la variante con latencia.
 
 Opcional (extensión de robustez, solo si el re-Pareto muestra mucha inversión de orden): añadir el rango 2 de no
 dominancia de la última generación (`pareto_history.pkl[gen][2]`) al screening.
