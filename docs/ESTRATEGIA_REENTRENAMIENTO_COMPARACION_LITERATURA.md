@@ -191,11 +191,28 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    0.05–0.36 pp en los F13 de Q-NAS) frente a las diferencias entre arquitecturas del frente (varios pp).
 
    ```bash
-   # etapa 1 (screening) y etapa 2 (confirmación, tras elegir representantes con la validación)
-   python launch_retrain_protocol.py --cases C1_triobj --roles all --seeds 1 --tag F13v1 --gpus 0 1
-   python launch_retrain_protocol.py --cases C1_triobj --runs <run> --ids <ids elegidos> \
-       --roles all --seeds 11 12 13 --tag F13v1 --gpus 0 1
+   # etapa 1 (screening, 1 semilla; en curso desde 2026-10-04, ver §4f)
+   python launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2
+   # pasos 2-3 (en el Mac, cuando el screening de las 9 corridas esté completo): re-Pareto con la validación
+   # y representantes; se niega a escribir si falta alguna red (--partial solo para revisar antes)
+   scripts/sync_retrain_results.sh                     # repo de análisis
+   python scripts/select_retrain_representatives.py --case C1_triobj \
+       --runs-root ../retrain_2026/cluster/dualgpu1/retrain_2026/runs --out retrain_matrices/confirm_C1_triobj_F13v1c.csv
+   python scripts/select_retrain_representatives.py --case AF_std_biobj \
+       --runs-root ../retrain_2026/cluster/dualgpu2/retrain_2026/runs --out retrain_matrices/confirm_AF_std_biobj_F13v1c.csv
+   # paso 4 (en el servidor de cada caso, tras commitear los CSV): confirmación con 3 semillas nuevas, mismo tag
+   python launch_retrain_protocol.py --candidates retrain_matrices/confirm_C1_triobj_F13v1c.csv \
+       --cases C1_triobj --roles all --seeds 11 12 13 --tag F13v1c --gpus 1
    ```
+   El script solo lee la accuracy de **validación** (`best_accuracy`) de la semilla 1, nunca la de test, y deja un
+   informe `<out>_report.md` con el frente por corrida, cuántas redes quedan dominadas tras el retrain, el Spearman
+   proxy–validación y la red elegida por cada regla. Una red elegida por varias reglas se confirma una sola vez
+   (`role` = reglas unidas con `+`).
+
+   **Decisión pendiente (2026-10-05):** en el Caso 1 el frente incluye la Time_CUDA de la búsqueda, que no es
+   reproducible (§8.1). En la revisión con las 3 corridas de MoQ-NAS completas, solo cambia el knee (K) en 2 de 3
+   corridas si el frente es (error_val, params) (`--objectives val_err params`); las demás reglas eligen las mismas
+   redes. Decidirlo antes de ver el test.
 
 Opcional (extensión de robustez, solo si el re-Pareto muestra mucha inversión de orden): añadir el rango 2 de no
 dominancia de la última generación (`pareto_history.pkl[gen][2]`) al screening.
