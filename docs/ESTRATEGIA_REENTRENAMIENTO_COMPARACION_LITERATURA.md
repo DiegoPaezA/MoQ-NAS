@@ -174,13 +174,18 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    Si el presupuesto no alcanza, usar solo `strat10` (90 + 90). En cualquier caso, **el mismo criterio para los tres
    algoritmos**.
 2. **Re-Pareto con la validación del retrain** (nunca con test): frentes en (error_val, params) para el Caso 1 y
-   (error_val, MACs) para acc-FLOPs. El Caso 1 deja fuera la Time_CUDA de la búsqueda, que no es reproducible
-   (§8.1; decisión del 2026-10-05). Cuantificar cuántas soluciones cambian de dominancia.
-3. **Representantes por reglas fijadas antes de ver el test**, aplicadas al frente reentrenado:
+   MedMNIST, y (error_val, MACs) para acc-FLOPs. Ningún caso usa la Time_CUDA de la búsqueda: no es reproducible
+   porque la GPU no estaba aislada (§8.1), y tampoco sirve para comparar con otros trabajos (decisiones del
+   2026-10-05). Cuantificar cuántas soluciones cambian de dominancia.
+3. **Representantes por reglas fijadas antes de ver el test**, aplicadas al frente reentrenado, **iguales en los tres
+   casos** (decisión del 2026-10-05):
    - `A`: menor error de validación;
-   - `P`: menos parámetros; `F`: menos MACs;
-   - `K`: knee = mínima distancia euclídea al ideal tras normalización min-max dentro del frente (escribir la regla
-     en el paper; no elegirlo visualmente);
+   - `K`: knee = mínima distancia euclídea al ideal tras normalización min-max (lineal) dentro del frente (escribir
+     la regla en el paper; no elegirlo visualmente);
+   - `C` (compacto): la de menor complejidad (params; MACs en acc-FLOPs) entre las redes con accuracy de validación
+     ≥ la de `A` − 5 pp.
+   - **No se usan los extremos "menos params / menos MACs"** (antes `P`/`F`): son redes casi triviales (70–77 % de
+     validación en CIFAR-10), y las redes reportadas deben ser útiles y competitivas frente a otras estrategias.
    - **por presupuesto**: la red de menor error de validación con params ≤ {0.25, 0.5, 1.0, 1.5} M (Tier A) y
      MACs ≤ {50, 100, 250, 500} M (Tier B). Estos presupuestos cubren el rango de los frentes de MoQ-NAS y coinciden con
      los de LightMix, LEMONADE y NSGANetV1 (0.2–1.8 M); no cambiarlos después de ver resultados.
@@ -236,24 +241,26 @@ evolutivos más citados.
 `medmnist/NSGA/experiment_{ds}_{nsga2,nsga3}/{algo}/exp1_repeat_{1,2,3}` para
 `ds ∈ {pathmnist, octmnist, tissuemnist, organamnist}`. Representantes: 23–26 por dataset (≈101 en total).
 
-**Plan decidido (2026-10-04): comparación con el benchmark MedMNIST v2, incluyendo NSGA-II/III, en dos etapas,
-con P-Med-A como control.** Mismo método que el Caso 1, para que la selección de representantes no dependa del proxy.
-1. **Screening `strat5`, 1 semilla (semilla 1), F13-v1, tag `F13v1`:** 5 redes por corrida, repartidas a lo largo del
-   eje de parámetros e incluyendo siempre los representantes por proxy (columna booleana `strat5` del CSV) →
-   36 corridas × 5 = **180 redes** (45 por dataset): ≈ **6.4 días** en una GPU.
-   `python launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --seeds 1 --tag F13v1 --gpus 1 ...`
-2. **Selección de representantes con la validación del reentrenamiento** (nunca con test), por corrida, con reglas
-   fijadas antes de ver el test: mejor accuracy de validación, knee (distancia al ideal en el plano normalizado
-   (error_val, log params)) y compacto (menos parámetros con accuracy ≥ máx − 5 pp) → ≈ 100 redes.
-3. **Confirmación con 1 semilla nueva (semilla 11), F13-v1:** ≈ **4.1 días**. La corrida del screening no se reutiliza
-   (con ella se eligió). La variabilidad se reporta como media ± sd sobre las **3 corridas de búsqueda
-   independientes** de cada algoritmo, que incluye la variabilidad de búsqueda y de entrenamiento. MedMNIST v2
-   reporta una corrida por método. Con 3 semillas serían ≈ 8 días más.
-4. **Control P-Med-A** (perfil `medmnist_v2`: protocolo exacto de las ResNet de MedMNIST v2: 100 épocas, Adam 1e-3,
-   ×0.1 en 50 y 75, batch 128, sin augmentation) sobre los mismos representantes, 1 semilla (11), tag `PMedA`:
-   ≈ **1.4 días**.
+**Plan revisado (2026-10-05, sustituye al del 2026-10-04): protocolo principal = el de MedMNIST v2, mismas etapas y
+reglas que el Caso 1.** Los comparadores de MedMNIST (ResNet-18/50, auto-sklearn, AutoKeras, Google AutoML Vision) se
+entrenaron con el protocolo del benchmark, así que la comparación más justa es usar ese mismo protocolo en todo el caso,
+desde el screening (la selección y la confirmación deben hacerse con el mismo protocolo).
+- **Protocolo P-Med-A** (perfil `medmnist_v2`, tag `PMedA`): 100 épocas, Adam lr 1e-3, ×0.1 en las épocas 50 y 75,
+  batch 128, **sin augmentation**, checkpoint por mejor validación, splits oficiales, evaluador oficial (ACC y AUC).
+  Única diferencia conocida: fp16 (la precisión del caso); MedMNIST v2 no la indica.
+1. **Screening `strat5`, semilla 1, P-Med-A:** 5 redes por corrida (columna booleana `strat5` del CSV) → 36 corridas
+   × 5 = **180 redes**.
+   `python launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2 --seeds 1 --tag PMedA --gpus 1`
+2. **Re-Pareto y representantes** con `scripts/select_retrain_representatives.py --case C2_medmnist --tag PMedA`:
+   frente (error_val, params), reglas `A`, `K` y `C` (sin presupuestos: los comparadores son arquitecturas fijas).
+3. **Confirmación con las semillas 11, 12 y 13, P-Med-A**, igual que en el Caso 1 (decisión 2026-10-05). Media ± sd
+   sobre semillas por red, y sobre las 3 corridas de búsqueda por algoritmo. MedMNIST v2 reporta una corrida por método.
+4. **Variante opcional con data augmentation**, solo si el tiempo lo permite: los mismos representantes, mismo
+   protocolo y semillas, con augmentation. Pendiente de definir cuál (TrivialAugment, como en los F13 de MedMNIST,
+   u otra); se reporta en filas separadas y nunca se mezcla con P-Med-A.
 
-Total MedMNIST ≈ **11.9 días** en una GPU (screening 6.4 + confirmación 4.1 + control 1.4).
+Costo: 100 épocas en lugar de 300, así que cada entrenamiento cuesta ≈ 1/3 que en F13-v1; estimarlo con el ritmo
+medido en el screening antes de lanzar la confirmación.
 Limitación a declarar: en **OCTMNIST la validación y el test difieren mucho** (en los F13 previos de Q-NAS, val ≈ 95 %
 frente a test ≈ 77 %). Elegir con la validación del reentrenamiento es mejor que con el proxy, pero en OCT esa elección
 se traslada peor al test.

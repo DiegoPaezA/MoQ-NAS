@@ -91,10 +91,10 @@ datasets:
 # FACET evaluation (FairnessMetric) runs at the training resolution (96) with the case precision;
 # --keep_metrics is required so the metric is built in the retrain (fixes 4.9 / master.py injection).
 profiles:
-  medmnist_v2:          # P-Med-A control for MedMNIST: ResNet protocol of the MedMNIST v2 benchmark
-                        # (Yang et al., Sci. Data 2023): 100 epochs, Adam lr 1e-3, x0.1 at epochs 50 and 75,
-                        # batch 128 (dataset entry), no augmentation, best-val checkpoint. Precision stays the
-                        # case precision (fp16); MedMNIST v2 does not state it. Tag e.g. PMedA.
+  medmnist_v2:          # P-Med-A, MAIN protocol of Case 2 since 2026-10-05 (screening and confirmation, tag PMedA):
+                        # ResNet protocol of the MedMNIST v2 benchmark (Yang et al., Sci. Data 2023): 100 epochs,
+                        # Adam lr 1e-3, x0.1 at epochs 50 and 75, batch 128 (dataset entry), no augmentation,
+                        # best-val checkpoint. Precision stays the case precision (fp16); MedMNIST v2 does not state it.
     max_epochs: 100
     epochs_to_eval: 100
     patience_retrain: 100
