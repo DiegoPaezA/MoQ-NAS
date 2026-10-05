@@ -5,13 +5,16 @@ After the 1-seed screening, per search run:
   2. re-Pareto the screened networks with the retrain VALIDATION accuracy (never test);
   3. pick representatives with rules fixed before looking at test:
        A  lowest validation error
-       P  fewest parameters            F  fewest MACs
        K  knee: min Euclidean distance to the ideal after min-max normalisation within the front
-       budgets: lowest validation error with params <= {0.25, 0.5, 1.0, 1.5} M (C1_triobj)
-                or MACs <= {50, 100, 250, 500} M (AF_std_biobj)
+       C  compact: least complexity among the networks within 5 pp of the validation accuracy of A
+       budgets (C1_triobj, AF_std_biobj): lowest validation error with params <= {0.25, 0.5, 1.0, 1.5} M
+                or MACs <= {50, 100, 250, 500} M
+     The extreme "fewest parameters / MACs" points are not representatives: they are near-trivial networks
+     (70-77% validation accuracy on CIFAR-10) and the reported networks must be useful and competitive
+     (decision 2026-10-05).
      All rules are applied to the re-Pareto front of the case objectives:
-       C1_triobj:    (val error, params)                 AF_std_biobj: (val error, MACs)
-     Case 1 leaves out the search Time_CUDA, which is not reproducible (doc §8.1; decision 2026-10-05).
+       C1_triobj, C2_medmnist: (val error, params)       AF_std_biobj: (val error, MACs)
+     The search Time_CUDA is left out everywhere: it is not reproducible on a shared GPU (doc §8.1).
 
 The output is a candidates CSV (same columns as literature_retrain_candidates.csv plus the rules and the
 validation accuracy) that launch_retrain_protocol.py takes with --candidates, for the confirmation with
@@ -22,6 +25,8 @@ Usage:
   python scripts/select_retrain_representatives.py --case C1_triobj \\
       --runs-root ../retrain_2026/cluster/dualgpu1/retrain_2026/runs \\
       --out retrain_matrices/confirm_C1_triobj_F13v1c.csv
+  python scripts/select_retrain_representatives.py --case C2_medmnist --tag PMedA \\
+      --runs-root <mirror>/retrain_2026/runs --out retrain_matrices/confirm_C2_medmnist_PMedA.csv
   (--partial selects only in the runs whose screening is complete, for checks before the end;
    --objectives overrides the front objectives, e.g. 'val_err params cuda_time' for the search objectives.)
 """
@@ -34,14 +39,19 @@ import os
 import sys
 from collections import OrderedDict
 
+COMPACT_MARGIN = 5.0  # pp of validation accuracy below rule A allowed for rule C
+
 CASES = {
-    # objectives of the re-Pareto front (all minimised), screened roles, budget axis and budgets
+    # objectives of the re-Pareto front (all minimised), screened set, complexity axis, budgets
     'C1_triobj': dict(objectives=('val_err', 'params'),  # no Time_CUDA: not reproducible (doc §8.1)
-                      roles=('best_acc', 'knee', 'compact', 'strat10'),
-                      budget_key='params', budgets=(0.25e6, 0.5e6, 1.0e6, 1.5e6), budget_unit='M params'),
+                      roles=('best_acc', 'knee', 'compact', 'strat10'), strat5=False, complexity='params',
+                      budgets=(0.25e6, 0.5e6, 1.0e6, 1.5e6), budget_unit='M params'),
     'AF_std_biobj': dict(objectives=('val_err', 'macs'),
-                         roles=None,  # the whole filtered front was screened (--roles all)
-                         budget_key='macs', budgets=(50e6, 100e6, 250e6, 500e6), budget_unit='M MACs'),
+                         roles=None, strat5=False,  # the whole filtered front was screened (--roles all)
+                         complexity='macs', budgets=(50e6, 100e6, 250e6, 500e6), budget_unit='M MACs'),
+    'C2_medmnist': dict(objectives=('val_err', 'params'),  # no Time_CUDA (doc §8.1)
+                        roles=None, strat5=True,  # boolean strat5 column: 5 networks per run
+                        complexity='params', budgets=(), budget_unit='M params'),
 }
 
 
@@ -114,13 +124,14 @@ def load_screened(rows, runs_root, tag, seed):
 def select_run(nets, spec):
     keys = spec['objectives']
     front = sorted(pareto(nets, keys), key=tiebreak)
+    cx = spec['complexity']
     rules = OrderedDict()
     rules['A'] = min(front, key=tiebreak)
-    rules['P'] = min(front, key=lambda n: (n['params'],) + tiebreak(n))
-    rules['F'] = min(front, key=lambda n: (n['macs'],) + tiebreak(n))
     rules['K'] = knee(front, keys)
+    near = [n for n in front if n['val_acc'] >= rules['A']['val_acc'] - COMPACT_MARGIN]
+    rules['C'] = min(near, key=lambda n: (n[cx],) + tiebreak(n))
     for b in spec['budgets']:
-        within = [n for n in front if n[spec['budget_key']] <= b]
+        within = [n for n in front if n[cx] <= b]
         label = f"B{b / 1e6:g}"
         rules[label] = min(within, key=tiebreak) if within else None
     picked = OrderedDict()
@@ -156,6 +167,8 @@ def main():
         rows = [r for r in reader if r['case'] == args.case]
     if spec['roles']:
         rows = [r for r in rows if any(role in r['role'].split('+') for role in spec['roles'])]
+    if spec['strat5']:
+        rows = [r for r in rows if str(r.get('strat5', '')).lower() == 'true']
     runs = load_screened(rows, args.runs_root, args.tag, args.seed)
 
     incomplete = {ld: r['missing'] for ld, r in runs.items() if r['missing']}
@@ -166,8 +179,10 @@ def main():
         sys.exit('Screening not finished; nothing written (use --partial for a check on the complete runs).')
 
     out_rows, report = [], [f"# Representantes {args.case} (tag {args.tag}, validación de la semilla {args.seed})", "",
-                            f"Frente: {', '.join(spec['objectives'])}. Presupuestos: "
-                            f"{', '.join(f'{b / 1e6:g}' for b in spec['budgets'])} {spec['budget_unit']}.", ""]
+                            f"Frente: {', '.join(spec['objectives'])}. Compacto (C): menor complejidad a "
+                            f"<= {COMPACT_MARGIN:g} pp de A. Presupuestos: "
+                            f"{', '.join(f'{b / 1e6:g}' for b in spec['budgets']) or 'ninguno'} "
+                            f"{spec['budget_unit'] if spec['budgets'] else ''}.", ""]
     report.append("| Corrida | Algoritmo | Cribadas | En el frente (val) | Dominadas tras el retrain | "
                   "Spearman proxy–val | Representantes |")
     report.append("|---|---|---|---|---|---|---|")
