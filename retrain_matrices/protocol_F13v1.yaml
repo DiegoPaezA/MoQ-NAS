@@ -91,10 +91,35 @@ datasets:
 # FACET evaluation (FairnessMetric) runs at the training resolution (96) with the case precision;
 # --keep_metrics is required so the metric is built in the retrain (fixes 4.9 / master.py injection).
 profiles:
-  medmnist_v2:          # P-Med-A, MAIN protocol of Case 2 since 2026-10-05 (screening and confirmation, tag PMedA):
-                        # ResNet protocol of the MedMNIST v2 benchmark (Yang et al., Sci. Data 2023): 100 epochs,
-                        # Adam lr 1e-3, x0.1 at epochs 50 and 75, batch 128 (dataset entry), no augmentation,
-                        # best-val checkpoint. Precision stays the case precision (fp16); MedMNIST v2 does not state it.
+  medmnist_v2_adamw:    # P-Med, MAIN protocol of Case 2 (decision 2026-10-05; screening and confirmation, tag PMedW):
+                        # schedule of the MedMNIST v2 ResNet baselines (Yang et al., Sci. Data 2023): 100 epochs,
+                        # x0.1 at epochs 50 and 75, batch 128 (dataset entry), no augmentation, best-val checkpoint,
+                        # with the optimizer of every other case and of the authors' previous MedMNIST work: AdamW
+                        # lr 1e-3, weight decay 0.01 (F13-v1). Differences from MedMNIST v2: AdamW instead of Adam,
+                        # and fp16 (the case precision; MedMNIST v2 does not state it).
+    max_epochs: 100
+    epochs_to_eval: 100
+    patience_retrain: 100
+    optimizer: AdamW
+    learning_rate: 0.001
+    weight_decay: 0.01
+    lr_scheduler: multistep
+    data_augmentation: false
+  medmnist_v2_adamw_ta: # Optional variant of P-Med, only if time allows (tag PMedW_TA): identical, plus TrivialAugmentWide
+                        # (the augmentation of the F13 MedMNIST retrains). No flips or cutout: a horizontal flip changes
+                        # the label of left/right organs in OrganAMNIST, a vertical flip breaks the layer orientation
+                        # of OCT, and a 16 px cutout covers a third of a 28x28 image.
+    max_epochs: 100
+    epochs_to_eval: 100
+    patience_retrain: 100
+    optimizer: AdamW
+    learning_rate: 0.001
+    weight_decay: 0.01
+    lr_scheduler: multistep
+    data_augmentation: true
+    augmentation_policy: ta
+  medmnist_v2:          # Exact MedMNIST v2 ResNet protocol (Adam lr 1e-3, no weight decay). Reference only: NOT used,
+                        # the user chose AdamW (2026-10-05; profile medmnist_v2_adamw).
     max_epochs: 100
     epochs_to_eval: 100
     patience_retrain: 100
