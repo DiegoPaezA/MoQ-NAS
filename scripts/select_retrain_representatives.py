@@ -36,6 +36,7 @@ import csv
 import json
 import math
 import os
+import random
 import sys
 from collections import OrderedDict
 
@@ -45,12 +46,13 @@ CASES = {
     # objectives of the re-Pareto front (all minimised), screened set, complexity axis, budgets
     'C1_triobj': dict(objectives=('val_err', 'params'),  # no Time_CUDA: not reproducible (doc §8.1)
                       roles=('best_acc', 'knee', 'compact', 'strat10'), strat5=False, complexity='params',
+                      search_has_time=True,
                       budgets=(0.25e6, 0.5e6, 1.0e6, 1.5e6), budget_unit='M params'),
     'AF_std_biobj': dict(objectives=('val_err', 'macs'),
                          roles=None, strat5=False,  # the whole filtered front was screened (--roles all)
                          complexity='macs', budgets=(50e6, 100e6, 250e6, 500e6), budget_unit='M MACs'),
     'C2_medmnist': dict(objectives=('val_err', 'params'),  # no Time_CUDA (doc §8.1)
-                        roles=None, strat5=True,  # boolean strat5 column: 5 networks per run
+                        roles=None, strat5=True, search_has_time=True,  # boolean strat5 column: 5 per run
                         complexity='params', budgets=(), budget_unit='M params'),
 }
 
@@ -67,13 +69,40 @@ def tiebreak(n):
     return (n['val_err'], n['params'], n['macs'], n['id'])
 
 
-def knee(front, keys):
-    lo = {k: min(n[k] for n in front) for k in keys}
-    hi = {k: max(n[k] for n in front) for k in keys}
+def knee_distances(front, keys, log_keys=()):
+    """Distance of each front member to the ideal after min-max scaling (log10 first for log_keys)."""
+    val = {k: (lambda n, k=k: math.log10(n[k])) if k in log_keys else (lambda n, k=k: n[k]) for k in keys}
+    lo = {k: min(val[k](n) for n in front) for k in keys}
+    hi = {k: max(val[k](n) for n in front) for k in keys}
+    return {n['id']: math.sqrt(sum(((val[k](n) - lo[k]) / (hi[k] - lo[k]) if hi[k] > lo[k] else 0.0) ** 2
+                                   for k in keys)) for n in front}
 
-    def dist(n):
-        return math.sqrt(sum(((n[k] - lo[k]) / (hi[k] - lo[k]) if hi[k] > lo[k] else 0.0) ** 2 for k in keys))
-    return min(front, key=lambda n: (dist(n), tiebreak(n)))
+
+def knee(front, keys, log_keys=()):
+    d = knee_distances(front, keys, log_keys)
+    return min(front, key=lambda n: (d[n['id']], tiebreak(n)))
+
+
+def kendall_tau_b(x, y):
+    n = len(x)
+    if n < 3:
+        return float('nan')
+    conc = disc = tx = ty = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = x[i] - x[j], y[i] - y[j]
+            if a == 0 and b == 0:
+                continue
+            if a == 0:
+                tx += 1
+            elif b == 0:
+                ty += 1
+            elif (a > 0) == (b > 0):
+                conc += 1
+            else:
+                disc += 1
+    den = math.sqrt((conc + disc + tx) * (conc + disc + ty))
+    return (conc - disc) / den if den else float('nan')
 
 
 def spearman(x, y):
@@ -121,14 +150,14 @@ def load_screened(rows, runs_root, tag, seed):
     return out
 
 
-def select_run(nets, spec):
-    keys = spec['objectives']
+def select_run(nets, spec, margin=COMPACT_MARGIN, log_knee=False, objectives=None):
+    keys = tuple(objectives or spec['objectives'])
     front = sorted(pareto(nets, keys), key=tiebreak)
     cx = spec['complexity']
     rules = OrderedDict()
     rules['A'] = min(front, key=tiebreak)
-    rules['K'] = knee(front, keys)
-    near = [n for n in front if n['val_acc'] >= rules['A']['val_acc'] - COMPACT_MARGIN]
+    rules['K'] = knee(front, keys, log_keys=[k for k in keys if k != 'val_err'] if log_knee else ())
+    near = [n for n in front if n['val_acc'] >= rules['A']['val_acc'] - margin]
     rules['C'] = min(near, key=lambda n: (n[cx],) + tiebreak(n))
     for b in spec['budgets']:
         within = [n for n in front if n[cx] <= b]
@@ -141,6 +170,175 @@ def select_run(nets, spec):
     return front, rules, picked
 
 
+def analyse_run(nets, spec, front, rules, noise):
+    """Validation-only evidence that supports the selection of one run (doc: selection analysis)."""
+    keys = spec['objectives']
+    cx = spec['complexity']
+    out = {}
+    # proxy -> validation
+    out['spearman'] = spearman([n['proxy_acc'] for n in nets], [n['val_acc'] for n in nets])
+    out['kendall'] = kendall_tau_b([n['proxy_acc'] for n in nets], [n['val_acc'] for n in nets])
+    out['n_screened'], out['front_size'] = len(nets), len(front)
+    out['n_dominated'] = len(nets) - len(front)
+    ids = {n['id'] for n in front}
+
+    def shifted(n, d):
+        return dict(n, val_err=n['val_err'] - d)
+    # dominated networks that would enter the front with +noise accuracy, and members that would leave with -noise
+    out['borderline_out'] = sum(1 for n in nets if n['id'] not in ids
+                                and not any(dominates(m, shifted(n, noise), keys) for m in nets if m is not n))
+    out['borderline_in'] = sum(1 for n in front
+                               if any(dominates(m, shifted(n, -noise), keys) for m in nets if m is not n))
+    proxy_best = max(nets, key=lambda n: (n['proxy_acc'], -n['params']))
+    out['proxy_best_is_A'] = proxy_best['id'] == rules['A']['id']
+    proxy_reps = {n['id'] for n in nets if {'best_acc', 'knee', 'compact'} & set(n['row']['role'].split('+'))}
+    out['proxy_reps'] = len(proxy_reps)
+    out['proxy_reps_kept'] = len(proxy_reps & {n['id'] for n in rules.values() if n is not None})
+    # stability of each pick: runner-up under the same rule and its margin
+    per_rule = OrderedDict()
+    order = sorted(front, key=tiebreak)
+    a_acc = rules['A']['val_acc']
+    for label, n in rules.items():
+        if n is None:
+            continue
+        if label == 'A':
+            alt = order[1] if len(order) > 1 else None
+            gap = n['val_acc'] - alt['val_acc'] if alt else float('nan')
+            within = gap < noise if alt else False
+            note = f"runner-up {alt['id']} at {gap:.2f} pp" if alt else 'single-member front'
+        elif label == 'C':
+            slack = n['val_acc'] - (a_acc - COMPACT_MARGIN)
+            near = sorted([m for m in front if m['val_acc'] >= a_acc - COMPACT_MARGIN], key=lambda m: m[cx])
+            alt = near[1] if len(near) > 1 else None
+            gap = slack
+            within = slack < noise
+            note = f"{slack:.2f} pp above the A-{COMPACT_MARGIN:g} threshold" + (f"; next: {alt['id']}" if alt else '')
+        elif label == 'K':
+            d = knee_distances(front, keys)
+            ranked = sorted(front, key=lambda m: (d[m['id']], tiebreak(m)))
+            alt = ranked[1] if len(ranked) > 1 else None
+            gap = (d[alt['id']] - d[n['id']]) if alt else float('nan')
+            within = False
+            note = f"distance {d[n['id']]:.3f}; runner-up {alt['id']} at {d[alt['id']]:.3f}" if alt else ''
+        else:  # budget
+            b = float(label[1:]) * 1e6
+            within_b = sorted([m for m in front if m[cx] <= b], key=tiebreak)
+            alt = within_b[1] if len(within_b) > 1 else None
+            gap = n['val_acc'] - alt['val_acc'] if alt else float('nan')
+            within = gap < noise if alt else False
+            note = f"runner-up {alt['id']} at {gap:.2f} pp" if alt else 'only network within the budget'
+        per_rule[label] = dict(id=n['id'], val_acc=n['val_acc'], complexity=n[cx], runner_up=alt['id'] if alt else '',
+                               gap=gap, within_noise=within, note=note)
+    # sensitivity to the fixed parameters of the rules
+    variants = OrderedDict([('C 3 pp', dict(margin=3.0)), ('C 7 pp', dict(margin=7.0)), ('K log', dict(log_knee=True))])
+    if not math.isnan(nets[0]['cuda_time']) and 'cuda_time' not in keys and spec.get('search_has_time'):
+        variants['+Time_CUDA'] = dict(objectives=tuple(keys) + ('cuda_time',))
+    sens = OrderedDict()
+    for name, kw in variants.items():
+        f2, r2, _ = select_run(nets, spec, **kw)
+        changed = [lab for lab in rules if rules[lab] is not None and (r2.get(lab) is None or r2[lab]['id'] != rules[lab]['id'])]
+        jac = len(ids & {m['id'] for m in f2}) / len(ids | {m['id'] for m in f2})
+        sens[name] = dict(changed=changed, front_jaccard=jac,
+                          picks={lab: (r2[lab]['id'] if r2.get(lab) else '-') for lab in rules})
+    # stability under seed noise: perturb every validation accuracy with N(0, noise) and redo the selection
+    rng = random.Random(20261005)
+    same = {lab: 0 for lab in per_rule}
+    in_front = {n['id']: 0 for n in nets}
+    draws = 500
+    for _ in range(draws):
+        noisy = []
+        for n in nets:
+            e = rng.gauss(0.0, noise)
+            noisy.append(dict(n, val_acc=n['val_acc'] + e, val_err=n['val_err'] - e))
+        f3, r3, _ = select_run(noisy, spec)
+        for m in f3:
+            in_front[m['id']] += 1
+        for lab in per_rule:
+            if r3.get(lab) is not None and r3[lab]['id'] == per_rule[lab]['id']:
+                same[lab] += 1
+    for lab in per_rule:
+        per_rule[lab]['stability'] = same[lab] / draws
+    out['front_stability'] = {i: c / draws for i, c in in_front.items()}
+    out['per_rule'], out['sensitivity'] = per_rule, sens
+    return out
+
+
+def write_analysis(path_base, case, spec, analysed, noise):
+    """Per-run and per-rule CSVs plus a markdown section that justifies the selection."""
+    run_rows, rule_rows, md = [], [], []
+    for ld, meta, a in analysed:
+        run_rows.append(dict(case=case, dataset=meta['dataset'], algo=meta['algo'], run=meta['run'],
+                             n_screened=a['n_screened'], front_size=a['front_size'], n_dominated=a['n_dominated'],
+                             borderline_out=a['borderline_out'], borderline_in=a['borderline_in'],
+                             spearman=f"{a['spearman']:.3f}", kendall=f"{a['kendall']:.3f}",
+                             proxy_best_is_A=a['proxy_best_is_A'], proxy_reps=a['proxy_reps'],
+                             proxy_reps_kept=a['proxy_reps_kept'],
+                             **{f"sens_{k.replace(' ', '_').replace('+', 'plus_')}": '+'.join(v['changed']) or 'none'
+                                for k, v in a['sensitivity'].items()}))
+        for lab, r in a['per_rule'].items():
+            rule_rows.append(dict(case=case, dataset=meta['dataset'], algo=meta['algo'], run=meta['run'], rule=lab,
+                                  id=r['id'], val_acc=f"{r['val_acc']:.2f}", complexity=f"{r['complexity']:.0f}",
+                                  runner_up=r['runner_up'], gap=f"{r['gap']:.3f}", within_noise=r['within_noise'],
+                                  stability=f"{r['stability']:.3f}",
+                                  **{f"alt_{k.replace(' ', '_').replace('+', 'plus_')}": v['picks'][lab]
+                                     for k, v in a['sensitivity'].items()}))
+    for name, rows in (('runs', run_rows), ('rules', rule_rows)):
+        if rows:
+            with open(f"{path_base}_analysis_{name}.csv", 'w', newline='') as f:
+                w = csv.DictWriter(f, fieldnames=list(rows[0]))
+                w.writeheader()
+                w.writerows(rows)
+    md += ["", "# Análisis de la selección (solo validación)", "",
+           f"Ruido de referencia entre semillas: {noise:g} pp (sd máxima entre semillas de una misma red en los "
+           "reentrenamientos previos). \"Frontera\": redes dominadas que entrarían al frente con +ruido "
+           "(fuera) o miembros que saldrían con −ruido (dentro).", "",
+           "## Proxy → validación por algoritmo", "",
+           "| Algoritmo | Corridas | ρ Spearman (media) | τ Kendall (media) | Dominadas / cribadas | Frontera fuera / dentro | "
+           "Mejor proxy = A | Representantes proxy conservados |", "|---|---|---|---|---|---|---|---|"]
+    by_algo = OrderedDict()
+    for ld, meta, a in analysed:
+        by_algo.setdefault(meta['algo'], []).append(a)
+    for algo, lst in by_algo.items():
+        m = lambda key: sum(x[key] for x in lst) / len(lst)
+        md.append(f"| {algo} | {len(lst)} | {m('spearman'):.2f} | {m('kendall'):.2f} | "
+                  f"{sum(x['n_dominated'] for x in lst)} / {sum(x['n_screened'] for x in lst)} | "
+                  f"{sum(x['borderline_out'] for x in lst)} / {sum(x['borderline_in'] for x in lst)} | "
+                  f"{sum(x['proxy_best_is_A'] for x in lst)} / {len(lst)} | "
+                  f"{sum(x['proxy_reps_kept'] for x in lst)} / {sum(x['proxy_reps'] for x in lst)} |")
+    md += ["", "## Estabilidad de cada elección", "",
+           "Estabilidad: fracción de 500 simulaciones con ruido N(0, ruido) en la accuracy de validación de todas las "
+           "redes en las que la regla elige la misma red. Margen: pp de accuracy sobre la siguiente (A, presupuestos), pp "
+           "sobre el umbral A−5 (C) o diferencia de distancia normalizada al ideal (K).", "",
+           "| Corrida | Regla | id | val acc | Margen | Estabilidad | Detalle |", "|---|---|---|---|---|---|---|"]
+    for ld, meta, a in analysed:
+        for lab, r in a['per_rule'].items():
+            md.append(f"| {meta['algo']} {meta['run']} | {lab} | {r['id']} | {r['val_acc']:.2f} | "
+                      f"{r['gap']:.3f} | {100 * r['stability']:.0f}% | {r['note']} |")
+    names = list(analysed[0][2]['sensitivity']) if analysed else []
+    md += ["", "## Sensibilidad a los parámetros fijados", "",
+           "Red que elige cada regla afectada con cada variante (— = ninguna cambia) y Jaccard del frente frente al de "
+           "referencia.", "",
+           "| Corrida | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
+    for ld, meta, a in analysed:
+        md.append(f"| {meta['algo']} {meta['run']} | " + " | ".join(
+            (', '.join(f"{lab}: {a['per_rule'][lab]['id']}→{v['picks'][lab]}" for lab in v['changed']) or '—')
+            + f" (J={v['front_jaccard']:.2f})" for v in a['sensitivity'].values()) + " |")
+    tot = len(analysed)
+    stab = [r['stability'] for _, _, a in analysed for r in a['per_rule'].values()]
+    by_rule = OrderedDict()
+    for _, _, a in analysed:
+        for lab, r in a['per_rule'].items():
+            by_rule.setdefault(lab, []).append(r['stability'])
+    md += ["", "Estabilidad media por regla: " + ", ".join(
+        f"{lab} {100 * sum(v) / len(v):.0f}%" for lab, v in by_rule.items()) + "."]
+    md += ["", "Resumen: " + "; ".join(
+        f"{n}: cambia alguna regla en {sum(1 for _, _, a in analysed if a['sensitivity'][n]['changed'])}/{tot} corridas"
+        for n in names) + f"; elecciones dentro del ruido: "
+           f"{sum(r['within_noise'] for _, _, a in analysed for r in a['per_rule'].values())}/"
+           f"{sum(len(a['per_rule']) for _, _, a in analysed)}."]
+    return md
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--case', required=True, choices=sorted(CASES))
@@ -151,6 +349,8 @@ def main():
     ap.add_argument('--seed', type=int, default=1, help='Screening seed (its validation drives the selection).')
     ap.add_argument('--out', required=True, help='Confirmation candidates CSV (a .md report is written next to it).')
     ap.add_argument('--partial', action='store_true', help='Select only in the runs whose screening is complete.')
+    ap.add_argument('--noise-pp', type=float, default=0.36,
+                    help='Seed-to-seed noise of the validation accuracy used to flag fragile choices (pp).')
     ap.add_argument('--objectives', nargs='+', choices=['val_err', 'params', 'macs', 'cuda_time'], default=None,
                     help="Override the front objectives (e.g. 'val_err params cuda_time' to include the search "
                          "Time_CUDA in the Case 1 front). Default: the case objectives.")
@@ -186,7 +386,7 @@ def main():
     report.append("| Corrida | Algoritmo | Cribadas | En el frente (val) | Dominadas tras el retrain | "
                   "Spearman proxy–val | Representantes |")
     report.append("|---|---|---|---|---|---|---|")
-    detail = []
+    detail, analysed = [], []
     for ld, run in runs.items():
         if ld in incomplete:
             report.append(f"| {run['meta']['run']} | {run['meta']['algo']} | {len(run['nets'])}"
@@ -194,6 +394,7 @@ def main():
             continue
         nets = run['nets']
         front, rules, picked = select_run(nets, spec)
+        analysed.append((ld, run['meta'], analyse_run(nets, spec, front, rules, args.noise_pp)))
         rho = spearman([n['proxy_acc'] for n in nets], [n['val_acc'] for n in nets])
         report.append(f"| {run['meta']['run']} | {run['meta']['algo']} | {len(nets)} | {len(front)} | "
                       f"{len(nets) - len(front)} | {rho:.2f} | {len(picked)} |")
@@ -216,8 +417,9 @@ def main():
         w.writeheader()
         w.writerows(out_rows)
     report_path = os.path.splitext(args.out)[0] + '_report.md'
+    analysis = write_analysis(os.path.splitext(args.out)[0], args.case, spec, analysed, args.noise_pp)
     with open(report_path, 'w') as f:
-        f.write('\n'.join(report + detail) + '\n')
+        f.write('\n'.join(report + detail + analysis) + '\n')
     n_runs = len(runs) - len(incomplete)
     print(f"{args.case}: {len(out_rows)} representatives from {n_runs} complete run(s) -> {args.out} "
           f"(report: {report_path}); confirmation trainings with 3 seeds: {3 * len(out_rows)}")

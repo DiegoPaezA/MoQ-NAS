@@ -189,6 +189,13 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    - **por presupuesto**: la red de menor error de validación con params ≤ {0.25, 0.5, 1.0, 1.5} M (Tier A) y
      MACs ≤ {50, 100, 250, 500} M (Tier B). Estos presupuestos cubren el rango de los frentes de MoQ-NAS y coinciden con
      los de LightMix, LEMONADE y NSGANetV1 (0.2–1.8 M); no cambiarlos después de ver resultados.
+   **Análisis que justifica la selección** (decisión 2026-10-05; lo genera el mismo script, solo con validación, en
+   `<out>_report.md` y `<out>_analysis_{runs,rules}.csv`): (i) acuerdo proxy → validación (Spearman, Kendall τ_b, redes
+   que quedan dominadas, si la mejor por proxy sigue siendo `A`, representantes por proxy que sobreviven);
+   (ii) estabilidad ante el ruido de semilla: 500 repeticiones con N(0, 0.36 pp) en la validación de todas las redes,
+   fracción en que cada regla elige la misma red y en que cada red sigue en el frente, más el margen sobre la segunda;
+   tras la etapa 4 se repite con la sd medida en las semillas 11–13; (iii) sensibilidad a los parámetros fijados
+   (margen de `C` de 3 y 7 pp, knee con escala logarítmica, frente con Time_CUDA donde la búsqueda la tenía).
 4. **Confirmación (3 semillas nuevas)** de los representantes: semillas 11, 12 y 13, distintas de la del
    screening (semilla 1), igual para los tres algoritmos. La corrida del screening no cuenta como réplica: los
    representantes se eligieron por su validación en esa semilla, y reutilizarla sesgaría la media hacia arriba (el
