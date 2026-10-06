@@ -914,10 +914,36 @@ solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se
 | Caso | Servidor | Lanzado | Comando (relanzarlo igual si hay un corte) |
 |---|---|---|---|
 | Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
-| acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
+| acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 (3×2); **relanzado 22:01 con 12 en paralelo (4×3)** | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
 
 Los tiempos de entrenamiento no se comparan entre casos (servidor, carga de otros usuarios y temperatura distintos);
-dentro de un caso, sí.
+dentro de un caso, sí. En acc-FLOPs las primeras 10 redes se entrenaron con 6 en paralelo y el resto con 12, así que
+su `training_time` tampoco es homogéneo dentro del caso: es un dato de costo, no de comparación.
+
+**Qué GPU y cuántas redes en paralelo (decisión del usuario, 2026-10-04, tras medirlo):** solo la GPU 1 de cada
+servidor. Pruebas cortas (6 épocas, mismas redes y concurrencia que las que corrían; artefactos borrados):
+- **Cambiar de GPU no acelera.** En dualgpu2 las mismas 6 redes van a 5.08 s/época en la GPU 0 y a 5.1 en la GPU 1,
+  aunque la GPU 0 tenga más reloj (2310 frente a 1620 MHz). El límite es compartir la GPU entre procesos, no el reloj.
+  En dualgpu1 la GPU 0 está más frenada que la GPU 1 (570–855 frente a 990–1230 MHz); las dos están a 87–88 °C con
+  *SW Thermal Slowdown* activo.
+- **Pasar de 6 a 12 redes en la misma GPU rinde ≈ +40–55 % en total** (dualgpu2: las que corrían pasaron de 5.1 a
+  ~5.5 s/época y las nuevas fueron a 8.5; dualgpu1: de 10–11 a 12.5–14 y 15.7). La memoria de GPU no limita.
+- Decisión: **dualgpu1 sigue con 6** (CPU muy cargada por otros usuarios, load 80–109 de 128, y redes del Caso 1 más
+  grandes: con 6 ya usa hasta 32 GB de 46) y **dualgpu2 pasa a 12**. Al reiniciar se pierden las redes en curso, así
+  que se esperó a que terminaran las que estaban más avanzadas.
+
+**Tolerancia a cortes (2026-10-04, commits `547f563` y `5b7a7e0`):** `retrain_parallel.py` guarda cada red en
+`retrain_results_<tag>.txt` en cuanto termina (escritura atómica: temporal + fsync + `os.replace`), y el launcher salta
+las redes ya OK con el mismo tag. Ante un corte de luz o un reinicio, basta con relanzar el mismo comando: solo se
+pierden las redes que estaban entrenándose, que vuelven a la época 1. No hay reanudación a mitad de entrenamiento, a
+propósito: una red reanudada no sería idéntica a una sin cortes con la misma semilla. Probado en el clúster con un
+`kill -9` a mitad de trabajo. Tras un reinicio del servidor también hay que relanzar el watchdog.
+
+**Cómo detener un launcher sin dejar procesos sueltos:** matar el árbol de descendientes del PID del launcher
+(`ps --ppid` recursivo), no `kill -- -<pgid>`: con `setsid nohup` el grupo de procesos es otro y ese kill falló el
+2026-10-04 a las 22:01, de modo que llegaron a correr dos launchers durante ~1 min (se detuvieron ambos y no se dañó
+ningún resultado). Desde ssh, buscar el launcher con `pgrep -f '^[^ ]*python[^ ]* launch_retrain_protocol.py'`, porque
+un patrón con el texto del comando coincide con la propia sesión.
 
 **Compatibilidad entre servidores (verificada):**
 - Mismo CIFAR-10 (md5 de `cifar-10-batches-py` idéntico) y mismas torch 2.5.1 / torchvision 0.20.1 (CUDA en L40S).
@@ -945,10 +971,42 @@ terminado de golpe) en los `retrain_failures_<tag>.csv` del caso. Ante el primer
 redes ya OK se saltan y las que fallaron se reentrenan. Solo reduce una vez y sale cuando el launcher termina. Log:
 `retrain_2026/watchdog/<nombre>.log`.
 
+**Monitoreo:** además del watchdog, la sesión de trabajo revisa cada hora los dos servidores (watchdog, launcher,
+procesos en la GPU 1, redes OK y filas de fallos). Si el watchdog muere con el screening en marcha, se relanza. Ante
+OOM repetido con 4 en paralelo, fallos que no son OOM o un launcher que muere sin terminar, se avisa al usuario y no se
+relanza nada por cuenta propia.
+
 **Resultados:** el análisis se hace en el Mac. `scripts/sync_retrain_results.sh` (repo de análisis) baja
 `retrain_2026/` y `logs/retrain.log` de cada servidor a `retrain_2026/cluster/<host>/` (un espejo por servidor,
 sin borrar nada y sin pesos salvo con `--with-weights`). El Caso 1 se lee del espejo de dualgpu1 y acc-FLOPs del de
 dualgpu2 (dualgpu1 también tiene una copia de las corridas de acc-FLOPs, pero sin resultados).
+
+## 4g. Registro de decisiones (todas con fecha; mantener al día)
+
+Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
+
+| Fecha | Decisión | Dónde |
+|---|---|---|
+| 2026-10-03 | Protocolo de retrain = F13-v1 tal como se ejecutó (AdamW 1e-3, wd 0.01, 300 épocas, multistep 50/75 %); precisión = la de la búsqueda de cada caso; Q-NAS no se reentrena | §3 |
+| 2026-10-03 | Tabla comparativa solo contra NAS multiobjetivo; lo mono-objetivo como filas de referencia | §6.1 |
+| 2026-10-03 | Fairness: todo el frente × 3 semillas en R1 y R2, mismo protocolo para MoQ-NAS y baselines | §2 Tier D |
+| 2026-10-04 | Data augmentation de CIFAR-10 = opción (c) (crop + flip + TrivialAugment + cutout 16) para todo CIFAR-10, tag `F13v1c`, tras el piloto 2 (+1.22 pp, 6/6) con el criterio fijado de antemano | §4e |
+| 2026-10-04 | Dos servidores: Caso 1 en dualgpu1 y acc-FLOPs en dualgpu2, cada caso completo en una sola máquina y solo en la GPU 1; cambios locales de dualgpu2 descartados (con backup) | §4f |
+| 2026-10-04 | Guardar cada red al terminar (tolerancia a cortes); sin reanudación a mitad de entrenamiento | §4f |
+| 2026-10-04 | dualgpu1 con 6 redes en paralelo; dualgpu2 con 12 (relanzado a las 22:01) | §4f |
+| 2026-10-04 | Centralizar todos los resultados en el Mac (`scripts/sync_retrain_results.sh`, un espejo por servidor) | §4f |
+| 2026-10-05 | Ante OOM, bajar a 4 en paralelo (watchdog automático, una sola vez) | §4f |
+| 2026-10-05 | Selección en 4 etapas para todos los casos: screening con semilla 1 → re-Pareto con validación → representantes por reglas → confirmación con semillas 11–13 | §2, selección en dos etapas |
+| 2026-10-05 | Ningún frente usa la Time_CUDA de la búsqueda (no reproducible con la GPU compartida; tampoco sirve para comparar con otros trabajos) | §2 paso 2, §8.1 |
+| 2026-10-05 | Reglas iguales en los tres casos: `A`, `K` lineal y `C` (menor complejidad a ≤ 5 pp de `A`), más presupuestos en el Caso 1 y acc-FLOPs; sin `P`/`F` (redes triviales: se quieren redes útiles y competitivas) | §2 paso 3 |
+| 2026-10-05 | Reportar con los datos de cada caso el análisis que justifica la selección (acuerdo proxy → validación, estabilidad ante ruido de semilla, sensibilidad a los parámetros fijados) | §2 paso 3 |
+| 2026-10-05 | MedMNIST: protocolo P-Med = esquema de MedMNIST v2 (100 épocas, ×0.1 en 50 y 75, batch 128, sin augmentation) con AdamW (lr 1e-3, wd 0.01), desde el screening; confirmación con semillas 11–13; variante opcional solo con TrivialAugment; comparación también con AutoML | §2 Tier C |
+| 2026-10-05 | Metodología para el paper en `case of study paper/6_retraining_comparative_methodology.tex` (inglés) y `retrain_methodology_refs.bib`; cada referencia verificada en Google Scholar o, cuando Scholar bloqueó con CAPTCHA, en Crossref/DOI, arXiv, JMLR, PMLR o la web, con la fuente anotada en el `.bib` | repo de análisis |
+
+**Decisiones pendientes:**
+- **Elecciones inestables:** si una regla tiene estabilidad < 70 % en el análisis de ruido (p. ej., el knee del Caso 1:
+  46–47 % en 2 de 3 corridas de MoQ-NAS), ¿se confirma también la segunda red y se reportan ambas? Propuesto el
+  2026-10-05; pendiente de respuesta del usuario. Debe decidirse antes de ver el test.
 
 ## 5. Checklist en el clúster (antes de lanzar)
 
