@@ -176,6 +176,8 @@ def load_jobs(args, protocol):
 
     cli = {'max_epochs': args.max_epochs, 'epochs_to_eval': args.max_epochs,
            'patience_retrain': args.max_epochs} if args.max_epochs else {}
+    if args.num_workers is not None:
+        cli['num_workers'] = args.num_workers
     if args.smoke:
         # Code-path check only: 2 epochs on a 2k-image subset, one candidate per case.
         cli.update(max_epochs=2, epochs_to_eval=2, patience_retrain=2,
@@ -236,6 +238,9 @@ def main():
     ap.add_argument('--profile', default=None, help='Protocol profile (fairness_R1, fairness_R2).')
     ap.add_argument('--max-epochs', type=int, default=None,
                     help='Override max_epochs (also epochs_to_eval and patience). Required for fairness_R2.')
+    ap.add_argument('--num-workers', type=int, default=None,
+                    help='Override the DataLoader workers per loader (does not change results when the protocol '
+                         'has no random augmentation; it only changes RAM/CPU use).')
     ap.add_argument('--seeds', type=int, nargs='+', required=True)
     ap.add_argument('--tag', required=True, help='Protocol tag, e.g. F13v1, fairR1, fairR2.')
     ap.add_argument('--gpus', type=int, nargs='+', default=[0])
