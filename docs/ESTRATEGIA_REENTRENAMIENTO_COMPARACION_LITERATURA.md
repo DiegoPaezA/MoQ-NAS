@@ -920,7 +920,7 @@ solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se
 | Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
 | acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 (3×2); **relanzado 22:01 con 12 en paralelo (4×3)** | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
 | acc-FLOPs, confirmación (paso 4): 51 representantes × semillas 11–13 = 153 | dualgpu2, GPU 1 | 2026-10-06 10:42 (4×3), con visto bueno del usuario; watchdog `AFconf` | `launch_retrain_protocol.py --cases AF_std_biobj --candidates retrain_matrices/confirm_AF_std_biobj_F13v1c.csv --roles all --seeds 11 12 13 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
-| Caso 2 (C2_medmnist), screening de 180 redes | **LIRA-Server (lira-150), GPUs 0 y 1** (cambio del 2026-10-06; antes previsto en dualgpu2) | 2026-10-06 15:07 (3×2 por GPU = 12); watchdog `C2` | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 0 1 --jobs-per-gpu 3 --workers-per-job 2` (python: `~/miniforge3/envs/moqnas/bin/python`) |
+| Caso 2 (C2_medmnist), screening de 180 redes | **LIRA-Server (lira-150), GPUs 0 y 1** (cambio del 2026-10-06; antes previsto en dualgpu2) | 2026-10-06 15:07 (6+6); **relanzado 15:44 con 9+9 y 4 workers**; watchdog `C2` | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 0 1 --jobs-per-gpu 3 --workers-per-job 3` (python: `~/miniforge3/envs/moqnas/bin/python`) |
 
 **Estado de acc-FLOPs (2026-10-06):** screening terminado a las 05:41, con 147/147 redes OK y ningún fallo. Selección
 (pasos 2–3) hecha en el Mac con los datos completos: `retrain_matrices/confirm_AF_std_biobj_F13v1c.csv`, con 51
@@ -952,6 +952,14 @@ un mismo modelo de GPU. En dualgpu2 ya no va MedMNIST después de acc-FLOPs.
   ahí). MedMNIST necesita ≈ 3 GB más para resultados (screening ≈ 0.5, confirmación ≈ 1.3, variante TA ≈ 1.3). Se
   vigila el espacio libre en el monitoreo horario; si baja de ≈ 3 GB, se avisa al usuario. Si hiciera falta, dejar de
   guardar `last.pt` reduciría los resultados a la mitad.
+- **Concurrencia y workers en LIRA (decisión del usuario, 2026-10-06 15:44):** 9 redes por GPU (9+9) y **4 workers por
+  loader** en lugar de 8 (perfiles `medmnist_v2_adamw` y `medmnist_v2_adamw_ta`, commit `3dde8f0`; CIFAR-10 sigue con 8).
+  Medido con 6+6 y 8 workers: cada entrenamiento ocupaba ≈ 8.7 GB de RAM (16 workers de ≈ 730 MB casi ociosos, al 9 %
+  de CPU) y ≈ 2.5 núcleos, con el proceso principal como cuello de botella (1 núcleo). Quedaban 41 GB disponibles de 188,
+  así que 12+12 no cabía. Con 4 workers serían ≈ 5 GB por entrenamiento; 9+9 ≈ 90 GB y ≈ 80 % de la CPU, mientras que
+  12+12 saturaría la CPU. El número de workers no cambia los resultados: P-Med no tiene augmentation aleatoria y el orden
+  de los batches lo fija el muestreador del proceso principal. Se aplicó sin prueba previa, a pedido del usuario. Al
+  reiniciar se perdieron las 12 redes que estaban en curso (≈ 35 min cada una); ninguna había terminado.
 - **Watchdog con dos GPUs** (commit `77aa439`): ante OOM baja a 4 entrenamientos en total (1 trabajo × 2 redes en
   cada GPU). Probado en LIRA con un launcher falso.
 
@@ -1053,6 +1061,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-05 | Orden por servidor: cada caso se cierra por completo (screening, selección y confirmación) antes de empezar el siguiente en la misma GPU; MedMNIST va en la GPU 1 de dualgpu2 después de cerrar acc-FLOPs | §4f |
 | 2026-10-06 | Visto bueno para la confirmación de acc-FLOPs (lanzada a las 10:42) | §4f |
 | 2026-10-06 | MedMNIST se ejecuta en LIRA-Server, en las GPUs 0 y 1, con un entorno replicado de dualgpu2 (sustituye a "MedMNIST en dualgpu2 después de acc-FLOPs"); screening lanzado a las 15:07 con 6 redes por GPU | §4f |
+| 2026-10-06 | MedMNIST en LIRA: 9+9 redes en paralelo y 4 workers por loader (sin prueba previa), relanzado a las 15:44 | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
