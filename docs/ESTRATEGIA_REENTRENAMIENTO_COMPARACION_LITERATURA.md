@@ -196,6 +196,10 @@ reordenar las redes, los representantes finales se eligen **después** del reent
    fracción en que cada regla elige la misma red y en que cada red sigue en el frente, más el margen sobre la segunda;
    tras la etapa 4 se repite con la sd medida en las semillas 11–13; (iii) sensibilidad a los parámetros fijados
    (margen de `C` de 3 y 7 pp, knee con escala logarítmica, frente con Time_CUDA donde la búsqueda la tenía).
+   **Elecciones inestables (decisión 2026-10-05):** si una regla mantiene su red en < 70 % de las simulaciones, también
+   se confirma la red que esa misma regla elige con más frecuencia entre las demás (etiqueta `<regla>~` en el CSV). Las
+   dos se reportan; nunca se elige entre ellas con el test. Con MoQ-NAS añade 2 redes en el Caso 1 y 1 en acc-FLOPs; el
+   resto de las alternativas ya eran representantes de otras reglas.
 4. **Confirmación (3 semillas nuevas)** de los representantes: semillas 11, 12 y 13, distintas de la del
    screening (semilla 1), igual para los tres algoritmos. La corrida del screening no cuenta como réplica: los
    representantes se eligieron por su validación en esa semilla, y reutilizarla sesgaría la media hacia arriba (el
@@ -1003,10 +1007,9 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-05 | MedMNIST: protocolo P-Med = esquema de MedMNIST v2 (100 épocas, ×0.1 en 50 y 75, batch 128, sin augmentation) con AdamW (lr 1e-3, wd 0.01), desde el screening; confirmación con semillas 11–13; variante opcional solo con TrivialAugment; comparación también con AutoML | §2 Tier C |
 | 2026-10-05 | Metodología para el paper en `case of study paper/6_retraining_comparative_methodology.tex` (inglés) y `retrain_methodology_refs.bib`; cada referencia verificada en Google Scholar o, cuando Scholar bloqueó con CAPTCHA, en Crossref/DOI, arXiv, JMLR, PMLR o la web, con la fuente anotada en el `.bib` | repo de análisis |
 
-**Decisiones pendientes:**
-- **Elecciones inestables:** si una regla tiene estabilidad < 70 % en el análisis de ruido (p. ej., el knee del Caso 1:
-  46–47 % en 2 de 3 corridas de MoQ-NAS), ¿se confirma también la segunda red y se reportan ambas? Propuesto el
-  2026-10-05; pendiente de respuesta del usuario. Debe decidirse antes de ver el test.
+| 2026-10-05 | Elecciones inestables: si una regla mantiene su red en < 70 % de las 500 simulaciones de ruido, se confirma también la red que esa misma regla elige con más frecuencia entre las demás (etiqueta `<regla>~`); se reportan ambas y nunca se elige entre ellas con el test. Decidido antes de ver el test | §2 paso 3 |
+
+**Decisiones pendientes:** ninguna por ahora.
 
 ## 5. Checklist en el clúster (antes de lanzar)
 
