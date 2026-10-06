@@ -991,6 +991,16 @@ las redes ya OK con el mismo tag. Ante un corte de luz o un reinicio, basta con 
 pierden las redes que estaban entrenándose, que vuelven a la época 1. No hay reanudación a mitad de entrenamiento, a
 propósito: una red reanudada no sería idéntica a una sin cortes con la misma semilla. Probado en el clúster con un
 `kill -9` a mitad de trabajo. Tras un reinicio del servidor también hay que relanzar el watchdog.
+**Guardado por semilla (2026-10-06, a pedido del usuario):** con varias semillas por red (confirmación 11–13), el
+resultado de la red solo se escribía al terminar las tres, así que un corte hacía perder también las semillas ya
+completadas. Ahora `retrain_parallel.py` guarda cada semilla en cuanto termina OK
+(`archive/<id>/retrain_<tag>_s<semilla>/seed_result_<tag>.json`, escritura atómica) y, al relanzar, salta las semillas
+que ya tienen ese archivo. Cada semilla empieza desde su propio estado aleatorio, así que saltar una no cambia las
+demás. Probado en el Mac con un `kill -9` después de la semilla 11: al relanzar se saltó la 11 y se entrenaron la 12
+y la 13. Aplica a las redes que empiezan después de actualizar el código; las que ya estaban en curso siguen con el
+código anterior hasta terminar. Nota de reproducibilidad: el mismo entrenamiento con la misma semilla no es idéntico
+bit a bit entre ejecuciones (diferencias desde la 4.ª decimal de la loss, 0.01–0.09 pp de test en la prueba), por
+operaciones de punto flotante no deterministas; es mucho menor que la variación entre semillas (0.05–0.36 pp).
 
 **Cómo detener un launcher sin dejar procesos sueltos:** matar el árbol de descendientes del PID del launcher
 (`ps --ppid` recursivo), no `kill -- -<pgid>`: con `setsid nohup` el grupo de procesos es otro y ese kill falló el
@@ -1062,6 +1072,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-06 | Visto bueno para la confirmación de acc-FLOPs (lanzada a las 10:42) | §4f |
 | 2026-10-06 | MedMNIST se ejecuta en LIRA-Server, en las GPUs 0 y 1, con un entorno replicado de dualgpu2 (sustituye a "MedMNIST en dualgpu2 después de acc-FLOPs"); screening lanzado a las 15:07 con 6 redes por GPU | §4f |
 | 2026-10-06 | MedMNIST en LIRA: 9+9 redes en paralelo y 4 workers por loader (sin prueba previa), relanzado a las 15:44 | §4f |
+| 2026-10-06 | Guardar cada semilla en cuanto termina y saltarla al relanzar (no perder semillas completadas si hay un corte) | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 

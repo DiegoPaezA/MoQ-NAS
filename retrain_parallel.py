@@ -235,6 +235,20 @@ def worker(task_args):
         env = _environment_info()
         results, failures = {}, []
         for rep, seed in enumerate(seeds):
+            seed_dir = os.path.join(archive_dir, cid, _rep_dir_name(args.tag, seed, rep))
+            seed_file = os.path.join(seed_dir, f"seed_result_{args.tag}.json")
+            if seed is not None and os.path.isfile(seed_file):
+                # Resume: a seed that already finished OK (e.g. before a power cut) is not trained again.
+                # Each seed starts from its own RNG state, so skipping it does not change the others.
+                try:
+                    with open(seed_file) as f:
+                        done = json.load(f)
+                except Exception:
+                    done = {}
+                if done.get('status') == 'OK' and done.get('protocol_tag') == args.tag:
+                    results[_rep_key(seed, rep)] = done
+                    logger.info(f"{cid} seed={seed} already OK in {seed_file}; skipped")
+                    continue
             if seed is not None:
                 _set_global_seed(seed)
                 params['loader_seed'] = seed  # batch order; split_seed stays fixed
@@ -267,6 +281,13 @@ def worker(task_args):
             if message:
                 entry['error'] = message
             results[_rep_key(seed, rep)] = entry
+            if seed is not None and status == 'OK':
+                # Persist every finished seed at once; the run-level results file is written per candidate.
+                try:
+                    os.makedirs(seed_dir, exist_ok=True)
+                    _save_results_atomic(seed_file, entry)
+                except Exception as exc:
+                    logger.warning(f"{cid} seed={seed}: could not save {seed_file}: {exc}")
             if status != 'OK':
                 failures.append(dict(id=cid, seed=seed if seed is not None else '', status=status, message=message))
 
