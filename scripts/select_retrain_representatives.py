@@ -12,6 +12,9 @@ After the 1-seed screening, per search run:
      The extreme "fewest parameters / MACs" points are not representatives: they are near-trivial networks
      (70-77% validation accuracy on CIFAR-10) and the reported networks must be useful and competitive
      (decision 2026-10-05).
+     Unstable choices: if a rule keeps its network in fewer than 70% of 500 noise repetitions (validation accuracy
+     + N(0, 0.36 pp)), the network that the same rule picks most often among the others is also confirmed (label
+     '<rule>~'); both are reported and the test set is never used to choose between them (decision 2026-10-05).
      All rules are applied to the re-Pareto front of the case objectives:
        C1_triobj, C2_medmnist: (val error, params)       AF_std_biobj: (val error, MACs)
      The search Time_CUDA is left out everywhere: it is not reproducible on a shared GPU (doc §8.1).
@@ -41,6 +44,7 @@ import sys
 from collections import OrderedDict
 
 COMPACT_MARGIN = 5.0  # pp of validation accuracy below rule A allowed for rule C
+STABILITY_THRESHOLD = 0.70  # below this, the rule's most frequent alternative under noise is also confirmed
 
 CASES = {
     # objectives of the re-Pareto front (all minimised), screened set, complexity axis, budgets
@@ -243,6 +247,7 @@ def analyse_run(nets, spec, front, rules, noise):
     # stability under seed noise: perturb every validation accuracy with N(0, noise) and redo the selection
     rng = random.Random(20261005)
     same = {lab: 0 for lab in per_rule}
+    alts = {lab: {} for lab in per_rule}
     in_front = {n['id']: 0 for n in nets}
     draws = 500
     for _ in range(draws):
@@ -256,8 +261,12 @@ def analyse_run(nets, spec, front, rules, noise):
         for lab in per_rule:
             if r3.get(lab) is not None and r3[lab]['id'] == per_rule[lab]['id']:
                 same[lab] += 1
+            elif r3.get(lab) is not None:
+                alts[lab][r3[lab]['id']] = alts[lab].get(r3[lab]['id'], 0) + 1
     for lab in per_rule:
         per_rule[lab]['stability'] = same[lab] / draws
+        best_alt = max(alts[lab].items(), key=lambda kv: (kv[1], kv[0]), default=(None, 0))
+        per_rule[lab]['alt_id'], per_rule[lab]['alt_freq'] = best_alt[0], best_alt[1] / draws
     out['front_stability'] = {i: c / draws for i, c in in_front.items()}
     out['per_rule'], out['sensitivity'] = per_rule, sens
     return out
@@ -279,7 +288,9 @@ def write_analysis(path_base, case, spec, analysed, noise):
             rule_rows.append(dict(case=case, dataset=meta['dataset'], algo=meta['algo'], run=meta['run'], rule=lab,
                                   id=r['id'], val_acc=f"{r['val_acc']:.2f}", complexity=f"{r['complexity']:.0f}",
                                   runner_up=r['runner_up'], gap=f"{r['gap']:.3f}", within_noise=r['within_noise'],
-                                  stability=f"{r['stability']:.3f}",
+                                  stability=f"{r['stability']:.3f}", noise_alt=r['alt_id'] or '',
+                                  noise_alt_freq=f"{r['alt_freq']:.3f}",
+                                  alt_confirmed=r['stability'] < STABILITY_THRESHOLD and bool(r['alt_id']),
                                   **{f"alt_{k.replace(' ', '_').replace('+', 'plus_')}": v['picks'][lab]
                                      for k, v in a['sensitivity'].items()}))
     for name, rows in (('runs', run_rows), ('rules', rule_rows)):
@@ -309,11 +320,17 @@ def write_analysis(path_base, case, spec, analysed, noise):
            "Estabilidad: fracción de 500 simulaciones con ruido N(0, ruido) en la accuracy de validación de todas las "
            "redes en las que la regla elige la misma red. Margen: pp de accuracy sobre la siguiente (A, presupuestos), pp "
            "sobre el umbral A−5 (C) o diferencia de distancia normalizada al ideal (K).", "",
-           "| Corrida | Regla | id | val acc | Margen | Estabilidad | Detalle |", "|---|---|---|---|---|---|---|"]
+           f"Si la estabilidad es < {100 * STABILITY_THRESHOLD:.0f}%, también se confirma la alternativa más frecuente de la "
+           "misma regla en las simulaciones (etiqueta `<regla>~`).", "",
+           "| Corrida | Regla | id | val acc | Margen | Estabilidad | Alternativa más frecuente | ¿Se confirma también? | Detalle |",
+           "|---|---|---|---|---|---|---|---|---|"]
     for ld, meta, a in analysed:
         for lab, r in a['per_rule'].items():
+            extra = r['stability'] < STABILITY_THRESHOLD and r['alt_id']
+            alt = f"{r['alt_id']} ({100 * r['alt_freq']:.0f}%)" if r['alt_id'] else '—'
             md.append(f"| {meta['algo']} {meta['run']} | {lab} | {r['id']} | {r['val_acc']:.2f} | "
-                      f"{r['gap']:.3f} | {100 * r['stability']:.0f}% | {r['note']} |")
+                      f"{r['gap']:.3f} | {100 * r['stability']:.0f}% | {alt} | "
+                      f"{'sí' if extra else 'no'} | {r['note']} |")
     names = list(analysed[0][2]['sensitivity']) if analysed else []
     md += ["", "## Sensibilidad a los parámetros fijados", "",
            "Red que elige cada regla afectada con cada variante (— = ninguna cambia) y Jaccard del frente frente al de "
@@ -405,6 +422,11 @@ def main():
             else:
                 detail.append(f"| {label} | {n['id']} | {n['val_acc']:.2f} | {n['params'] / 1e6:.3f} M | "
                               f"{n['macs'] / 1e6:.1f} |")
+        a_run = analysed[-1][2]
+        by_id = {m['id']: m for m in nets}
+        for lab, r in a_run['per_rule'].items():
+            if r['stability'] < STABILITY_THRESHOLD and r['alt_id']:
+                picked.setdefault(r['alt_id'], (by_id[r['alt_id']], []))[1].append(f"{lab}~")
         for cid, (n, labels) in picked.items():
             row = dict(n['row'])
             row['role'] = '+'.join(labels)
