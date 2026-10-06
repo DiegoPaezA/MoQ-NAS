@@ -920,7 +920,7 @@ solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se
 | Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
 | acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 (3×2); **relanzado 22:01 con 12 en paralelo (4×3)** | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
 | acc-FLOPs, confirmación (paso 4): 51 representantes × semillas 11–13 = 153 | dualgpu2, GPU 1 | 2026-10-06 10:42 (4×3), con visto bueno del usuario; watchdog `AFconf` | `launch_retrain_protocol.py --cases AF_std_biobj --candidates retrain_matrices/confirm_AF_std_biobj_F13v1c.csv --roles all --seeds 11 12 13 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
-| Caso 2 (C2_medmnist), screening de 180 redes | dualgpu2, GPU 1 | **pendiente**: solo cuando acc-FLOPs termine por completo (etapas 1–4) | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
+| Caso 2 (C2_medmnist), screening de 180 redes | **LIRA-Server (lira-150), GPUs 0 y 1** (cambio del 2026-10-06; antes previsto en dualgpu2) | 2026-10-06 15:07 (3×2 por GPU = 12); watchdog `C2` | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 0 1 --jobs-per-gpu 3 --workers-per-job 2` (python: `~/miniforge3/envs/moqnas/bin/python`) |
 
 **Estado de acc-FLOPs (2026-10-06):** screening terminado a las 05:41, con 147/147 redes OK y ningún fallo. Selección
 (pasos 2–3) hecha en el Mac con los datos completos: `retrain_matrices/confirm_AF_std_biobj_F13v1c.csv`, con 51
@@ -935,6 +935,25 @@ datasets de MedMNIST son idénticos en los dos servidores (mismos md5 de los `.n
 MedMNIST se copiaron de dualgpu1 a dualgpu2 (1 735 `training_params.txt`), y el dry-run en dualgpu2 da 36 trabajos y
 180 redes con P-Med (100 épocas, AdamW, wd 0.01, multistep, batch 128, fp16, sin augmentation). Antes del screening,
 un smoke test de MedMNIST con este perfil.
+
+**MedMNIST pasa a LIRA-Server (decisión del usuario, 2026-10-06).** Tercer servidor (`ssh LIRA-Server`, usuario
+`diego.paez`, 3× NVIDIA A30 de 24 GB compartidas, 64 CPUs, 188 GB de RAM). Se usan solo las GPUs 0 y 1. Así MedMNIST
+empieza ya, en paralelo con el Caso 1 y la confirmación de acc-FLOPs, y el caso entero sigue en un solo servidor y con
+un mismo modelo de GPU. En dualgpu2 ya no va MedMNIST después de acc-FLOPs.
+- **Entorno replicado de dualgpu2:** miniforge en `~/miniforge3`, entorno `moqnas` con Python 3.10.16 y las mismas
+  versiones (94 paquetes): torch 2.5.1 + CUDA 12.4, torchvision 0.20.1, numpy 1.26.4, scikit-learn 1.3.2, medmnist
+  3.0.1, etc. Se instaló con pip sin caché y ocupa 6.7 GB. Repo clonado de GitHub (rama `retrain-2026`; LIRA accede
+  a GitHub mediante el agente SSH reenviado).
+- **Datos verificados:** los cuatro datasets de MedMNIST tienen el mismo md5 que en dualgpu1 y dualgpu2, y los 1 806
+  archivos de las 36 corridas coinciden uno a uno con los del Mac.
+- **Smoke test** con P-Med en las GPUs 0 y 1: OK (ACC y AUC del evaluador oficial; AdamW, wd 0.01, batch 128, fp16,
+  sin augmentation).
+- **Disco:** `/home` es compartido y estaba al 96 % (16–34 GB libres según el momento, porque otros usuarios escriben
+  ahí). MedMNIST necesita ≈ 3 GB más para resultados (screening ≈ 0.5, confirmación ≈ 1.3, variante TA ≈ 1.3). Se
+  vigila el espacio libre en el monitoreo horario; si baja de ≈ 3 GB, se avisa al usuario. Si hiciera falta, dejar de
+  guardar `last.pt` reduciría los resultados a la mitad.
+- **Watchdog con dos GPUs** (commit `77aa439`): ante OOM baja a 4 entrenamientos en total (1 trabajo × 2 redes en
+  cada GPU). Probado en LIRA con un launcher falso.
 
 **Verificación contra los originales del Mac (2026-10-05):** las 36 corridas de MedMNIST del plan (MoQ-NAS en
 `data/medmnist/moqnas_last` y NSGA-II/III en `data/medmnist/NSGA`; 4 datasets × 3 algoritmos × 3 corridas) son
@@ -1032,6 +1051,8 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-05 | Elecciones inestables: si una regla mantiene su red en < 70 % de las 500 simulaciones de ruido, se confirma también la red que esa misma regla elige con más frecuencia entre las demás (etiqueta `<regla>~`); se reportan ambas y nunca se elige entre ellas con el test. Decidido antes de ver el test | §2 paso 3 |
 
 | 2026-10-05 | Orden por servidor: cada caso se cierra por completo (screening, selección y confirmación) antes de empezar el siguiente en la misma GPU; MedMNIST va en la GPU 1 de dualgpu2 después de cerrar acc-FLOPs | §4f |
+| 2026-10-06 | Visto bueno para la confirmación de acc-FLOPs (lanzada a las 10:42) | §4f |
+| 2026-10-06 | MedMNIST se ejecuta en LIRA-Server, en las GPUs 0 y 1, con un entorno replicado de dualgpu2 (sustituye a "MedMNIST en dualgpu2 después de acc-FLOPs"); screening lanzado a las 15:07 con 6 redes por GPU | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
