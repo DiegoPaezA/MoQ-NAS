@@ -929,6 +929,12 @@ MedMNIST se copiaron de dualgpu1 a dualgpu2 (1 735 `training_params.txt`), y el 
 180 redes con P-Med (100 épocas, AdamW, wd 0.01, multistep, batch 128, fp16, sin augmentation). Antes del screening,
 un smoke test de MedMNIST con este perfil.
 
+**Verificación contra los originales del Mac (2026-10-05):** las 36 corridas de MedMNIST del plan (MoQ-NAS en
+`data/medmnist/moqnas_last` y NSGA-II/III en `data/medmnist/NSGA`; 4 datasets × 3 algoritmos × 3 corridas) son
+exactamente las que hay en el Mac, sin corridas de más ni de menos. Los 1 806 archivos que necesita el retrain (36
+`log_params_evolution.txt`, 36 `pareto_history.pkl` y 1 734 `training_params.txt`, uno por red del CSV, incluidas las
+180 del screening) tienen el mismo md5 en el Mac y en dualgpu2.
+
 Los tiempos de entrenamiento no se comparan entre casos (servidor, carga de otros usuarios y temperatura distintos);
 dentro de un caso, sí. En acc-FLOPs las primeras 10 redes se entrenaron con 6 en paralelo y el resto con 12, así que
 su `training_time` tampoco es homogéneo dentro del caso: es un dato de costo, no de comparación.
