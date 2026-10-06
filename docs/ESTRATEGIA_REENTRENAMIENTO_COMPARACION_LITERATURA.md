@@ -919,6 +919,15 @@ solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se
 |---|---|---|---|
 | Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
 | acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 (3×2); **relanzado 22:01 con 12 en paralelo (4×3)** | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
+| Caso 2 (C2_medmnist), screening de 180 redes | dualgpu2, GPU 1 | **pendiente**: solo cuando acc-FLOPs termine por completo (etapas 1–4) | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
+
+**Orden en cada servidor (decisión del usuario, 2026-10-05):** un caso se cierra por completo antes de empezar el
+siguiente en la misma GPU: screening → selección (en el Mac) → confirmación con las semillas 11–13. En dualgpu2,
+MedMNIST se lanza solo cuando acc-FLOPs haya terminado también su confirmación. Preparado el 2026-10-05: los cuatro
+datasets de MedMNIST son idénticos en los dos servidores (mismos md5 de los `.npz`), las 36 corridas de búsqueda de
+MedMNIST se copiaron de dualgpu1 a dualgpu2 (1 735 `training_params.txt`), y el dry-run en dualgpu2 da 36 trabajos y
+180 redes con P-Med (100 épocas, AdamW, wd 0.01, multistep, batch 128, fp16, sin augmentation). Antes del screening,
+un smoke test de MedMNIST con este perfil.
 
 Los tiempos de entrenamiento no se comparan entre casos (servidor, carga de otros usuarios y temperatura distintos);
 dentro de un caso, sí. En acc-FLOPs las primeras 10 redes se entrenaron con 6 en paralelo y el resto con 12, así que
@@ -1008,6 +1017,8 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-05 | Metodología para el paper en `case of study paper/6_retraining_comparative_methodology.tex` (inglés) y `retrain_methodology_refs.bib`; cada referencia verificada en Google Scholar o, cuando Scholar bloqueó con CAPTCHA, en Crossref/DOI, arXiv, JMLR, PMLR o la web, con la fuente anotada en el `.bib` | repo de análisis |
 
 | 2026-10-05 | Elecciones inestables: si una regla mantiene su red en < 70 % de las 500 simulaciones de ruido, se confirma también la red que esa misma regla elige con más frecuencia entre las demás (etiqueta `<regla>~`); se reportan ambas y nunca se elige entre ellas con el test. Decidido antes de ver el test | §2 paso 3 |
+
+| 2026-10-05 | Orden por servidor: cada caso se cierra por completo (screening, selección y confirmación) antes de empezar el siguiente en la misma GPU; MedMNIST va en la GPU 1 de dualgpu2 después de cerrar acc-FLOPs | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
