@@ -104,6 +104,7 @@ profiles:
     learning_rate: 0.001
     weight_decay: 0.01
     lr_scheduler: multistep
+    num_workers: 4         # 2026-10-06: 8 -> 4 per loader (RAM on LIRA); does not change results without random augmentation
     data_augmentation: false
   medmnist_v2_adamw_ta: # Optional variant of P-Med, only if time allows (tag PMedW_TA): identical, plus TrivialAugmentWide
                         # (the augmentation of the F13 MedMNIST retrains). No flips or cutout: a horizontal flip changes
@@ -116,6 +117,7 @@ profiles:
     learning_rate: 0.001
     weight_decay: 0.01
     lr_scheduler: multistep
+    num_workers: 4         # 2026-10-06: 8 -> 4 per loader (RAM on LIRA); does not change results without random augmentation
     data_augmentation: true
     augmentation_policy: ta
   medmnist_v2:          # Exact MedMNIST v2 ResNet protocol (Adam lr 1e-3, no weight decay). Reference only: NOT used,
