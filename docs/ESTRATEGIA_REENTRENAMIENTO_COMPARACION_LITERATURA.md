@@ -252,19 +252,31 @@ evolutivos más citados.
 reglas que el Caso 1.** Los comparadores de MedMNIST (ResNet-18/50, auto-sklearn, AutoKeras, Google AutoML Vision) se
 entrenaron con el protocolo del benchmark, así que la comparación más justa es usar ese mismo protocolo en todo el caso,
 desde el screening (la selección y la confirmación deben hacerse con el mismo protocolo).
-- **Protocolo P-Med-A** (perfil `medmnist_v2`, tag `PMedA`): 100 épocas, Adam lr 1e-3, ×0.1 en las épocas 50 y 75,
-  batch 128, **sin augmentation**, checkpoint por mejor validación, splits oficiales, evaluador oficial (ACC y AUC).
-  Única diferencia conocida: fp16 (la precisión del caso); MedMNIST v2 no la indica.
-1. **Screening `strat5`, semilla 1, P-Med-A:** 5 redes por corrida (columna booleana `strat5` del CSV) → 36 corridas
+- **Protocolo P-Med** (perfil `medmnist_v2_adamw`, tag `PMedW`; decisión del usuario 2026-10-05): el esquema de las
+  ResNet de MedMNIST v2 (100 épocas, ×0.1 en las épocas 50 y 75, batch 128, **sin augmentation**, checkpoint por mejor
+  validación, splits y evaluador oficiales, ACC y AUC) con **AdamW** (lr 1e-3, weight decay 0.01, el de F13-v1), el
+  optimizador de todos los demás casos y de tus trabajos previos de MedMNIST. Diferencias declaradas con MedMNIST v2:
+  AdamW en lugar de Adam, y fp16. El perfil `medmnist_v2` (Adam exacto) queda solo como referencia, sin uso.
+1. **Screening `strat5`, semilla 1, P-Med:** 5 redes por corrida (columna booleana `strat5` del CSV) → 36 corridas
    × 5 = **180 redes**.
-   `python launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2 --seeds 1 --tag PMedA --gpus 1`
-2. **Re-Pareto y representantes** con `scripts/select_retrain_representatives.py --case C2_medmnist --tag PMedA`:
+   `python launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 1`
+2. **Re-Pareto y representantes** con `scripts/select_retrain_representatives.py --case C2_medmnist --tag PMedW`:
    frente (error_val, params), reglas `A`, `K` y `C` (sin presupuestos: los comparadores son arquitecturas fijas).
-3. **Confirmación con las semillas 11, 12 y 13, P-Med-A**, igual que en el Caso 1 (decisión 2026-10-05). Media ± sd
+3. **Confirmación con las semillas 11, 12 y 13, P-Med**, igual que en el Caso 1 (decisión 2026-10-05). Media ± sd
    sobre semillas por red, y sobre las 3 corridas de búsqueda por algoritmo. MedMNIST v2 reporta una corrida por método.
-4. **Variante opcional con data augmentation**, solo si el tiempo lo permite: los mismos representantes, mismo
-   protocolo y semillas, con augmentation. Pendiente de definir cuál (TrivialAugment, como en los F13 de MedMNIST,
-   u otra); se reporta en filas separadas y nunca se mezcla con P-Med-A.
+4. **Variante opcional con augmentation**, solo si el tiempo lo permite (perfil `medmnist_v2_adamw_ta`, tag
+   `PMedW_TA`): los mismos representantes y semillas, más TrivialAugmentWide, la augmentation de los F13 de
+   MedMNIST. Sin flips ni cutout, por las simetrías de cada dataset (tabla del 2026-10-04, ahora en el paper):
+
+   | Dataset | Contenido | Flip horizontal | Flip vertical | Crop con padding | Cutout |
+   |---|---|---|---|---|---|
+   | PathMNIST | parches de histología de colon | válido | válido | válido | aceptable, más pequeño (~8 px) |
+   | TissueMNIST | células de corteza renal | válido | válido | válido | aceptable, más pequeño |
+   | OCTMNIST | cortes de retina por OCT | probablemente válido | no (orientación de las capas) | desplazamiento pequeño | arriesgado (lesiones pequeñas) |
+   | OrganAMNIST | cortes axiales de CT abdominal | no (cambia izquierda/derecha) | no | desplazamiento pequeño | arriesgado |
+
+   Se reporta en filas separadas y nunca se mezcla con P-Med. Una política por dataset (flips permitidos, crop
+   pequeño) necesitaría su propio piloto en los 4 datasets; no se plantea ahora.
 
 Costo: 100 épocas en lugar de 300, así que cada entrenamiento cuesta ≈ 1/3 que en F13-v1; estimarlo con el ritmo
 medido en el screening antes de lanzar la confirmación.

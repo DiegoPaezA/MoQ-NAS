@@ -25,8 +25,8 @@ Usage:
   python scripts/select_retrain_representatives.py --case C1_triobj \\
       --runs-root ../retrain_2026/cluster/dualgpu1/retrain_2026/runs \\
       --out retrain_matrices/confirm_C1_triobj_F13v1c.csv
-  python scripts/select_retrain_representatives.py --case C2_medmnist --tag PMedA \\
-      --runs-root <mirror>/retrain_2026/runs --out retrain_matrices/confirm_C2_medmnist_PMedA.csv
+  python scripts/select_retrain_representatives.py --case C2_medmnist --tag PMedW \\
+      --runs-root <mirror>/retrain_2026/runs --out retrain_matrices/confirm_C2_medmnist_PMedW.csv
   (--partial selects only in the runs whose screening is complete, for checks before the end;
    --objectives overrides the front objectives, e.g. 'val_err params cuda_time' for the search objectives.)
 """
