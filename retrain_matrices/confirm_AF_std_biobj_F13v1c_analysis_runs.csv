@@ -1,0 +1,10 @@
+case,dataset,algo,run,n_screened,front_size,n_dominated,borderline_out,borderline_in,spearman,kendall,proxy_best_is_A,proxy_reps,proxy_reps_kept,sens_C_3_pp,sens_C_7_pp,sens_K_log
+AF_std_biobj,cifar10,moqnas,moqnas_repeat_1,14,7,7,0,0,0.821,0.707,False,2,1,C,C,K
+AF_std_biobj,cifar10,moqnas,moqnas_repeat_2,12,7,5,0,1,0.594,0.455,False,3,1,C,C,none
+AF_std_biobj,cifar10,moqnas,moqnas_repeat_3,13,8,5,0,1,0.841,0.692,False,2,0,none,C,K
+AF_std_biobj,cifar10,nsga2,nsga2_repeat_1,22,10,12,5,1,0.948,0.798,False,3,1,C,C,K
+AF_std_biobj,cifar10,nsga2,nsga2_repeat_2,15,14,1,0,5,0.996,0.981,True,3,2,C,C,K
+AF_std_biobj,cifar10,nsga2,nsga2_repeat_3,19,15,4,0,3,0.988,0.953,True,3,2,C,C,K
+AF_std_biobj,cifar10,nsga3,nsga3_repeat_1,17,13,4,3,5,0.983,0.926,False,3,1,C,C,none
+AF_std_biobj,cifar10,nsga3,nsga3_repeat_2,17,9,8,3,2,0.956,0.853,True,3,2,none,C,K
+AF_std_biobj,cifar10,nsga3,nsga3_repeat_3,18,13,5,2,2,0.975,0.895,True,3,2,C,none,K
