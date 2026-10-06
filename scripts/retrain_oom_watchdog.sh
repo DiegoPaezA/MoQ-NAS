@@ -3,19 +3,22 @@
 #
 # Every minute (WATCHDOG_INTERVAL seconds) it counts out-of-memory failures recorded in retrain_failures_<tag>.csv of the
 # case's run folders. On the first new one it stops the launcher (whole process tree) and relaunches
-# the same screening with 4 concurrent trainings (--jobs-per-gpu 2 --workers-per-job 2); candidates
+# the same screening with 4 concurrent trainings in total (2 jobs x 2 workers on one GPU, 1 x 2 on each of
+# two GPUs); candidates
 # already OK are skipped and the failed ones are retrained. It reduces only once: later OOMs are
 # logged, not acted on. It exits when the launcher has finished.
 #
 # Usage (from the MoQ-NAS repo root, detached):
-#   setsid nohup bash scripts/retrain_oom_watchdog.sh <name> <runs_subdir> <gpu> <launcher args...> \
+#   setsid nohup bash scripts/retrain_oom_watchdog.sh <name> <runs_subdir> <gpu[,gpu...]> <launcher args...> \
 #       > retrain_2026/watchdog/<name>.out 2>&1 < /dev/null &
 # Example:
 #   ... oom_watchdog.sh AF retrain_2026/runs/experiment_cifar10_acc_flops 1 \
 #       --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c
 cd "$(dirname "$0")/.." || exit 1
 NAME=$1; RUNS=$2; GPU=$3; shift 3; ARGS=("$@")
-PY=${WATCHDOG_PYTHON:-$HOME/miniconda3/envs/moqnas/bin/python}
+GPUS=(${GPU//,/ })                       # one or more GPU indices, e.g. "1" or "0,1"
+JOBS_REDUCED=$(( ${#GPUS[@]} > 1 ? 1 : 2 ))  # 4 concurrent trainings in total after an OOM
+PY=${WATCHDOG_PYTHON:-$( [ -x "$HOME/miniconda3/envs/moqnas/bin/python" ] && echo "$HOME/miniconda3/envs/moqnas/bin/python" || echo "$HOME/miniforge3/envs/moqnas/bin/python" )}
 INTERVAL=${WATCHDOG_INTERVAL:-60}
 TAG=$(printf '%s\n' "${ARGS[@]}" | grep -A1 -x -- '--tag' | tail -1)
 CASE=$(printf '%s\n' "${ARGS[@]}" | grep -A1 -x -- '--cases' | tail -1)
@@ -38,9 +41,13 @@ PY
 launcher_pid() { pgrep -u "$USER" -f "^[^ ]*python[^ ]* launch_retrain_protocol.py --cases $CASE" | head -1; }
 descendants() { local c; for c in $(ps -o pid= --ppid "$1"); do echo "$c"; descendants "$c"; done; }
 ours_on_gpu() {
-  local u; u=$(nvidia-smi -i "$GPU" --query-gpu=uuid --format=csv,noheader)
-  nvidia-smi --query-compute-apps=pid,gpu_uuid --format=csv,noheader | grep "$u" |
-    while IFS=, read -r p _; do ps -o user= -p "$p"; done | grep -c "^$USER$"
+  local g u n=0
+  for g in "${GPUS[@]}"; do
+    u=$(nvidia-smi -i "$g" --query-gpu=uuid --format=csv,noheader)
+    n=$((n + $(nvidia-smi --query-compute-apps=pid,gpu_uuid --format=csv,noheader | grep "$u" |
+      while IFS=, read -r p _; do ps -o user= -p "$p"; done | grep -c "^$USER$")))
+  done
+  echo "$n"
 }
 
 stop_launcher() {
@@ -53,7 +60,7 @@ stop_launcher() {
   done
   for p in $all; do kill -0 "$p" 2>/dev/null && kill -9 "$p"; done
   for i in $(seq 1 30); do [ "$(ours_on_gpu)" = 0 ] && break; sleep 2; done
-  log "stopped launcher $l ($(echo $all | wc -w) processes); ours on GPU$GPU now: $(ours_on_gpu)"
+  log "stopped launcher $l ($(echo $all | wc -w) processes); ours on GPU(s) $GPU now: $(ours_on_gpu)"
 }
 
 base=$(oom_count); reduced=0; beat=0
@@ -70,10 +77,10 @@ while true; do
     if [ $reduced = 0 ]; then
       log "OOM detected ($base -> $n rows). Reducing to 4 concurrent trainings."
       stop_launcher "$l"
-      setsid nohup $PY launch_retrain_protocol.py "${ARGS[@]}" --gpus "$GPU" --jobs-per-gpu 2 --workers-per-job 2 \
+      setsid nohup $PY launch_retrain_protocol.py "${ARGS[@]}" --gpus "${GPUS[@]}" --jobs-per-gpu "$JOBS_REDUCED" --workers-per-job 2 \
         > "retrain_2026/watchdog/${NAME}_master_4.log" 2>&1 < /dev/null &
       sleep 20
-      log "relaunched with 2x2: launcher=$(launcher_pid)"
+      log "relaunched with 4 concurrent trainings (${#GPUS[@]} GPU(s) x $JOBS_REDUCED jobs x 2 workers): launcher=$(launcher_pid)"
       reduced=1
     else
       log "OOM again at 4 concurrent ($base -> $n rows); not acting, check manually."
@@ -81,5 +88,5 @@ while true; do
     base=$n
   fi
   beat=$((beat + 1))
-  if [ $((beat % 30)) = 0 ]; then log "alive: launcher=$l OOM rows=$n ours on GPU$GPU=$(ours_on_gpu)"; fi
+  if [ $((beat % 30)) = 0 ]; then log "alive: launcher=$l OOM rows=$n ours on GPU(s) $GPU=$(ours_on_gpu)"; fi
 done
