@@ -919,13 +919,14 @@ solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se
 |---|---|---|---|
 | Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
 | acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 (3×2); **relanzado 22:01 con 12 en paralelo (4×3)** | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
+| acc-FLOPs, confirmación (paso 4): 51 representantes × semillas 11–13 = 153 | dualgpu2, GPU 1 | 2026-10-06 10:42 (4×3), con visto bueno del usuario; watchdog `AFconf` | `launch_retrain_protocol.py --cases AF_std_biobj --candidates retrain_matrices/confirm_AF_std_biobj_F13v1c.csv --roles all --seeds 11 12 13 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
 | Caso 2 (C2_medmnist), screening de 180 redes | dualgpu2, GPU 1 | **pendiente**: solo cuando acc-FLOPs termine por completo (etapas 1–4) | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
 
 **Estado de acc-FLOPs (2026-10-06):** screening terminado a las 05:41, con 147/147 redes OK y ningún fallo. Selección
 (pasos 2–3) hecha en el Mac con los datos completos: `retrain_matrices/confirm_AF_std_biobj_F13v1c.csv`, con 51
 representantes (MoQ-NAS 11, NSGA-II 22, NSGA-III 18; 12 de ellas por la regla de inestabilidad), es decir, 153
 entrenamientos con las semillas 11–13. El informe y el análisis están en `confirm_AF_std_biobj_F13v1c_report.md` y en
-`_analysis_{runs,rules}.csv`. La confirmación (paso 4) queda a la espera del visto bueno del usuario.
+`_analysis_{runs,rules}.csv`. El usuario dio el visto bueno y la confirmación (paso 4) se lanzó el 2026-10-06 a las 10:42.
 
 **Orden en cada servidor (decisión del usuario, 2026-10-05):** un caso se cierra por completo antes de empezar el
 siguiente en la misma GPU: screening → selección (en el Mac) → confirmación con las semillas 11–13. En dualgpu2,
