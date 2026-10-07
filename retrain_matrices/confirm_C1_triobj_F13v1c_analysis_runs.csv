@@ -1,0 +1,10 @@
+case,dataset,algo,run,n_screened,front_size,n_dominated,borderline_out,borderline_in,spearman,kendall,proxy_best_is_A,proxy_reps,proxy_reps_kept,sens_C_3_pp,sens_C_7_pp,sens_K_log,sens_plus_Time_CUDA
+C1_triobj,cifar10,moqnas,exp22_repeat_1,10,9,1,0,1,0.952,0.867,True,3,3,C,C,K,K
+C1_triobj,cifar10,moqnas,exp22_repeat_2,10,9,1,0,1,0.927,0.822,True,3,1,C,C,K,none
+C1_triobj,cifar10,moqnas,exp22_repeat_3,10,8,2,0,0,0.927,0.822,True,3,3,C,C,K,K
+C1_triobj,cifar10,nsga2,exp4_repeat_1,10,7,3,1,0,0.900,0.764,False,3,2,none,C,none,K
+C1_triobj,cifar10,nsga2,exp4_repeat_2,10,9,1,0,2,0.709,0.556,True,2,2,C,none,none,K
+C1_triobj,cifar10,nsga2,exp4_repeat_3,10,8,2,2,1,0.851,0.719,True,3,3,C,C,K,none
+C1_triobj,cifar10,nsga3,exp1_repeat_1,10,9,1,0,1,0.697,0.600,True,3,3,C,C,K,K
+C1_triobj,cifar10,nsga3,exp1_repeat_2,10,9,1,0,1,0.964,0.911,True,2,1,C,C,K,K
+C1_triobj,cifar10,nsga3,exp1_repeat_3,10,9,1,0,1,0.818,0.644,True,3,1,none,C,K,K
