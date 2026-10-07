@@ -67,7 +67,7 @@ rows = list(csv.DictReader(open(sys.argv[1])))
 print('representatives by algorithm:', dict(collections.Counter(r['algo'] for r in rows)), '| total', len(rows),
       '| trainings with 3 seeds:', 3 * len(rows))
 for line in open(sys.argv[2]):
-    if line.startswith('Estabilidad media por regla') or line.startswith('| moqnas |') or line.startswith('| nsga'):
+    if line.startswith(('Estabilidad media por regla', '| moqnas |', '| nsga2 |', '| nsga3 |')):
         print(line.rstrip())
 PY
 
