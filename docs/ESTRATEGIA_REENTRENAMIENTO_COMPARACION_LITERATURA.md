@@ -943,8 +943,12 @@ empieza ya, en paralelo con el Caso 1 y la confirmación de acc-FLOPs, y el caso
 un mismo modelo de GPU. En dualgpu2 ya no va MedMNIST después de acc-FLOPs.
 - **Entorno replicado de dualgpu2:** miniforge en `~/miniforge3`, entorno `moqnas` con Python 3.10.16 y las mismas
   versiones (94 paquetes): torch 2.5.1 + CUDA 12.4, torchvision 0.20.1, numpy 1.26.4, scikit-learn 1.3.2, medmnist
-  3.0.1, etc. Se instaló con pip sin caché y ocupa 6.7 GB. Repo clonado de GitHub (rama `retrain-2026`; LIRA accede
-  a GitHub mediante el agente SSH reenviado).
+  3.0.1, etc. Se instaló con pip sin caché y ocupa 6.7 GB. Repo clonado de GitHub (rama `retrain-2026`).
+- **Acceso a GitHub desde LIRA sin la sesión del Mac (2026-10-07):** la clave antigua `~/.ssh/github_ssh` tiene
+  passphrase y no sirve sin alguien que la escriba. Se creó `~/.ssh/lira_github_ed25519`, sin passphrase; el usuario la
+  registró en su cuenta de GitHub como SSH key, y solo el repo de LIRA la usa (`git config core.sshCommand "ssh -i
+  ~/.ssh/lira_github_ed25519 -o IdentitiesOnly=yes"`, sin tocar la configuración ssh general). Fetch y push probados
+  sin el agente.
 - **Datos verificados:** los cuatro datasets de MedMNIST tienen el mismo md5 que en dualgpu1 y dualgpu2, y los 1 806
   archivos de las 36 corridas coinciden uno a uno con los del Mac.
 - **Smoke test** con P-Med en las GPUs 0 y 1: OK (ACC y AUC del evaluador oficial; AdamW, wd 0.01, batch 128, fp16,
@@ -1076,7 +1080,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-06 | Guardar cada semilla en cuanto termina y saltarla al relanzar (no perder semillas completadas si hay un corte) | §4f |
 | 2026-10-07 | Caso 1: al terminar el screening se sigue **automáticamente**, sin esperar visto bueno: selección (pasos 2–3) en el Mac y confirmación con semillas 11–13 en la GPU 1 de dualgpu1 (3×2, watchdog `C1conf`), avisando al usuario de lo elegido. Solo se para si el screening tiene fallos o la selección se niega por redes faltantes. Para acc-FLOPs y MedMNIST se sigue pidiendo visto bueno | §4f |
 | 2026-10-07 | Como la sesión local se cierra, la continuación automática del Caso 1 corre **en dualgpu1** con `scripts/retrain_auto_confirm.sh C1 C1_triobj 90 1 3 2`: espera a que termine el screening, comprueba 90/90 OK sin fallos, hace la selección en el servidor, la commitea y la sube a GitHub, y lanza la confirmación con el watchdog `C1conf`. Estado en `retrain_2026/auto/C1.status`. **Queda pendiente bajar los resultados al Mac** y registrarlo en este documento en la siguiente sesión | §4f |
-| 2026-10-07 | MedMNIST (LIRA) también sigue **automáticamente** al terminar su screening: `scripts/retrain_auto_confirm.sh C2 C2_medmnist 180 0,1 3 3 PMedW medmnist_v2_adamw` comprueba 180/180 OK sin fallos, hace la selección en LIRA (reglas A, K y C; ≈ 125 representantes) y lanza la confirmación con semillas 11–13 en las GPUs 0 y 1 (9+9) con el watchdog `C2conf`. LIRA no puede hacer push a GitHub sin el agente SSH: el commit de la selección queda local en LIRA y hay que traerlo con `git bundle` en la siguiente sesión. Estado en `retrain_2026/auto/C2.status` de LIRA. acc-FLOPs sigue necesitando visto bueno | §4f |
+| 2026-10-07 | MedMNIST (LIRA) también sigue **automáticamente** al terminar su screening: `scripts/retrain_auto_confirm.sh C2 C2_medmnist 180 0,1 3 3 PMedW medmnist_v2_adamw` comprueba 180/180 OK sin fallos, hace la selección en LIRA (reglas A, K y C; ≈ 125 representantes) y lanza la confirmación con semillas 11–13 en las GPUs 0 y 1 (9+9) con el watchdog `C2conf`. LIRA hace push a GitHub sin necesidad del agente SSH (clave propia `~/.ssh/lira_github_ed25519`, ver más abajo). Estado en `retrain_2026/auto/C2.status` de LIRA. acc-FLOPs sigue necesitando visto bueno | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
