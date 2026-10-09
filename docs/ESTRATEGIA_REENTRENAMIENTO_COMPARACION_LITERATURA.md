@@ -1170,8 +1170,8 @@ un patrón con el texto del comando coincide con la propia sesión.
   **Corrección (2026-10-09):** la afirmación de que el Mac no puede comunicarse con GitHub venía de una nota del
   2026-10-03 y ya no es cierta. Comprobado hoy: `gh` está instalado, la sesión es de `DiegoPaezA` (alcance `repo`),
   hay un credential helper del llavero y `git ls-remote origin` por HTTPS responde con `29c586a`. La lectura funciona;
-  el `push` desde el Mac no se ha probado todavía (se evita hasta hacer un commit propio). Queda el flujo con bundle
-  como alternativa, pero ya no es necesario.
+  el `push` desde el Mac también funciona (probado con `c075ac8`). El flujo con bundle queda como alternativa, pero ya
+  no es necesario.
 - **No cambiar el código que afecta al entrenamiento mientras haya un screening corriendo**: el launcher arranca un
   `retrain_parallel.py` nuevo por cada trabajo, y sus workers (`spawn`) vuelven a importar el código del disco, así que
   un `git pull` a mitad del screening afecta a las redes que empiezan después. Solo se pueden traer a mitad de
