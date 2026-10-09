@@ -715,6 +715,36 @@ python retrain_parallel.py --experiment_path <exp_root>/exp22_repeat_1 \
 - El paper dice que todos los experimentos usan "FP16 mixed precision". Las corridas acc-FLOPs usaron **bf16**.
   Corregir el texto (protocolo común o descripción de la ablación) e indicar la precisión del retrain por caso.
 
+### 4.13 Fuga de descriptores de archivo en los DataLoader del retrain (CRÍTICO en corridas largas; arreglado en `29c586a`)
+- **Síntoma:** `OSError: [Errno 24] Too many open files` en un proceso de `retrain_parallel` tras ≈ 20 entrenamientos
+  seguidos. La red falla en todas sus semillas, porque el proceso ya está saturado. El trabajo sigue con las demás y
+  termina con rc=2. Apareció en fairness R1 el 2026-10-08 (39 semillas). Detalle y diagnóstico en §4f.
+- **Causa:**
+  - `core/cnn/input.py` activa `persistent_workers=True` en la fase `retrain`, y `pin_memory=True` en CUDA. Con esa
+    combinación, torch registra cada worker en `atexit` (`torch/utils/data/dataloader.py:1181`, `_clean_up_worker`)
+    y su objeto `Process` vive hasta que termina el intérprete.
+  - `retrain_parallel.py` fija el modo `spawn`, así que cada `Process` retiene 2 extremos de pipe
+    (`multiprocessing/popen_spawn_posix.py:53-54`).
+  - Cada semilla crea 3 loaders con `num_workers` workers: con 8 workers son ≈ 48 descriptores por entrenamiento que
+    no se cierran nunca. `gc.collect()` no los libera, porque la referencia de `atexit` sigue viva.
+- **Alcance:** todo el reentrenamiento, en cualquier caso. Con `num_workers=8` (Caso 1, acc-FLOPs y fairness), un proceso
+  aguanta ≈ 18–20 entrenamientos (límite blando de 1024 en dualgpu1/2). Fairness falla antes porque sus entrenamientos
+  son cortos y cada proceso encadena muchos. La búsqueda no está afectada: no usa `persistent_workers`.
+- **Arreglo (`29c586a`):** `retrain_parallel.py::_release_loaders()` se llama en el `finally` de cada semilla.
+  - Para los workers de los 3 loaders, los espera y hace `Process.close()`, que libera los pipes.
+  - Retira las entradas de `atexit` y llama a `gc.collect()`.
+  - No toca datos, semillas, orden de lotes ni resultados: comprobado bit a bit en dualgpu2 (§4f).
+  - **Condición de uso:** llamarla solo cuando ningún otro DataLoader del mismo proceso esté iterando. En
+    `retrain_parallel` siempre se cumple, porque cada proceso entrena una semilla a la vez y los loaders de
+    `FairnessMetric` se crean y se agotan dentro de `compute()`.
+- **Si vuelve a pasar** (otro script que reutilice procesos):
+  1. Mirar `ls /proc/<pid>/fd | wc -l` y el tipo de descriptor: `pipe:` huérfanos indican esta fuga.
+  2. Repetir la prueba corta de `retrain_2026/fdtest/run_test.sh` en dualgpu2 (1 época, tag aparte).
+  3. Para localizar el sitio, rastrear `os.pipe` con el `sitecustomize` de `retrain_2026/fdtest/trace/`.
+  - Subir `ulimit -n` solo da margen; no arregla la fuga.
+- **Vigilancia:** el monitor horario muestra el máximo de descriptores por proceso nuestro en los tres servidores.
+  Con el arreglo debe quedarse estable (≈ 120–160 en fairness).
+
 ---
 
 ## 4b. Smoke tests en el Mac (2026-10-03)
@@ -920,14 +950,126 @@ solo servidor, y siempre en la GPU 1, para que los tres algoritmos de un caso se
 | Caso 1 (C1_triobj), 84 redes + 6 del piloto 2 | dualgpu1, GPU 1 | 2026-10-04 19:40 | `launch_retrain_protocol.py --cases C1_triobj --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
 | acc-FLOPs (AF_std_biobj), 147 redes | dualgpu2, GPU 1 | 2026-10-04 20:14 (3×2); **relanzado 22:01 con 12 en paralelo (4×3)** | `launch_retrain_protocol.py --cases AF_std_biobj --roles all --seeds 1 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
 | acc-FLOPs, confirmación (paso 4): 51 representantes × semillas 11–13 = 153 | dualgpu2, GPU 1 | 2026-10-06 10:42 (4×3), con visto bueno del usuario; watchdog `AFconf` | `launch_retrain_protocol.py --cases AF_std_biobj --candidates retrain_matrices/confirm_AF_std_biobj_F13v1c.csv --roles all --seeds 11 12 13 --tag F13v1c --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` |
-| Caso 1, confirmación (paso 4), automática al acabar el screening (≈ 45 representantes × semillas 11–13 ≈ 135) | dualgpu1, GPU 1 | pendiente de que termine el screening; watchdog `C1conf` | `launch_retrain_protocol.py --cases C1_triobj --candidates retrain_matrices/confirm_C1_triobj_F13v1c.csv --roles all --seeds 11 12 13 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
+| Caso 1, confirmación (paso 4), automática al acabar el screening: 46 representantes × semillas 11–13 = 138 | dualgpu1, GPU 1 | 2026-10-07 17:10 (3×2), lanzada sola por `retrain_auto_confirm.sh`; watchdog `C1conf` | `launch_retrain_protocol.py --cases C1_triobj --candidates retrain_matrices/confirm_C1_triobj_F13v1c.csv --roles all --seeds 11 12 13 --tag F13v1c --gpus 1 --jobs-per-gpu 3 --workers-per-job 2` |
+| Caso 2 (MedMNIST), confirmación (paso 4), automática al acabar el screening: 128 representantes × semillas 11–13 = 384 | LIRA-Server, GPUs 0 y 1 | 2026-10-07 20:17 (9+9), lanzada sola por `retrain_auto_confirm.sh`; watchdog `C2conf` | `launch_retrain_protocol.py --cases C2_medmnist --candidates retrain_matrices/confirm_C2_medmnist_PMedW.csv --roles all --profile medmnist_v2_adamw --seeds 11 12 13 --tag PMedW --gpus 0 1 --jobs-per-gpu 3 --workers-per-job 3` |
 | Caso 2 (C2_medmnist), screening de 180 redes | **LIRA-Server (lira-150), GPUs 0 y 1** (cambio del 2026-10-06; antes previsto en dualgpu2) | 2026-10-06 15:07 (6+6); **relanzado 15:44 con 9+9 y 4 workers**; watchdog `C2` | `launch_retrain_protocol.py --cases C2_medmnist --roles strat5 --profile medmnist_v2_adamw --seeds 1 --tag PMedW --gpus 0 1 --jobs-per-gpu 3 --workers-per-job 3` (python: `~/miniforge3/envs/moqnas/bin/python`) |
+| Caso 3 (fairness), **R1**: 121 redes únicas del frente (exp3: 7+10+7, exp2: 31+27+39) × semillas 1–3 = 363 entrenamientos, perfil `fairness_R1`, fp16 | dualgpu2, GPU 1 | 2026-10-08 01:05 (4×3 = 12 en paralelo), con visto bueno del usuario; watchdog `FAIRR1` | `launch_retrain_protocol.py --cases C3_fairness_two C3_fairness_three --roles all --profile fairness_R1 --seeds 1 2 3 --tag fairR1 --gpus 1 --jobs-per-gpu 4 --workers-per-job 3` (log `retrain_2026/fairR1/fairR1_master.log`) |
+| Caso 3, R1, **baselines**: resnet18, resnet50, efficientnet_v2_s, convnext_tiny, mobilenet_v3_large × semillas 1–3 = 15, desde cero, mismo protocolo (fp16, batch 64, wd 1e-4, sin scheduler, 10 000 imágenes, 50 épocas) | dualgpu2, GPU 1 (secuencial) | 2026-10-08 01:05 | `PATH=$HOME/miniconda3/envs/moqnas/bin:$PATH RUN_TAG=fairR1 bash run_fairness_baseline.sh --from_scratch` (log `retrain_2026/fairR1/baselines_fairR1.log`; salida en `checkpoints/baseline_scratch_limit_96_fairR1/seed_N`) |
+| Caso 3, R1, **relanzado** tras arreglar la fuga de descriptores (commit `29c586a`): 54 redes pendientes en 3 trabajos (exp2_repeat_1: 13 con fallo `Errno 24`; exp2_repeat_2: 14; exp2_repeat_3: 27), ≤ 162 entrenamientos (las semillas ya OK se saltan) | dualgpu2, GPU 1 | 2026-10-09 01:27 (4×3), con visto bueno del usuario; watchdog `FAIRR1` nuevo | el mismo comando de R1 (log `retrain_2026/fairR1/fairR1_master_relaunch.log`) |
 
 **Estado de acc-FLOPs (2026-10-06):** screening terminado a las 05:41, con 147/147 redes OK y ningún fallo. Selección
 (pasos 2–3) hecha en el Mac con los datos completos: `retrain_matrices/confirm_AF_std_biobj_F13v1c.csv`, con 51
 representantes (MoQ-NAS 11, NSGA-II 22, NSGA-III 18; 12 de ellas por la regla de inestabilidad), es decir, 153
 entrenamientos con las semillas 11–13. El informe y el análisis están en `confirm_AF_std_biobj_F13v1c_report.md` y en
 `_analysis_{runs,rules}.csv`. El usuario dio el visto bueno y la confirmación (paso 4) se lanzó el 2026-10-06 a las 10:42.
+
+**Estado del Caso 1 (2026-10-07/08):** screening terminado a las 17:09 del 2026-10-07 (90/90 OK, 0 filas de fallo;
+unas 70 h de reloj para las 90 redes). La continuación automática (`retrain_auto_confirm.sh`, commit `8a915e7`)
+hizo la selección en dualgpu1 con las 9 corridas completas (frente `(val_err, params)`, presupuestos de 0.25, 0.5, 1 y
+1.5 M parámetros) y la subió a GitHub (commit `4f526ce`): `retrain_matrices/confirm_C1_triobj_F13v1c.csv`, con **46
+representantes** (MoQ-NAS 13, NSGA-II 18, NSGA-III 15; 13 de ellos con etiqueta `~`, es decir, la alternativa más
+frecuente de una regla inestable), o sea 138 entrenamientos con las semillas 11–13. La confirmación se lanzó sola a las
+17:10 (GPU 1, 3×2, watchdog `C1conf`). Informe y análisis: `confirm_C1_triobj_F13v1c_report.md` y `_analysis_{runs,rules}.csv`.
+Análisis de la selección (solo con validación, 500 simulaciones con ruido de 0.36 pp):
+
+| Algoritmo | Corridas | ρ Spearman proxy→val | τ Kendall | Dominadas tras el retrain / cribadas | Frontera fuera / dentro | Mejor proxy = A | Representantes proxy conservados |
+|---|---|---|---|---|---|---|---|
+| MoQ-NAS | 3 | 0.94 | 0.84 | 4 / 30 | 0 / 2 | 3 / 3 | 7 / 9 |
+| NSGA-II | 3 | 0.82 | 0.68 | 6 / 30 | 3 / 3 | 2 / 3 | 7 / 8 |
+| NSGA-III | 3 | 0.83 | 0.72 | 3 / 30 | 0 / 3 | 3 / 3 | 5 / 8 |
+
+Estabilidad media por regla: A 89 %, K 73 %, C 71 %, presupuestos 0.25 M 99 %, 0.5 M 91 %, 1 M 89 % y 1.5 M 90 %.
+
+**Estado de MedMNIST, caso 2 (2026-10-07/08):** screening terminado a las 20:16 del 2026-10-07 en LIRA (180/180 OK,
+0 filas de fallo; unas 28 h desde el relanzamiento 9+9 de las 15:44 del 2026-10-06). La selección se hizo en LIRA con las 36 corridas completas (frente `(val_err, params)`,
+reglas A, K y C, sin presupuestos): `retrain_matrices/confirm_C2_medmnist_PMedW.csv`, con **128 representantes**
+(MoQ-NAS 42, NSGA-II 41, NSGA-III 45; por dataset: PathMNIST 34, OCTMNIST 34, OrganAMNIST 32, TissueMNIST 28; 30 con
+etiqueta `~`), es decir, 384 entrenamientos con las semillas 11–13. La confirmación se lanzó sola a las 20:17 (GPUs 0
+y 1, 9+9, watchdog `C2conf`). Commit de la selección: `27df0bf` en LIRA, publicado como `2f4caf5` (ver abajo).
+
+| Algoritmo | Corridas | ρ Spearman proxy→val | τ Kendall | Dominadas tras el retrain / cribadas | Frontera fuera / dentro | Mejor proxy = A | Representantes proxy conservados |
+|---|---|---|---|---|---|---|---|
+| MoQ-NAS | 12 | 0.95 | 0.90 | 12 / 60 | 4 / 7 | 11 / 12 | 22 / 32 |
+| NSGA-II | 12 | 0.89 | 0.82 | 12 / 60 | 5 / 8 | 10 / 12 | 25 / 34 |
+| NSGA-III | 12 | 0.78 | 0.68 | 9 / 60 | 5 / 16 | 10 / 12 | 23 / 35 |
+
+Estabilidad media por regla: A 82 %, K 68 %, C 93 %.
+
+**Sincronización de código y resultados (2026-10-08):** el push de LIRA de las 20:16 del 2026-10-07 fue rechazado
+(`fetch first`) porque dualgpu1 ya había publicado `4f526ce`; la autenticación funcionaba, y `retrain_auto_confirm.sh`
+solo avisa del fallo y no reintenta. Se resolvió a mano con `git pull --rebase origin retrain-2026` y push en LIRA
+(los dos commits tocan CSV distintos, sin conflictos). Los tres servidores (dualgpu1, dualgpu2, LIRA) y el repo
+`MoQ-NAS` del Mac quedaron en `2f4caf5`, igual que GitHub; el Mac pudo hacer `git fetch` por HTTPS. Como los commits
+solo añaden CSV y reportes en `retrain_matrices/`, se actualizaron los servidores con `git pull --ff-only` sin
+detener los launchers ni los watchdogs. Los resultados de los tres servidores se bajaron al Mac con
+`scripts/sync_retrain_results.sh dualgpu1 dualgpu2 LIRA-Server` (espejo de LIRA en
+`retrain_2026/cluster/LIRA-Server/`; sin pesos).
+
+**acc-FLOPs: confirmación terminada (2026-10-08 00:20 hora de dualgpu):** 153/153 entrenamientos OK (51 representantes × semillas 11–13), 0 filas de fallo, sin OOM; el launcher y el watchdog `AFconf` salieron solos. Resultados bajados al Mac con `sync_retrain_results.sh dualgpu2`. No se lanzó nada más. **Análisis de test (Parte A del paper):** `scripts/retrain_partA_results.py` (repo de análisis) escribe `reports/retrain_partA/*.csv` y su salida se volcó en `case of study paper/6_retraining_comparative_methodology.tex` (tablas `retrain_stage2`, `retrain_case1_internal` y `retrain_cifar_literature`, columnas/filas de la Parte A, más un párrafo descriptivo). Error de test = 100 − `test_accuracy`, media de las semillas 11–13; valor de una regla = media ± sd (ddof=1) de las 3 corridas de búsqueda de la red primaria de esa regla (las `~` se guardan aparte en `partA_alternates.csv`). Resultados con la regla A: NSGA-II 5.96 ± 0.86 %, NSGA-III 6.71 ± 1.15 %, MoQ-NAS 7.50 ± 1.18 %; HV_rel de los frentes reentrenados 0.931, 0.894 y 0.787. **Decisión mía, pendiente de que el usuario la confirme:** HV de los frentes reentrenados = conjunto no dominado de *todas* las redes confirmadas de la corrida en (error de test medio, MACs), con la convención de `tab:case1_biobj` (min-max con el conjunto de los tres algoritmos, punto de referencia un 10 % más allá del peor valor, HV_rel = HV / máximo de las 9 corridas). Limitación declarada en el `.tex`: depende de cuántos representantes se confirmaron por corrida (MoQ-NAS 3–4, NSGA-II 6–9, NSGA-III 4–8). Queda en `\TBD` el costo de reentrenamiento (hay 82.3, 165.6 y 86.1 h de reloj por entrenamiento sumadas en la Etapa 4, pero no son GPU-horas: 12 entrenamientos compartían la GPU), y toda la Parte B y el Caso 2.
+
+**Comparación con la literatura, Parte A (2026-10-08):** primera pasada de los tres instrumentos de §6.1, solo para acc-FLOPs y con los puntos publicados ya marcados ✔ en §6.2. Archivos: `literature/cifar10_monas_comparison.csv` (repo de análisis; columna `verified`, con `NO` para Bi-MOEA/D-NAS, LaMOO y RNSGA-Net, que siguen solo con fuente secundaria), `scripts/retrain_partA_vs_literature.py`, `reports/retrain_partA/partA_vs_literature_{dominance,matched}.csv` y la figura `case of study paper/figures/fig_retrain_partA_overlay.{pdf,png}`; en el `.tex`, figura `fig:retrain_partA_overlay`, tabla `tab:retrain_partA_matched` y un párrafo. El eje de complejidad es **solo params**: el cómputo publicado viene en unidades distintas (MFLOPs, MAdds…) y la metodología no lo convierte, así que no se hizo comparación a MACs igualados. Con 17 puntos multiobjetivo publicados: ninguno es dominado por una red reentrenada; 8, 5 y 5 dominan a alguna red confirmada de MoQ-NAS, NSGA-II y NSGA-III; a params igualados el error reentrenado queda 2.4–10.2, 1.1–5.6 y 1.6–4.6 pp por encima (el 10.2 de MoQ-NAS es en 0.2 M, donde solo tiene una red de 14.8 %). Es la lectura esperada en §6.2 (protocolo de 300 épocas sin drop-path/aux head frente a 600 épocas con cutout y celdas) y se redacta como contexto, no como ranking. **Pendiente (no hecho):** verificar en la fuente primaria los valores TODO de §6.2 (LightMix: los otros modelos y MAdds; Bi-MOEA/D-NAS, LaMOO, RNSGA-Net, Pareto-NASH, NSGANetV2, DPP-Net, MOEA-PS, Lyu et al.), el cómputo (MFLOPs/MAdds) de NSGANetV1, LEMONADE, CARS y EEEA-Net, y los protocolos de CARS/EEEA/LightMix; ampliar el conjunto de métodos. No se reutilizó ninguna verificación nueva: los valores ✔ son los que ya estaban en este doc.
+
+**Caso 3 (fairness) R1 lanzado en dualgpu2 (2026-10-08 01:05, a pedido del usuario, que liberó el servidor al terminar acc-FLOPs):** orden del plan de Tier D: preparación → smoke test → R1. R2 reducido (mini-piloto de épocas y los 9 representantes × 3 semillas + 5 baselines) **no** se ha lanzado y espera el visto bueno. Preparación:
+- **Datos a dualgpu2:** `datasets/facet_data` (35 GB, 129 211 ficheros con `personbin_data_96`, 436 MB) y las 6 corridas de búsqueda (`retrain_2026/runs/moqnas/experiment_personbin_qfamily`, 2 MB) copiadas desde dualgpu1. Se empezó por el Mac (~5 MB/s) y, a sugerencia del usuario, se pasó a **copia directa entre servidores (~110 MB/s, 5 min)**: los dos se alcanzan por red (139.82.47.158 y .156, puerto 22222) pero ninguna clave de uno estaba autorizada en el otro, así que, con el visto bueno del usuario, se usó una **clave temporal** restringida con `from="139.82.47.158"` en `authorized_keys` de dualgpu2, que se **retiró al terminar** (el fichero quedó idéntico al original; también se borró la clave en dualgpu1 y la entrada de `known_hosts`). Verificado: mismo número de ficheros en origen y destino y `rsync -an` sin diferencias.
+- **Dry-run:** 6 trabajos, 121 candidatos, 363 entrenamientos, fp16.
+- **Smoke test en CUDA (GPU 1, tag `fairR1_smoke`):** OK. Se construyó la caché de 29 945 recortes de FACET (`.cache/facet_crops`) y salieron `per_group_tpr` (10 tonos), `mean_tpr`, `spd_sum` y `fairness_score`, con precision fp16 y el protocolo esperado (batch 64, lr 1e-3, wd 1e-4, sin scheduler, 10 000→2 000 imágenes por `--smoke`). Esto confirma en el clúster el fix 4.9 (§4.9). Baselines: `train.py` en fp16 con GradScaler probado con `convnext_tiny` y `efficientnet_v2_s` (2 épocas, sin NaN).
+- Se lanzaron a las 01:05 el launcher de MoQ-NAS (4×3 = 12 en paralelo, solo GPU 1, sin nada nuestro en la GPU 0), el watchdog `FAIRR1` (ante OOM baja a 4 en paralelo, una vez) y los baselines. Monitoreo horario ampliado a este experimento.
+- **Pendiente:** la evaluación de los baselines usa `evaluate.py` sobre FACET (cada semilla); al terminar, bajar resultados al Mac y escribir el análisis de R1 (frente de las medias, HV por semilla, dominancia frente a baselines, optimismo búsqueda − media de semillas), que aún no existe.
+
+**Incidente en fairness R1: `OSError: [Errno 24] Too many open files` (2026-10-08 22:00 – 2026-10-09 01:27, hora de dualgpu):**
+- **Síntoma:** el trabajo `exp2_repeat_1` (31 redes, el que más entrenamientos encadena por proceso) dejó 13 redes con
+  las 3 semillas en `FAILED_EXCEPTION` (39 entrenamientos) y terminó a las 23:41 con rc=2; los otros 5 trabajos no
+  tenían fallos, pero sus procesos ya iban por 600–900 descriptores abiertos de un límite de 1024.
+- **Causa (verificada en dualgpu2):** torch registra en `atexit` cada worker de un DataLoader con
+  `persistent_workers=True` **y** `pin_memory=True` (`torch/utils/data/dataloader.py:1181`, `_clean_up_worker`), y esa
+  referencia mantiene vivo el objeto `Process` hasta que termina el intérprete. Con el modo `spawn`
+  (`retrain_parallel.py` lo fija en `__main__`) cada uno de esos objetos conserva dos extremos de pipe
+  (`multiprocessing/popen_spawn_posix.py:53-54`). Cada semilla crea 3 loaders × 8 workers → ≈ 48 descriptores que no se
+  cierran nunca; a los ≈ 20 entrenamientos por proceso se llega a 1024. Solo ocurre en el reentrenamiento (la búsqueda no
+  usa `persistent_workers`) y afecta a todos los casos; fairness llegó primero porque sus entrenamientos son cortos y
+  cada proceso encadena muchos. En dualgpu1 (Caso 1) el máximo era 507 y en LIRA (MedMNIST) 197.
+- **Cómo se encontró:** prueba en dualgpu2 con el código real (4 redes × 3 semillas, 1 época, tag aparte, GPU 1): 686
+  descriptores sin bajar nunca; 801 de 846 descriptores del proceso real eran pipes, 669 huérfanos (377 de lectura y
+  378 de escritura). Un rastreo de `os.pipe` (sitecustomize de diagnóstico) atribuyó el 100 % de los pipes abiertos a
+  `popen_spawn_posix._launch` desde `dataloader.py:1138`. Un primer arreglo (cerrar el iterador + `gc.collect()`) no
+  tuvo efecto (688 vs 686) porque la referencia de `atexit` sigue viva.
+- **Arreglo (`29c586a`, `retrain_parallel.py::_release_loaders`):** al terminar cada semilla se paran los workers de
+  los 3 loaders, se cierran sus objetos `Process` (`Process.close()` libera los pipes) y se retiran las entradas de
+  `atexit`. **Verificación:** la misma prueba queda plana (pico 158, sin crecer entre entrenamientos, 0 trazas) y las
+  6 parejas red/semilla dan la **misma test accuracy, bit a bit**, que el código sin arreglo. No cambia datos,
+  semillas ni orden de lotes.
+- **Acciones:** parados a mano el watchdog y el launcher de R1 (01:26; se perdieron solo los entrenamientos en curso de
+  `exp2_repeat_2/3`), borrados los artefactos de prueba (`*fairR1_fdtest*`) de `exp3_repeat_2`, eliminado un proceso
+  huérfano de una prueba que había quedado ocupando la GPU 1, y relanzado R1 con el mismo comando (01:27, commit
+  `29c586a`). Los diagnósticos quedan en `retrain_2026/fdtest/` de dualgpu2. El monitor horario cuenta ahora los
+  fallos vigentes en `retrain_results` (el CSV de fallos es un historial) y el máximo de descriptores por proceso.
+- **Arreglo en todos los servidores (a pedido del usuario):** `git pull --ff-only` a `29c586a` en dualgpu1
+  (2026-10-09 01:38 hora local) y en LIRA (2026-10-09 04:38 UTC). El Mac también lo recibió con un bundle desde
+  dualgpu2. Los procesos en marcha no se reiniciaron.
+- **Procedencia del código por trabajo**, a tener en cuenta al reportar: los resultados no cambian (verificado bit a
+  bit), así que no afecta a la comparación. El master log solo registra el commit del arranque, y es el CSV
+  `retrain_2026/logs/launch_manifest_<tag>.csv` el que da la hora de inicio de cada trabajo.
+  - **Fairness R1 relanzado:** todo con `29c586a`.
+  - **Caso 1 (dualgpu1):** los trabajos que ya corrían a las 01:38 (`exp22_repeat_2`, `nsga2/exp4_repeat_1`,
+    `nsga2/exp4_repeat_2`) siguen con `2f4caf5`. Los que arranquen después (`nsga2/exp4_repeat_3` y los 3 de NSGA-III)
+    usan `29c586a`. Riesgo residual: un proceso de esos trabajos en curso podría llegar a 1024 si encadena ≈ 18
+    entrenamientos, algo poco probable con 6–7 redes repartidas en 2 workers. En ese caso, relanzar el mismo comando:
+    ya toma el arreglo y solo repite lo que falte.
+  - **MedMNIST (LIRA):** igual. Los trabajos en curso a las 04:38 UTC siguen con `2f4caf5` (máximo de 139
+    descriptores, sin riesgo) y los siguientes usan `29c586a`.
+
+**Avance de las confirmaciones (medido el 2026-10-08 ~00:00 hora de dualgpu, ~03:00 UTC en LIRA; sin OOM en ningún
+watchdog):**
+
+| Caso | Servidor | Avance | Ritmo | Fin estimado |
+|---|---|---|---|---|
+| acc-FLOPs (153) | dualgpu2 | 152/153 semillas según el log (150 ya escritas en `retrain_results`) | 3–4 entrenamientos/h | en pocas horas |
+| MedMNIST (384) | LIRA | ≈ 61/384 (s11=22, s12=22, s13=17; 17 redes completas) | ≈ 9/h | ≈ 1.5–2 días |
+| Caso 1 (138) | dualgpu1 | 6/138 terminadas (s11=4, s12=2, s13=0) y 6 redes en curso, que suman ≈ 3.3 semillas más | ≈ 1.3 semillas-equivalentes/h (≈ 4.5 h por semilla de 300 épocas) | ≈ 4 días |
+
+El avance se mide con los `retrain_results_<tag>.txt` (una red completa = 3 semillas) y con los
+`seed_result_<tag>.json`; estos últimos subestiman en acc-FLOPs porque su confirmación empezó antes del guardado por
+semilla. El ritmo del Caso 1 es el más incierto. **Riesgo:** el disco de `/home` en LIRA estaba al 93 % (25 GB libres).
 
 **Orden en cada servidor (decisión del usuario, 2026-10-05):** un caso se cierra por completo antes de empezar el
 siguiente en la misma GPU: screening → selección (en el Mac) → confirmación con las semillas 11–13. En dualgpu2,
@@ -1025,6 +1167,11 @@ un patrón con el texto del comando coincide con la propia sesión.
 - Los dos servidores corren la rama `retrain-2026` en el mismo commit que GitHub. Los cambios se hacen en el Mac,
   se llevan con `git bundle` a un servidor, se hace `git push` desde allí y el otro servidor hace `git pull`
   (dualgpu1 y dualgpu2 no se ven entre sí; los dos sí ven GitHub por SSH).
+  **Corrección (2026-10-09):** la afirmación de que el Mac no puede comunicarse con GitHub venía de una nota del
+  2026-10-03 y ya no es cierta. Comprobado hoy: `gh` está instalado, la sesión es de `DiegoPaezA` (alcance `repo`),
+  hay un credential helper del llavero y `git ls-remote origin` por HTTPS responde con `29c586a`. La lectura funciona;
+  el `push` desde el Mac no se ha probado todavía (se evita hasta hacer un commit propio). Queda el flujo con bundle
+  como alternativa, pero ya no es necesario.
 - **No cambiar el código que afecta al entrenamiento mientras haya un screening corriendo**: el launcher arranca un
   `retrain_parallel.py` nuevo por cada trabajo, y sus workers (`spawn`) vuelven a importar el código del disco, así que
   un `git pull` a mitad del screening afecta a las redes que empiezan después. Solo se pueden traer a mitad de
@@ -1079,8 +1226,14 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-06 | MedMNIST en LIRA: 9+9 redes en paralelo y 4 workers por loader (sin prueba previa), relanzado a las 15:44 | §4f |
 | 2026-10-06 | Guardar cada semilla en cuanto termina y saltarla al relanzar (no perder semillas completadas si hay un corte) | §4f |
 | 2026-10-07 | Caso 1: al terminar el screening se sigue **automáticamente**, sin esperar visto bueno: selección (pasos 2–3) en el Mac y confirmación con semillas 11–13 en la GPU 1 de dualgpu1 (3×2, watchdog `C1conf`), avisando al usuario de lo elegido. Solo se para si el screening tiene fallos o la selección se niega por redes faltantes. Para acc-FLOPs y MedMNIST se sigue pidiendo visto bueno | §4f |
-| 2026-10-07 | Como la sesión local se cierra, la continuación automática del Caso 1 corre **en dualgpu1** con `scripts/retrain_auto_confirm.sh C1 C1_triobj 90 1 3 2`: espera a que termine el screening, comprueba 90/90 OK sin fallos, hace la selección en el servidor, la commitea y la sube a GitHub, y lanza la confirmación con el watchdog `C1conf`. Estado en `retrain_2026/auto/C1.status`. **Queda pendiente bajar los resultados al Mac** y registrarlo en este documento en la siguiente sesión | §4f |
+| 2026-10-07 | Como la sesión local se cierra, la continuación automática del Caso 1 corre **en dualgpu1** con `scripts/retrain_auto_confirm.sh C1 C1_triobj 90 1 3 2`: espera a que termine el screening, comprueba 90/90 OK sin fallos, hace la selección en el servidor, la commitea y la sube a GitHub, y lanza la confirmación con el watchdog `C1conf`. Estado en `retrain_2026/auto/C1.status`. **Queda pendiente bajar los resultados al Mac** y registrarlo en este documento en la siguiente sesión (hecho el 2026-10-08, ver §4f) | §4f |
 | 2026-10-07 | MedMNIST (LIRA) también sigue **automáticamente** al terminar su screening: `scripts/retrain_auto_confirm.sh C2 C2_medmnist 180 0,1 3 3 PMedW medmnist_v2_adamw` comprueba 180/180 OK sin fallos, hace la selección en LIRA (reglas A, K y C; ≈ 125 representantes) y lanza la confirmación con semillas 11–13 en las GPUs 0 y 1 (9+9) con el watchdog `C2conf`. LIRA hace push a GitHub sin necesidad del agente SSH (clave propia `~/.ssh/lira_github_ed25519`, ver más abajo). Estado en `retrain_2026/auto/C2.status` de LIRA. acc-FLOPs sigue necesitando visto bueno | §4f |
+| 2026-10-08 | Se registran las selecciones automáticas: Caso 1 con 46 representantes (138 entrenamientos, lanzada 2026-10-07 17:10 en dualgpu1) y MedMNIST con 128 (384 entrenamientos, lanzada 2026-10-07 20:17 en LIRA) | §4f |
+| 2026-10-08 | Sincronizar todo a pedido del usuario: push de LIRA resuelto con `pull --rebase`; dualgpu1, dualgpu2, LIRA, el repo del Mac y GitHub en `2f4caf5`; resultados de los tres servidores bajados al Mac con `sync_retrain_results.sh` | §4f |
+| 2026-10-08 | Terminada la confirmación de acc-FLOPs: resultados al Mac y Parte A del `.tex` rellenada a pedido del usuario. HV de frentes reentrenados con la convención de `tab:case1_biobj` aplicada a las redes confirmadas (pendiente de confirmación del usuario); costo de reentrenamiento sin rellenar | §4f |
+| 2026-10-08 | Fairness R1 lanzado en dualgpu2 (GPU 1) a pedido del usuario: 121 redes × 3 semillas + 15 baselines con el mismo protocolo (fp16, 50 épocas, 10 000 imágenes). Datos copiados entre dualgpu1 y dualgpu2 con una clave temporal restringida, autorizada por el usuario y retirada al terminar | §4f |
+| 2026-10-09 | Fairness R1: fallos `Errno 24` (fuga de descriptores en los DataLoader del reentrenamiento). A pedido del usuario se buscó la causa raíz en dualgpu2, se arregló (`29c586a`, verificado: descriptores planos y resultados idénticos bit a bit), se paró R1 y se relanzó desde donde iba (01:27); las 39 semillas fallidas se reentrenan | §4f, §4.13 |
+| 2026-10-09 | A pedido del usuario, `29c586a` aplicado en todos los servidores sin reiniciar nada (dualgpu1 01:38, LIRA 04:38 UTC, Mac por bundle): los trabajos de Caso 1 y MedMNIST que arranquen después usan el arreglo; los que estaban en curso siguen con `2f4caf5` (resultados idénticos). El fallo queda documentado como §4.13 | §4f, §4.13 |
 
 **Decisiones pendientes:** ninguna por ahora.
 
