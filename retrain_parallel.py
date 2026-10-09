@@ -6,6 +6,7 @@ import yaml
 import multiprocessing as mp
 import torch
 import traceback
+import gc
 import json
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -141,6 +142,41 @@ def _environment_info():
     return info
 
 
+
+def _release_loaders(*loaders):
+    """Shut the DataLoader workers down and release the pipes of their processes.
+
+    torch registers every DataLoader worker in atexit (_MultiProcessingDataLoaderIter._clean_up_worker),
+    which keeps its Process object alive until the interpreter exits. With the 'spawn' start method
+    (set in __main__) each of those objects holds two pipe ends (multiprocessing/popen_spawn_posix.py),
+    so every training left ~48 descriptors open (3 loaders x 8 workers x 2) and a long-lived worker
+    process ended with `OSError: [Errno 24] Too many open files`. Here the workers are stopped, their
+    Process objects closed (which releases the pipes) and the atexit entries dropped. Data, seeds and
+    results are not affected. Call it only when no other DataLoader of this process is iterating.
+    """
+    import atexit
+    from torch.utils.data import dataloader as _dl
+    for dl in loaders:
+        it = getattr(dl, "_iterator", None)
+        if it is None:
+            continue
+        try:
+            it._shutdown_workers()
+        except Exception:
+            pass
+        for w in getattr(it, "_workers", []):
+            try:
+                w.join(timeout=10)
+                w.close()
+            except Exception:
+                pass
+        dl._iterator = None
+    clean_up = getattr(getattr(_dl, "_MultiProcessingDataLoaderIter", None), "_clean_up_worker", None)
+    if clean_up is not None:
+        atexit.unregister(clean_up)
+    gc.collect()
+
+
 def _classify_result(res):
     """Map a master.retrain() return value to an explicit status string."""
     import math
@@ -272,6 +308,7 @@ def worker(task_args):
                 res, status, message = None, 'FAILED_EXCEPTION', f"{exc.__class__.__name__}: {exc}"
                 logger.error(f"{cid} seed={seed}: {traceback.format_exc()}")
             finally:
+                _release_loaders(train_loader, val_loader, test_loader)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
