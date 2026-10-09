@@ -913,11 +913,15 @@ de este trabajo es más corto y más simple que el de los métodos de referencia
 |---|---|---|---|---|---|---|
 | **Este trabajo, F13-v1** | **300** | TrivialAugment | AdamW 1e-3, wd 0.01, multistep | ninguno | 45k (5k para validación) | código / logs ✔ |
 | **Este trabajo, opción (c)** | **300** | crop + flip + TrivialAugment + cutout 16 | ídem | ninguno | 45k | código ✔ |
-| NSGA-Net (micro) | 600 | cutout | (verificar) | drop-path programado, cabeza auxiliar | (verificar) | paper ✔ / TODO macro |
+| NSGA-Net (micro y macro) | 600 (batch 96) | cutout | SGD 0.025, coseno (wd no indicado) | drop-path programado, cabeza auxiliar (0.4) | train oficial completo | paper ✔ (§4.3) |
 | NSGANetV1 | 600 (batch 96) | cutout | SGD, cosine, wd 5e-4 | drop-path programado, cabeza auxiliar (0.4) | (verificar) | paper, Tabla I y §IV-B ✔ |
-| LEMONADE | 600 (batch 64) | cutout + mixup | SGD, lr 0.025, cosine, wd 5e-4 | — | (verificar) | resumen del paper, verificar |
+| LEMONADE | 600 (batch 64) | estándar + cutout + mixup | SGD, lr 0.025, cosine, wd 5e-4 | Shake-Shake | train + val (50k) | paper ✔ (Ap. A.3.4) |
 | CNN-GA | 350 | crop + flip (96.78 % con cutout) | SGD 0.1, momentum 0.9, decaimiento en 1/149/249 | — | (verificar) | paper ✔ |
-| CARS, EEEA-Net, LightMix | (verificar; habitual "estilo DARTS": 600, cutout, drop-path, aux) | | | | | TODO |
+| CARS | "follow DARTS" (curvas de 600) | cutout | como DARTS | como DARTS | (no indicado) | paper ✔ (Tabla 1) |
+| EEEA-Net | 600 (batch 96) | cutout 16 | SGD 0.025, momentum 0.9, coseno, wd 3e-4 | drop-path 0.2, aux 0.4 | (no indicado) | paper ✔ (§4.1.2) |
+| Bi-MOEA/D-NAS | 600 (batch 96) | cutout | SGD 0.025, momentum 0.9, coseno, wd 3e-4 | drop-path 0.2, aux 0.4 | (no indicado) | paper ✔ (§5.1.1) |
+| LaMOO | 600 (batch 128) | (no indicado) | SGD con momentum 0.025, coseno, wd (no indicado) | (no indicado) | (no indicado) | paper ✔ (Tabla 4) |
+| LightMix | TODO | TODO | TODO | TODO | TODO | acceso cerrado |
 
 Cómo usarlo en el paper:
 - Añadir a la tabla de literatura una columna o nota de **protocolo final** (épocas, cutout, cabeza auxiliar,
@@ -1234,6 +1238,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-08 | Fairness R1 lanzado en dualgpu2 (GPU 1) a pedido del usuario: 121 redes × 3 semillas + 15 baselines con el mismo protocolo (fp16, 50 épocas, 10 000 imágenes). Datos copiados entre dualgpu1 y dualgpu2 con una clave temporal restringida, autorizada por el usuario y retirada al terminar | §4f |
 | 2026-10-09 | Fairness R1: fallos `Errno 24` (fuga de descriptores en los DataLoader del reentrenamiento). A pedido del usuario se buscó la causa raíz en dualgpu2, se arregló (`29c586a`, verificado: descriptores planos y resultados idénticos bit a bit), se paró R1 y se relanzó desde donde iba (01:27); las 39 semillas fallidas se reentrenan | §4f, §4.13 |
 | 2026-10-09 | A pedido del usuario, `29c586a` aplicado en todos los servidores sin reiniciar nada (dualgpu1 01:38, LIRA 04:38 UTC, Mac por bundle): los trabajos de Caso 1 y MedMNIST que arranquen después usan el arreglo; los que estaban en curso siguen con `2f4caf5` (resultados idénticos). El fallo queda documentado como §4.13 | §4f, §4.13 |
+| 2026-10-09 | Verificados en el texto completo, a pedido del usuario, los valores publicados pendientes del `.tex` (NSGA-Net, NSGANetV1, LEMONADE, CARS, EEEA-Net, Bi-MOEA/D-NAS, LaMOO y MoENAS). Ninguno de esos métodos, salvo NSGA-Net, reporta FLOPs de sus modelos de CIFAR-10 (columna "n.r."). LEMONADE: 56 GPU-días (no 90). LaMOO: 100 GPU-días. Bi-MOEA/D-NAS y LaMOO entran en la tabla, la figura y Δe (25 puntos verificados en vez de 17). MoENAS usa la misma tarea y la misma D_group (referencia = tono menos representado). Siguen sin verificar, por ser de acceso cerrado, RNSGA-Net y el resto de LightMix (de LightMix solo se verificó el resumen) | §6.2, §4e |
 
 **Decisiones pendientes:** ninguna por ahora.
 
@@ -1341,19 +1346,19 @@ coincida con la de MoQ-NAS, con sus GPU-días medidos en este hardware.
 
 | Método | Objetivos | Espacio | Resultado CIFAR-10 | GPU-días | Protocolo final | Fuente |
 |---|---|---|---|---|---|---|
-| NSGA-Net (macro) [17] | error + FLOPs | **macro (sin celdas)** | 96.15 % (3.85 % err.), 3.3 M, 1 290 MFLOPs | 8 | TODO: confirmar el protocolo del macro (el de 600 ép. + cutout está documentado para micro) | ✔ valores [NSGA-Net] |
-| NSGA-Net (micro) [17] | error + FLOPs | celdas | 97.25 % (2.75 %), 3.3 M, 535 MFLOPs | 4 | ídem | ✔ |
-| NSGANetV1 A0/A1/A2/A3/A4 [37] | error + FLOPs | celdas (búsqueda en CIFAR-100) | 95.33/96.51/97.35/97.78/97.98 %; 0.2/0.5/0.9/2.2/4.0 M | 27 | 600 ép., batch 96, cutout, drop-path, aux head | ✔ [NSGANetV1, Tabla IIa] |
-| LEMONADE | 5 obj. (incl. params, mult-adds, tiempo) | celdas + morfismos | 95.43/96.31/96.95/97.42 %; 0.5/1.1/4.7/13.1 M | 56–90 (según la fuente) | 600 ép., cutout + mixup | ✔ [LEMONADE] |
-| CARS (A … I) | acc + params | celdas, supernet | 97.00 % (2.4 M) … 97.38 % (3.6 M) | 0.4 | estilo DARTS | ✔ [CARS] |
-| EEEA-Net A/B/C | error + params + FLOPs | celdas | 96.31/97.12/97.54 %; 1.8/1.8/3.6 M | 0.34/0.36/0.52 | estilo DARTS | ✔ [EEEA-Net] |
-| **LightMix** (Huang et al., *IEEE TETCI* 10(2), 2026) | accuracy + complejidad (params) | bloque mixed-scale propio, zero-cost proxy | ✔ mejor modelo: 2.52 % err., 1.78 M. TODO: LightMixNet-1/2/3 (≈ 3.48/2.92/2.67 %, 0.49/0.97/1.45 M según fuente secundaria) y MAdds | TODO (≈ 0.02 según fuente secundaria) | TODO | **misma revista del paper**; prioridad máxima; cubre justo el rango 0.5–1.8 M de MoQ-NAS |
-| Bi-MOEA/D-NAS (Liang et al., *Appl. Sci.* 2024) [48] | error + params | supernet weight-sharing | TODO (fuente secundaria: 2.72–2.86 %, 2.53–3.26 M) | TODO (≈ 0.5) | TODO | **ya citado** como [48] |
-| LaMOO para MO-NAS (Zhao et al., *JMLR* 25, 2024) [20] | accuracy + params (+ FLOPs/latencia) | particiones del espacio | TODO (fuente secundaria: 97.36 %, 1.62 M) | coste en nº de muestras (600), no GPU-días | TODO | **ya citado** como [20] |
+| NSGA-Net (macro) [17] | error + FLOPs | **macro (sin celdas)** | 96.15 % (3.85 % err.), 3.3 M, 1 290 MFLOPs | 8 (1080Ti) | el de §4.3 del paper (600 ép., batch 96, cutout, drop-path, aux 0.4, SGD 0.025 coseno), con todo el train oficial; la fila de su Tabla 1 no lleva la etiqueta "+ cutout" | ✔ texto completo, 2026-10-09 [arXiv:1810.03522, Tabla 1, §4.3] |
+| NSGA-Net (micro) [17] | error + FLOPs | celdas | 97.25 % (2.75 %), 3.3 M, 535 MFLOPs | 4 (1080Ti) | 600 ép., batch 96, cutout, drop-path, aux 0.4; SGD 0.025 coseno (wd no indicado) | ✔ texto completo, 2026-10-09 |
+| NSGANetV1 A0/A1/A2/A3/A4 [37] | error + FLOPs | celdas (búsqueda en CIFAR-100) | 95.33/96.51/97.35/97.78/97.98 %; 0.2/0.5/0.9/2.2/4.0 M; **FLOPs no reportados** en la Tabla IIa (solo en figuras) | 27 (2080Ti) | 600 ép., batch 96, cutout, drop-path, aux head 0.4; SGD coseno, wd 5e-4 | ✔ texto completo, 2026-10-09 [arXiv:1912.01369, Tabla IIa, Tabla I, §IV-B] |
+| LEMONADE | 5 obj. (incl. params, mult-adds, tiempo) | celdas + morfismos (macro Shake-Shake) | 95.43/96.31/96.95/97.42 %; 0.5/1.1/4.7/13.1 M; mult-adds no reportados en la Tabla 1 | **≈ 56** (búsqueda de celdas, Ap. A.3.4); 80 la búsqueda de arquitectura completa (§5.1); el 90 es el que le atribuye NSGANetV1 | 600 ép., batch 64, estándar + cutout + mixup, SGD 0.025 coseno, wd 5e-4, Shake-Shake; train+val (50k) | ✔ texto completo, 2026-10-09 [arXiv:1804.09081, Tabla 1, Ap. A.3.4] |
+| CARS (A … I) | acc + params | celdas (DARTS), supernet | 97.00 % (2.4 M) … 97.38 % (3.6 M); FLOPs no reportados | 0.4 | solo dice "We follow DARTS and use the cutout strategy"; curvas de 600 ép. (Fig. 3) | ✔ texto completo, 2026-10-09 [arXiv:1909.04977, Tabla 1] |
+| EEEA-Net A/B/C | error + params + coste (FLOPs) | celdas (DARTS) | 96.31/97.12/97.54 %; 1.8/1.8/3.6 M; FLOPs no reportados | 0.34/0.36/0.52 (Tabla 3; el texto dice 0.38 para A; 2080Ti) | 600 ép., batch 96, SGD 0.025, momentum 0.9, coseno, wd 3e-4, cutout 16, drop-path 0.2, aux 0.4 | ✔ texto completo, 2026-10-09 [arXiv:2108.06156, Tabla 3, §4.1.2] |
+| **LightMix** (Huang et al., *IEEE TETCI* 10(2), 2026) | accuracy + complejidad (params) | bloque mixed-scale propio, zero-cost proxy | ✔ (resumen) mejor modelo: 2.52 % err., 1.78 M. **Acceso cerrado:** LightMixNet-1/2/3, MAdds y protocolo sin verificar (fuente secundaria: ≈ 3.48/2.92/2.67 %, 0.49/0.97/1.45 M) | ✔ 0.02 (resumen) | TODO (texto completo no accesible) | resumen oficial vía Semantic Scholar; **misma revista del paper** |
+| Bi-MOEA/D-NAS (Liang et al., *Appl. Sci.* 2024) [48] | error + params | celdas (DARTS), supernet weight-sharing | ✔ 1/2/3/4: 2.80/2.86/2.85/2.72 %; 2.53/2.71/2.88/3.26 M; FLOPs no reportados | ✔ 0.5 (≈ 0.54 en el texto; RTX 3090) | 600 ép., batch 96, SGD 0.025 coseno, momentum 0.9, wd 3e-4, cutout, drop-path 0.2, aux 0.4 | ✔ texto completo, 2026-10-09 [PDF de la editorial en mdpi-res.com, Tabla 2, §5.1.1] |
+| LaMOO para MO-NAS (Zhao et al., *JMLR* 25, 2024) [20] | accuracy + params | celdas (espacio NASNet); el método particiona el espacio | ✔ P1: 2.64 ± 0.03 %, 1.62 M; P2: 2.23 ± 0.06 %, 3.25 M; one-shot 2.85 % / 1.68 M; few-shot 2.78 % / 1.65 M; FLOPs no reportados | ✔ **100 GPU-días** (600 muestras); one-shot 1.18, few-shot 2.06 | 600 ép., batch 128, SGD con momentum 0.025 coseno, wd (valor no indicado) | ✔ texto completo, 2026-10-09 [JMLR, Tabla 4] |
 | Pareto-NASH (Elsken et al., 2018) | error + params | morfismos (precursor de LEMONADE) | TODO (fuente secundaria: ≈ 4.6 % < 1 M; ≈ 3.5 % ≈ 4 M) | TODO (≈ 56) | TODO | nuevo |
 | NSGANetV2 (Lu et al., ECCV 2020) | accuracy + params/FLOPs/latencia | supernet + surrogate | TODO | TODO | fine-tuning de subredes | contexto (supernet/surrogate) |
 | DPP-Net [50] | error + params + latencia | celdas, progresivo | TODO | TODO | TODO | ya citado; tabla hardware-aware |
-| RNSGA-Net (Tong & Du, PR 2022) [49] | error + FLOPs (punto de referencia) | NSGA-Net + residual/dense | TODO (fuente secundaria: 3.89 %, 3.00 M) | TODO (≈ 3.11) | TODO | ya citado; mismos objetivos que el Tier B |
+| RNSGA-Net (Tong & Du, PR 2022) [49] | error + FLOPs (punto de referencia) | NSGA-Net + residual/dense | TODO (**acceso cerrado**; sin copia abierta ni resumen con cifras al 2026-10-09; fuente secundaria: 3.89 %, 3.00 M) | TODO (≈ 3.11) | TODO | ya citado; mismos objetivos que el Tier B |
 | MOEA-PS (Xue et al., TEVC 2023) [18] | precisión + "time consumption" | TODO | TODO (fuente secundaria: ≈ 2.77 %; params inconsistentes entre fuentes) | TODO | TODO | ya citado; su objetivo temporal no es Time_CUDA |
 | Lyu et al. (InfSci 2024) [15] | multiobjetivo, policy gradient | DARTS | TODO (fuente secundaria: 2.70 %, 3.2 M) | TODO (≈ 1.3, 1080Ti) | TODO | ya citado; su tabla sirve para descubrir valores de otros MO-NAS |
 
