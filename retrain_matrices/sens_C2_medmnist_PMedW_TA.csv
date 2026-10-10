@@ -1,0 +1,13 @@
+tier,case,dataset,algo,run,local_dir,id,role,strat5,proxy_acc,params,flops,cuda_time,active_ops,val_acc_screen
+C,C2_medmnist,octmnist,moqnas,exp1_repeat_1,medmnist/moqnas_last/experiment_octmnist_medmnist/moqnas/exp1_repeat_1,136_15,A,True,86.5,711300,1084456192,4614.4,12,94.85
+C,C2_medmnist,octmnist,nsga2,exp1_repeat_3,medmnist/NSGA/experiment_octmnist_nsga2/nsga2/exp1_repeat_3,148_6,A,True,87.4,2191076,3318642944,4270.0,13,94.69
+C,C2_medmnist,octmnist,nsga3,exp1_repeat_2,medmnist/NSGA/experiment_octmnist_nsga3/nsga3/exp1_repeat_2,131_15,A,True,86.0,493124,686660864,6381.0,16,94.69
+C,C2_medmnist,organamnist,moqnas,exp1_repeat_2,medmnist/moqnas_last/experiment_organamnist_medmnist/moqnas/exp1_repeat_2,86_5,A,True,99.19,482987,486290112,18761.5,11,98.80
+C,C2_medmnist,organamnist,nsga2,exp1_repeat_3,medmnist/NSGA/experiment_organamnist_nsga2/nsga2/exp1_repeat_3,148_9,A+K~,True,98.08,163307,141713088,19190.2,16,98.77
+C,C2_medmnist,organamnist,nsga3,exp1_repeat_3,medmnist/NSGA/experiment_organamnist_nsga3/nsga3/exp1_repeat_3,36_14,A,True,99.19,558891,860380544,3727.2,18,98.86
+C,C2_medmnist,pathmnist,moqnas,exp1_repeat_3,medmnist/moqnas_last/experiment_pathmnist_medmnist/moqnas/exp1_repeat_3,24_15,A,True,96.2,522857,593742976,7842.7,11,99.37
+C,C2_medmnist,pathmnist,nsga2,exp1_repeat_2,medmnist/NSGA/experiment_pathmnist_nsga2/nsga2/exp1_repeat_2,148_19,A,True,95.5,1201801,723287168,7683.7,15,99.46
+C,C2_medmnist,pathmnist,nsga3,exp1_repeat_3,medmnist/NSGA/experiment_pathmnist_nsga3/nsga3/exp1_repeat_3,131_19,A,True,95.6,570569,763232320,3405.0,17,99.24
+C,C2_medmnist,tissuemnist,moqnas,exp1_repeat_1,medmnist/moqnas_last/experiment_tissuemnist_medmnist/moqnas/exp1_repeat_1,14_2,A,True,50.9,519944,275174400,7052.2,11,69.26
+C,C2_medmnist,tissuemnist,nsga2,exp1_repeat_2,medmnist/NSGA/experiment_tissuemnist_nsga2/nsga2/exp1_repeat_2,81_5,A,True,53.7,2888040,3719204864,3959.7,17,69.39
+C,C2_medmnist,tissuemnist,nsga3,exp1_repeat_3,medmnist/NSGA/experiment_tissuemnist_nsga3/nsga3/exp1_repeat_3,39_0,A,True,52.4,2591272,2392711168,4191.9,20,68.69
