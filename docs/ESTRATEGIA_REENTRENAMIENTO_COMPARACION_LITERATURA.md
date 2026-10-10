@@ -1211,6 +1211,24 @@ conserva el historial de las 39 semillas fallidas; el estado vigente está en `r
 No se lanzó nada más: falta el visto bueno para el piloto de R2 y para el análisis (no existe aún el análogo de
 `scripts/retrain_partA_results.py` para fairness; no se ha tocado el paper).
 
+**Representantes de fairness R2 (opción B, decidida por el usuario el 2026-10-10):** en lugar de entrenar en R2 los 9
+representantes de la Tabla VI del paper (elegidos con las métricas de la búsqueda), se **recalculan con las medias de las 3
+semillas de R1** aplicando la misma regla del paper (`select_representatives` de `scripts/case3_revision_analysis.py`:
+unión de las 3 corridas por formulación, frente no dominado en [−Acc, D_group, −MeanTPR], normalización min-max dentro de ese
+frente, `W_BAL`/`W_FAIR`). Script: `scripts/fairness_R1_representatives.py` → `reports/fairness_R1/`. Accuracy = media de las
+últimas 5 épocas de validación (la definición de la búsqueda; sensibilidad con la mejor accuracy en `05_…`).
+- **Resultado:** coinciden con el paper solo 2 de 10 selecciones (20_16 en fairness_prioritized de 2 obj. y 83_21 en
+  best_accuracy de 3 obj.). Selección con R1: 2 obj. → 81_0 (best_acc), 79_10 (lowest_dgroup), 86_0 (best_mean_tpr),
+  40_11 (balanced), 20_16 (fairness_prioritized); 3 obj. → 83_21, 72_17, 33_16, 29_14 (balanced y fairness_prioritized
+  coinciden). Siguen siendo 9 arquitecturas únicas (27 entrenamientos + 15 de baselines). De los 9 del paper, solo 2 están
+  en el frente no dominado de R1.
+- **Optimismo de la búsqueda:** MeanTPR baja de ≈ 0.57 a ≈ 0.40 y D_group sube de ≈ 0.05–0.11 a ≈ 0.16–0.20 para los
+  representantes del paper al reentrenarlos (`04_…`).
+- **Advertencia de estabilidad (`06_…`):** la sd entre semillas de D_group (≈ 0.06) y de MeanTPR (≈ 0.05) es comparable a la
+  dispersión entre redes (D_group 0.08–0.36, MeanTPR 0.35–0.51). Repitiendo la selección con cada par de semillas, solo
+  best_accuracy de 2 obj. se mantiene (3/3); el resto cambia. Con n = 3 las elecciones de fairness son frágiles: declararlo
+  en el paper y tratar los representantes como descriptivos.
+
 ## 4g. Registro de decisiones (todas con fecha; mantener al día)
 
 Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
@@ -1252,6 +1270,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-09 | Verificados en el texto completo, a pedido del usuario, los valores publicados pendientes del `.tex` (NSGA-Net, NSGANetV1, LEMONADE, CARS, EEEA-Net, Bi-MOEA/D-NAS, LaMOO y MoENAS). Ninguno de esos métodos, salvo NSGA-Net, reporta FLOPs de sus modelos de CIFAR-10 (columna "n.r."). LEMONADE: 56 GPU-días (no 90). LaMOO: 100 GPU-días. Bi-MOEA/D-NAS y LaMOO entran en la tabla, la figura y Δe (25 puntos verificados en vez de 17). MoENAS usa la misma tarea y la misma D_group (referencia = tono menos representado). Siguen sin verificar, por ser de acceso cerrado, RNSGA-Net y el resto de LightMix (de LightMix solo se verificó el resumen) | §6.2, §4e |
 | 2026-10-10 | Fairness R1 terminado: 363/363 semillas OK y 15/15 baselines con FACET; resultados al Mac (incluidos los de los baselines, sin pesos). No se lanza R2 ni se rellena el paper sin visto bueno | §4f |
 | 2026-10-10 | Fairness R2 reducido: el usuario decide **100 épocas directas, sin mini-piloto** (`--max-epochs 100`, baselines con `SCRATCH_EPOCHS=100`). Configuración verificada con `--dry-run` en dualgpu2 (9 representantes × 3 semillas = 27 entrenamientos + 15 de baselines; datos completos presentes). **Pendiente**: confirmar si los representantes son los 9 del paper o se recalculan con R1, y visto bueno para lanzar | §3 Tier D |
+| 2026-10-10 | Fairness R2: el usuario elige la **opción B**, representantes recalculados con las medias de R1 (misma regla del paper); coinciden 2 de 10 con la Tabla VI y la selección es inestable entre pares de semillas. R2 aún **no** se lanza (falta confirmar las 9 redes) | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
