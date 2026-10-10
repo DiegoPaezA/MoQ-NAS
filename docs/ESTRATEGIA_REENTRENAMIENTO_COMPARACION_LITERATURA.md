@@ -1229,6 +1229,26 @@ frente, `W_BAL`/`W_FAIR`). Script: `scripts/fairness_R1_representatives.py` → 
   best_accuracy de 2 obj. se mantiene (3/3); el resto cambia. Con n = 3 las elecciones de fairness son frágiles: declararlo
   en el paper y tratar los representantes como descriptivos.
 
+**Fairness R2 reducido lanzado en dualgpu2 (2026-10-10 04:11 hora de dualgpu, a pedido del usuario):**
+- **Qué:** las 9 arquitecturas elegidas con las medias de R1 (`retrain_matrices/fairness_R2_candidates_fairR2r.csv`; 2 obj.: 81_0, 79_10, 86_0, 40_11, 20_16; 3 obj.: 83_21, 72_17, 33_16, 29_14) × 3 semillas = 27 entrenamientos, más los
+  5 baselines × 3 semillas = 15, con **100 épocas directas** (sin mini-piloto), datos completos (`personbin_data_96`, 93 594 imágenes de
+  train, split 0.9, val de COCO = 3 908), fp16, batch 64, AdamW lr 1e-3, wd 0.01, multistep al 50/75 %, augmentation `ta` de la rama
+  person, `--keep_metrics`, solo GPU 1. Perfil `fairness_R2`, tag `fairR2r`, commit `4c7ff72`.
+- **Semillas 4, 5 y 6 (no 1–3), decisión mía aprobada al delegar el usuario la elección:** los representantes se eligieron con las
+  medias de R1 (semillas 1–3); entrenar R2 con otras semillas evita compartir inicialización con esa selección y hace de R2 una
+  confirmación independiente. MoQ-NAS y baselines usan las mismas semillas. Para ello `run_fairness_baseline.sh` admite
+  `SEEDS_LIST` (por defecto `1 2 3`).
+- **Cómo:** `launch_retrain_protocol.py --cases C3_fairness_two C3_fairness_three --candidates … --roles all --profile fairness_R2
+  --max-epochs 100 --seeds 4 5 6 --tag fairR2r --gpus 1 --jobs-per-gpu 3 --workers-per-job 3` (9 entrenamientos en paralelo; `--cases`
+  debe ir primero porque el watchdog localiza al launcher por ese prefijo), watchdog `FAIRR2` (OOM → 4 en paralelo, una vez) y
+  `RUN_TAG=fairR2r LIMIT_DATA_VALUE= SCRATCH_EPOCHS=100 LR_SCHEDULER=multistep WEIGHT_DECAY=0.01 SEEDS_LIST="4 5 6"
+  bash run_fairness_baseline.sh --from_scratch`. Logs en `retrain_2026/fairR2r/`; checkpoints de baselines en
+  `checkpoints/baseline_scratch_limit_96_fairR2r/`.
+- **Contexto:** a las 04:11 la GPU 1 ya no era solo nuestra: otros usuarios tenían ≈ 9.7 GB y 100 % de uso (no es el caso en R1).
+  Por eso se usó 3×3 = 9 en paralelo (R1 usó 12) para dejar margen de memoria. Estimación: ≈ 2.5 días (100 épocas, antes del
+  estrangulamiento térmico), posiblemente más con la GPU compartida.
+- Monitoreo horario ajustado (tag `fairR2r`, semillas 4–6, 27 entrenamientos + 15 baselines). No se ha tocado el paper.
+
 ## 4g. Registro de decisiones (todas con fecha; mantener al día)
 
 Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
@@ -1271,6 +1291,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-10 | Fairness R1 terminado: 363/363 semillas OK y 15/15 baselines con FACET; resultados al Mac (incluidos los de los baselines, sin pesos). No se lanza R2 ni se rellena el paper sin visto bueno | §4f |
 | 2026-10-10 | Fairness R2 reducido: el usuario decide **100 épocas directas, sin mini-piloto** (`--max-epochs 100`, baselines con `SCRATCH_EPOCHS=100`). Configuración verificada con `--dry-run` en dualgpu2 (9 representantes × 3 semillas = 27 entrenamientos + 15 de baselines; datos completos presentes). **Pendiente**: confirmar si los representantes son los 9 del paper o se recalculan con R1, y visto bueno para lanzar | §3 Tier D |
 | 2026-10-10 | Fairness R2: el usuario elige la **opción B**, representantes recalculados con las medias de R1 (misma regla del paper); coinciden 2 de 10 con la Tabla VI y la selección es inestable entre pares de semillas. R2 aún **no** se lanza (falta confirmar las 9 redes) | §4f |
+| 2026-10-10 | Fairness R2 reducido **lanzado** en dualgpu2 (GPU 1): 9 redes elegidas con R1 × semillas 4–6 + 5 baselines × semillas 4–6, 100 épocas, datos completos, 9 en paralelo (GPU compartida con otros usuarios). Semillas 4–6 para que R2 sea independiente de la selección con R1 | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
