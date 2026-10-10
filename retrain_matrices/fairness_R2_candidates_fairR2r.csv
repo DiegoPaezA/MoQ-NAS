@@ -1,0 +1,10 @@
+tier,case,dataset,algo,run,local_dir,id,role,strat5,proxy_acc,params,flops,cuda_time,active_ops
+D,C3_fairness_two,person_bin_96,moqnas,exp3_repeat_2,moqnas/experiment_personbin_qfamily/moqnas/exp3_repeat_2,20_16,r1_fairness_prioritized,False,94.4,355490,1727041664,3702.1,14
+D,C3_fairness_two,person_bin_96,moqnas,exp3_repeat_2,moqnas/experiment_personbin_qfamily/moqnas/exp3_repeat_2,81_0,r1_best_accuracy,False,95.2,471810,2643887232,9937.5,16
+D,C3_fairness_two,person_bin_96,moqnas,exp3_repeat_2,moqnas/experiment_personbin_qfamily/moqnas/exp3_repeat_2,79_10,r1_lowest_dgroup,False,95.1,1112066,2011894272,7635.1,13
+D,C3_fairness_two,person_bin_96,moqnas,exp3_repeat_3,moqnas/experiment_personbin_qfamily/moqnas/exp3_repeat_3,86_0,r1_best_mean_tpr,False,93.6,752226,6418171008,11715.6,17
+D,C3_fairness_two,person_bin_96,moqnas,exp3_repeat_3,moqnas/experiment_personbin_qfamily/moqnas/exp3_repeat_3,40_11,r1_balanced,False,95.2,1008386,2211122176,7680.7,16
+D,C3_fairness_three,person_bin_96,moqnas,exp2_repeat_1,moqnas/experiment_personbin_qfamily/moqnas/exp2_repeat_1,29_14,r1_balanced+fairness_prioritized,False,94.0,2132258,7523804160,12044.7,14
+D,C3_fairness_three,person_bin_96,moqnas,exp2_repeat_2,moqnas/experiment_personbin_qfamily/moqnas/exp2_repeat_2,72_17,r1_lowest_dgroup,False,92.7,518274,1190338560,6017.3,13
+D,C3_fairness_three,person_bin_96,moqnas,exp2_repeat_2,moqnas/experiment_personbin_qfamily/moqnas/exp2_repeat_2,83_21,r1_best_accuracy,False,95.5,670210,3768463872,18585.9,15
+D,C3_fairness_three,person_bin_96,moqnas,exp2_repeat_3,moqnas/experiment_personbin_qfamily/moqnas/exp2_repeat_3,33_16,r1_best_mean_tpr,False,94.3,378722,464045184,9288.7,14

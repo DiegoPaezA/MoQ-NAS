@@ -12,7 +12,7 @@ ARCHS="resnet18 resnet50 efficientnet_v2_s convnext_tiny mobilenet_v3_large"
 
 # Repetitions per model. Each seed gets its own output subfolder so
 # checkpoints/CSVs from different runs never overwrite each other.
-SEEDS=(1 2 3)
+SEEDS=(${SEEDS_LIST:-1 2 3})   # override e.g. SEEDS_LIST="4 5 6" (fairness R2)
 
 # Image settings
 IMG_SIZE=96
