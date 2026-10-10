@@ -1257,6 +1257,26 @@ frente, `W_BAL`/`W_FAIR`). Script: `scripts/fairness_R1_representatives.py` → 
 - **No se ha lanzado la etapa siguiente ni se ha tocado el paper** (falta el visto bueno del usuario; el análisis de MedMNIST
   con `scripts/retrain_partA_results.py`-análogo queda pendiente).
 
+**Análisis de MedMNIST y paper rellenado (2026-10-10, a pedido del usuario):**
+- Script `scripts/retrain_case2_results.py` (repo de análisis, mismas convenciones que `retrain_partA_results.py`) →
+  `reports/retrain_case2/`. ACC y AUC del evaluador oficial en test, checkpoint de mejor accuracy de validación, media de las
+  semillas 11–13; valor de una regla = media ± sd sobre las 3 corridas de la red primaria (las `~` van aparte). HV_rel por
+  dataset en (error de test, Params), misma convención que la Parte A.
+- **Etapa 2 (validación):** ρ proxy–val 0.95 / 0.89 / 0.78 (MoQ-NAS / NSGA-II / NSGA-III); mejor proxy = A en 11, 10 y 10 de 12
+  corridas; estabilidad A 87/80/79 %, C 84/94/100 %, K 77/68/60 %.
+- **Regla A (test):** las tres estrategias quedan a < 1 pp de ACC y ≤ 0.005 de AUC entre sí en los cuatro datasets; MoQ-NAS usa
+  redes más pequeñas en OCTMNIST y TissueMNIST (0.67 y 0.69 M frente a 1.35–2.29 M). HV_rel medio 0.906 / 0.898 / 0.943.
+- **Frente a MedMNIST v2 (28×28):** por encima de ResNet-18 en ACC en OCTMNIST (+1.9 a +2.9 pp) y TissueMNIST (+0.8 a +1.7),
+  igual AUC en PathMNIST y OrganAMNIST, por debajo en ACC en PathMNIST (−1.2 a −1.9) y OrganAMNIST (−0.4 a −0.6), con al
+  menos 3.8 veces menos parámetros.
+- **Limitación medida:** la validación sobreestima el test en PathMNIST (16.4 pp de media, hasta 33.3 pp en una red C) y
+  OCTMNIST (18.3 pp); 6.9 pp en OrganAMNIST y 0.2 pp en TissueMNIST. Las reglas K y C son poco fiables en PathMNIST
+  (sd de ACC entre corridas de 6–11 pp).
+- `.tex`: rellenadas las filas del Caso 2 de `tab:retrain_stage2`, la tabla `tab:retrain_medmnist` (reestructurada con una fila
+  por algoritmo y regla) y un párrafo de resultados "draft" con `\confirm` para la interpretación. Se quitaron las filas vacías de
+  la variante opcional P-Med + TA (no se ejecutó) y se declara así en el texto. Costo de reentrenamiento (suma de horas de
+  reloj, no GPU-horas): MoQ-NAS 210, NSGA-II 284, NSGA-III 313; no se pone en el paper hasta decidir la definición de GPU-horas.
+
 ## 4g. Registro de decisiones (todas con fecha; mantener al día)
 
 Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
@@ -1301,6 +1321,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-10 | Fairness R2: el usuario elige la **opción B**, representantes recalculados con las medias de R1 (misma regla del paper); coinciden 2 de 10 con la Tabla VI y la selección es inestable entre pares de semillas. R2 aún **no** se lanza (falta confirmar las 9 redes) | §4f |
 | 2026-10-10 | Fairness R2 reducido **lanzado** en dualgpu2 (GPU 1): 9 redes elegidas con R1 × semillas 4–6 + 5 baselines × semillas 4–6, 100 épocas, datos completos, 9 en paralelo (GPU compartida con otros usuarios). Semillas 4–6 para que R2 sea independiente de la selección con R1 | §4f |
 | 2026-10-10 | Terminada la confirmación de MedMNIST en LIRA (384/384 OK, 0 fallos): resultados al Mac (sin pesos). No se lanza la etapa siguiente ni se rellena el paper sin visto bueno | §4f |
+| 2026-10-10 | A pedido del usuario, análisis de MedMNIST (`scripts/retrain_case2_results.py`) y Caso 2 del `.tex` rellenado (tablas de evidencia y de MedMNIST, párrafo de resultados y limitación val–test medida); la variante P-Med + TA no se ejecutó y se quitaron sus filas vacías | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
