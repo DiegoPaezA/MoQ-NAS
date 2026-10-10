@@ -1200,6 +1200,17 @@ relanza nada por cuenta propia.
 sin borrar nada y sin pesos salvo con `--with-weights`). El Caso 1 se lee del espejo de dualgpu1 y acc-FLOPs del de
 dualgpu2 (dualgpu1 también tiene una copia de las corridas de acc-FLOPs, pero sin resultados).
 
+**Cierre de fairness R1 (2026-10-10 01:29 hora de dualgpu, detectado a las 02:23):** el launcher terminó solo con todo OK
+(watchdog `FAIRR1` salió con «launcher finished (no process)», 0 filas de OOM). Resultado: **363/363 semillas OK** (121 redes
+× 3 semillas, 0 fallos vigentes; las 39 semillas con `Errno 24` se reentrenaron con `29c586a`, máximo de 180 descriptores por
+proceso) y **15/15 baselines con 3 evaluaciones FACET**. Resultados bajados al Mac con
+`scripts/sync_retrain_results.sh dualgpu2` (espejo en `retrain_2026/cluster/dualgpu2/`) y, aparte, los resultados de los
+baselines (sin pesos) en `retrain_2026/cluster/dualgpu2/checkpoints/baseline_scratch_limit_96_fairR1/`
+(`fairness_results_facet_person.json` y `personbin_results_acc.csv` por semilla). El archivo `retrain_failures_fairR1.csv`
+conserva el historial de las 39 semillas fallidas; el estado vigente está en `retrain_results_fairR1.txt` de cada corrida.
+No se lanzó nada más: falta el visto bueno para el piloto de R2 y para el análisis (no existe aún el análogo de
+`scripts/retrain_partA_results.py` para fairness; no se ha tocado el paper).
+
 ## 4g. Registro de decisiones (todas con fecha; mantener al día)
 
 Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
@@ -1239,6 +1250,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-09 | Fairness R1: fallos `Errno 24` (fuga de descriptores en los DataLoader del reentrenamiento). A pedido del usuario se buscó la causa raíz en dualgpu2, se arregló (`29c586a`, verificado: descriptores planos y resultados idénticos bit a bit), se paró R1 y se relanzó desde donde iba (01:27); las 39 semillas fallidas se reentrenan | §4f, §4.13 |
 | 2026-10-09 | A pedido del usuario, `29c586a` aplicado en todos los servidores sin reiniciar nada (dualgpu1 01:38, LIRA 04:38 UTC, Mac por bundle): los trabajos de Caso 1 y MedMNIST que arranquen después usan el arreglo; los que estaban en curso siguen con `2f4caf5` (resultados idénticos). El fallo queda documentado como §4.13 | §4f, §4.13 |
 | 2026-10-09 | Verificados en el texto completo, a pedido del usuario, los valores publicados pendientes del `.tex` (NSGA-Net, NSGANetV1, LEMONADE, CARS, EEEA-Net, Bi-MOEA/D-NAS, LaMOO y MoENAS). Ninguno de esos métodos, salvo NSGA-Net, reporta FLOPs de sus modelos de CIFAR-10 (columna "n.r."). LEMONADE: 56 GPU-días (no 90). LaMOO: 100 GPU-días. Bi-MOEA/D-NAS y LaMOO entran en la tabla, la figura y Δe (25 puntos verificados en vez de 17). MoENAS usa la misma tarea y la misma D_group (referencia = tono menos representado). Siguen sin verificar, por ser de acceso cerrado, RNSGA-Net y el resto de LightMix (de LightMix solo se verificó el resumen) | §6.2, §4e |
+| 2026-10-10 | Fairness R1 terminado: 363/363 semillas OK y 15/15 baselines con FACET; resultados al Mac (incluidos los de los baselines, sin pesos). No se lanza R2 ni se rellena el paper sin visto bueno | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
