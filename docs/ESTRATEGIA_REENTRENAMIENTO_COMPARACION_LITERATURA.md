@@ -1322,6 +1322,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-10 | Fairness R2 reducido **lanzado** en dualgpu2 (GPU 1): 9 redes elegidas con R1 × semillas 4–6 + 5 baselines × semillas 4–6, 100 épocas, datos completos, 9 en paralelo (GPU compartida con otros usuarios). Semillas 4–6 para que R2 sea independiente de la selección con R1 | §4f |
 | 2026-10-10 | Terminada la confirmación de MedMNIST en LIRA (384/384 OK, 0 fallos): resultados al Mac (sin pesos). No se lanza la etapa siguiente ni se rellena el paper sin visto bueno | §4f |
 | 2026-10-10 | A pedido del usuario, análisis de MedMNIST (`scripts/retrain_case2_results.py`) y Caso 2 del `.tex` rellenado (tablas de evidencia y de MedMNIST, párrafo de resultados y limitación val–test medida); la variante P-Med + TA no se ejecutó y se quitaron sus filas vacías | §4f |
+| 2026-10-10 | Literatura de MedMNIST verificada y añadida al `.tex` a pedido del usuario: entran MSTF-NAS (y NSGA-Net reportado por ellos) y MO-EMT-NAS como comparadores multiobjetivo, y Ali et al. 2024 como referencia; Luong et al. 2024 se descarta (no usa MedMNIST) | §6.3 |
 
 **Decisiones pendientes:** ninguna por ahora.
 
@@ -1493,6 +1494,33 @@ Encuadre (para no sobre-afirmar):
   MedMNIST v2: una sola corrida por método. Indicarlo en la nota de la tabla.
 - AutoKeras y Google AutoML Vision no reportan parámetros: "n/d".
 - Filas propias de Q-NAS [29], [30]: referencia con su protocolo (F13), sin reentrenar.
+
+**Verificación de la literatura de MedMNIST (2026-10-10, a pedido del usuario).** Resultado, con la fuente de cada valor
+en `literature/medmnist_nas_comparison.csv` (repo de análisis) y la comparación en `scripts/retrain_case2_vs_literature.py`
+→ `reports/retrain_case2/case2_vs_literature_{level,matched}.csv`:
+- **MSTF-NAS** (Wang et al., *IEEE TEVC* 28(3):668–681, 2024; doi 10.1109/TEVC.2024.3352641): **multiobjetivo** (NSGA-II con
+  dos objetivos que combinan dos indicadores training-free y FLOPs), una red por dataset, entrenada con la guía oficial de
+  MedMNIST, 28×28. Verificado en el manuscrito aceptado (OSTI 2439002, Tablas 2–3); los mismos valores aparecen en Ali et al.
+  2024. No reporta parámetros. También reporta **NSGA-Net** corrido por sus autores en MedMNIST. **Entra en la tabla.**
+- **MO-EMT-NAS** (Liao et al., ECCV 2024, LNCS pp. 18–35; doi 10.1007/978-3-031-72897-6_2): **multiobjetivo** (error +
+  parámetros + objetivo auxiliar, multitarea) en PathMNIST y OrganAMNIST (más OrganC y OrganS). Valores del material
+  suplementario de ECCV (Tablas C–N): 4 modelos (A–D) por configuración. **Las redes se evalúan en test con los pesos
+  heredados de la supernet, sin reentrenar** (mismo protocolo que EMT-NAS, CVPR 2023, supl. C.1). **Entra en la tabla**
+  (configuración de 4 tareas y su baseline MO-ST-NAS).
+- **Ali et al.** (ICCS 2024, LNCS 14833 pp. 131–146): mono-objetivo (zero-cost proxies), 300 épocas + augmentation buscada
+  con un GA. **Fila de referencia.**
+- **Descartados:** Luong et al. 2024 (*Inf. Sci.*) **no usa MedMNIST** (solo NAS-Bench-101/201, según el resumen oficial y el
+  código); estaba mal listado aquí y en el `.tex`. Zhang et al. 2023 (*IJNS*) y Kuş et al. 2025 (*AIIM*, PBC-NAS/BioNAS,
+  mono-objetivo por DE): acceso cerrado, valores no verificables. POMONAG (arXiv 2409.20447): MedMNIST solo en figuras.
+  Q-NAS/WQ-NAS propios: no se añadieron en esta pasada.
+- **Resultado:** MSTF-NAS supera a la regla A en los cuatro datasets (−0.8 a −5.7 pp de ACC; la mayor brecha en TissueMNIST).
+  Frente a NSGA-Net, la regla A gana en PathMNIST (+2.2 a +2.9 pp), empata en OCTMNIST y pierde en TissueMNIST y OrganAMNIST
+  (−1.9 a −2.9). Ninguna red confirmada domina a un modelo de MO-EMT-NAS; con los mismos parámetros, nuestro mejor error es
+  1.0–4.4 pp mayor en PathMNIST y 2.4–4.6 pp en OrganAMNIST. El modelo más pequeño de MO-ST-NAS en PathMNIST queda dominado
+  por redes de MoQ-NAS y NSGA-III. Las brechas incluyen protocolo (100 épocas sin augmentation frente a 300 con augmentation
+  buscada, o pesos de supernet multitarea) y espacio de búsqueda: se presentan como contexto.
+- `.tex`: filas nuevas en `tab:retrain_medmnist`, subsección `subsec:retrain_case2_literature`, filas en `tab:retrain_pairing`,
+  modo de comparación parcial ampliado a MedMNIST y entradas nuevas en `retrain_methodology_refs.bib`.
 
 **Comparadores multiobjetivo en MedMNIST (todos por verificar).** La literatura multiobjetivo en MedMNIST es escasa;
 estos son los candidatos encontrados:
