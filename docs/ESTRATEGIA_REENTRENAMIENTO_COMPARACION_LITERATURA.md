@@ -1249,6 +1249,14 @@ frente, `W_BAL`/`W_FAIR`). Script: `scripts/fairness_R1_representatives.py` → 
   estrangulamiento térmico), posiblemente más con la GPU compartida.
 - Monitoreo horario ajustado (tag `fairR2r`, semillas 4–6, 27 entrenamientos + 15 baselines). No se ha tocado el paper.
 
+**Cierre de la confirmación de MedMNIST (LIRA-Server, tag `PMedW`; terminó el 2026-10-10 10:29 UTC, detectado a las 11:23 UTC):**
+- 384/384 entrenamientos OK (128 representantes × semillas 11–13, perfil `medmnist_v2_adamw`), 0 fallos, 0 filas de OOM; el launcher y el
+  watchdog `C2conf` terminaron solos (la última red fue `39_0` de TissueMNIST NSGA-III, semilla 13, 3.5 h en la cola).
+- Resultados bajados al Mac con `scripts/sync_retrain_results.sh LIRA-Server` (36 ficheros de resultados, 58 MB, sin pesos) en
+  `retrain_2026/cluster/LIRA-Server/`; verificado en el espejo local: 384 semillas con estado OK.
+- **No se ha lanzado la etapa siguiente ni se ha tocado el paper** (falta el visto bueno del usuario; el análisis de MedMNIST
+  con `scripts/retrain_partA_results.py`-análogo queda pendiente).
+
 ## 4g. Registro de decisiones (todas con fecha; mantener al día)
 
 Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
@@ -1292,6 +1300,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-10 | Fairness R2 reducido: el usuario decide **100 épocas directas, sin mini-piloto** (`--max-epochs 100`, baselines con `SCRATCH_EPOCHS=100`). Configuración verificada con `--dry-run` en dualgpu2 (9 representantes × 3 semillas = 27 entrenamientos + 15 de baselines; datos completos presentes). **Pendiente**: confirmar si los representantes son los 9 del paper o se recalculan con R1, y visto bueno para lanzar | §3 Tier D |
 | 2026-10-10 | Fairness R2: el usuario elige la **opción B**, representantes recalculados con las medias de R1 (misma regla del paper); coinciden 2 de 10 con la Tabla VI y la selección es inestable entre pares de semillas. R2 aún **no** se lanza (falta confirmar las 9 redes) | §4f |
 | 2026-10-10 | Fairness R2 reducido **lanzado** en dualgpu2 (GPU 1): 9 redes elegidas con R1 × semillas 4–6 + 5 baselines × semillas 4–6, 100 épocas, datos completos, 9 en paralelo (GPU compartida con otros usuarios). Semillas 4–6 para que R2 sea independiente de la selección con R1 | §4f |
+| 2026-10-10 | Terminada la confirmación de MedMNIST en LIRA (384/384 OK, 0 fallos): resultados al Mac (sin pesos). No se lanza la etapa siguiente ni se rellena el paper sin visto bueno | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
