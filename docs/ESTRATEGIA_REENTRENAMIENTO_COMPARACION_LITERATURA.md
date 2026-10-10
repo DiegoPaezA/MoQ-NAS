@@ -1277,6 +1277,32 @@ frente, `W_BAL`/`W_FAIR`). Script: `scripts/fairness_R1_representatives.py` → 
   la variante opcional P-Med + TA (no se ejecutó) y se declara así en el texto. Costo de reentrenamiento (suma de horas de
   reloj, no GPU-horas): MoQ-NAS 210, NSGA-II 284, NSGA-III 313; no se pone en el paper hasta decidir la definición de GPU-horas.
 
+**MedMNIST P-Med + TA, prueba de sensibilidad (decisión del usuario 2026-10-10; LIRA-Server, GPUs 0 y 1):**
+- Motivo: la regla A queda 1.5–3 pp de ACC por debajo de MSTF-NAS (≈ 5 pp en TissueMNIST) y 2.5–7.7 pp por debajo de Ali et al.
+  (300 épocas + augmentation buscada), y la validación sobreestima el test en PathMNIST y OCTMNIST (16–18 pp). La prueba mide
+  cuánto de esa distancia se debe a la receta de entrenamiento y cuánto a las arquitecturas. Es un control de protocolo: se
+  reporta aparte y no cambia la selección ni las tablas principales.
+- Redes: una por algoritmo y dataset, la de la regla A de la corrida cuya accuracy de **validación** confirmada con P-Med (media
+  de las semillas 11–13) es la mediana de las 3 corridas; el test no interviene. 12 redes × semillas 11–13 = 36 entrenamientos,
+  pareados con los de `PMedW`. Matriz `retrain_matrices/sens_C2_medmnist_PMedW_TA.csv` (commit `281757f`), generada con
+  `scripts/build_case2_ta_candidates.py` (repo de análisis).
+- Protocolo: perfil `medmnist_v2_adamw_ta` (= P-Med + TrivialAugmentWide solo en entrenamiento, sin flips ni cutout por las
+  simetrías de la tabla del Tier C), 100 épocas, tag `PMedW_TA`. Las 300 épocas en PathMNIST y OCTMNIST quedan como
+  ampliación opcional, sin lanzar.
+- Smoke en el Mac (OrganAMNIST `148_9`, 2 épocas): OK; `training_params.txt` registra `data_augmentation: true`,
+  `augmentation_policy: ta`, AdamW, wd 0.01, fp16. En `dataset_utils/transformations.py` los datasets genéricos con `ta` solo
+  añaden TrivialAugmentWide(31) al entrenamiento.
+- LIRA actualizado con `git pull --ff-only` (de `d14d9af` a `281757f`: solo docs, fairness y la matriz; sin cambios en el código
+  de entrenamiento de MedMNIST). Dry-run: 12 trabajos, 36 entrenamientos, fp16, augmentation `ta`.
+- **Lanzado el 2026-10-10 a las 16:51 UTC**: `launch_retrain_protocol.py --cases C2_medmnist --candidates
+  retrain_matrices/sens_C2_medmnist_PMedW_TA.csv --roles all --profile medmnist_v2_adamw_ta --seeds 11 12 13 --tag PMedW_TA
+  --gpus 0 1 --jobs-per-gpu 6 --workers-per-job 1` (6 + 6 redes, cada una con sus 3 semillas en serie), watchdog `C2ta`, log
+  `retrain_2026/sens_C2_TA/sens_C2_TA_master.log`. Al arrancar: 6 procesos nuestros en cada GPU (las GPUs también las usan
+  otros usuarios; la GPU 2 no se toca), 55 GB de RAM libres y 23 GB libres en `/home`. Fin estimado: 1–1.5 días (lo marca la
+  red más lenta de TissueMNIST).
+- Monitoreo horario actualizado (`mon.sh`, LIRA → `C2ta`/`PMedW_TA`). Al terminar: sync al Mac, comparación pareada con `PMedW`
+  y aviso; el paper no se toca sin visto bueno.
+
 ## 4g. Registro de decisiones (todas con fecha; mantener al día)
 
 Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la sección que la desarrolla.
@@ -1323,6 +1349,7 @@ Toda decisión de esta etapa se registra aquí en el momento de tomarla, con la 
 | 2026-10-10 | Terminada la confirmación de MedMNIST en LIRA (384/384 OK, 0 fallos): resultados al Mac (sin pesos). No se lanza la etapa siguiente ni se rellena el paper sin visto bueno | §4f |
 | 2026-10-10 | A pedido del usuario, análisis de MedMNIST (`scripts/retrain_case2_results.py`) y Caso 2 del `.tex` rellenado (tablas de evidencia y de MedMNIST, párrafo de resultados y limitación val–test medida); la variante P-Med + TA no se ejecutó y se quitaron sus filas vacías | §4f |
 | 2026-10-10 | Literatura de MedMNIST verificada y añadida al `.tex` a pedido del usuario: entran MSTF-NAS (y NSGA-Net reportado por ellos) y MO-EMT-NAS como comparadores multiobjetivo, y Ali et al. 2024 como referencia; Luong et al. 2024 se descarta (no usa MedMNIST) | §6.3 |
+| 2026-10-10 | MedMNIST P-Med + TA como **prueba de sensibilidad** (decisión del usuario): regla A de la corrida mediana por validación, 12 redes × semillas 11–13 = 36 entrenamientos, TrivialAugment sin flips, 100 épocas, tag `PMedW_TA`; lanzada en LIRA (GPUs 0 y 1, 6+6, watchdog `C2ta`) a las 16:51 UTC. Se reporta aparte y no cambia la selección | §4f |
 
 **Decisiones pendientes:** ninguna por ahora.
 
