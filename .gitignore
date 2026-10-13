@@ -203,3 +203,6 @@ exp*/
 # Logs
 logs/
 .refactor_baseline/
+
+# Documentación interna del proceso: solo local, no se publica
+/docs/
