@@ -206,3 +206,6 @@ logs/
 
 # retrain_2026 stage: inputs/outputs live on the cluster and are downloaded for analysis
 retrain_2026/
+
+# Documentación interna del proceso: solo local, no se publica
+/docs/
