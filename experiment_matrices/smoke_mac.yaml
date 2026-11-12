@@ -1,0 +1,23 @@
+# Smoke matrix for macOS (Apple Silicon GPU through the MPS backend).
+# One GPU shared by every worker: 2 evaluation workers and no DataLoader
+# worker processes (starting them every epoch takes ~20 s per loader on macOS).
+# Check afterwards that every candidate trained on the GPU:
+#   grep -h "^device:" <exp_root>/nsga2/*/results/gen_0/*/training_params.txt | sort | uniq -c
+exp_root: /tmp/launch_smoke_mac
+gpus: [0]
+repeats: 1
+seed_base: 41        # repeat 1 -> seed 42
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  population_size: 4
+  num_generations: 1
+  limit_data_value: 2000
+  workers_per_gpu: 2
+  num_workers: 0
+  log_level: INFO
+
+experiments:
+  - {algo: nsga2, config: experiment_configs/cifar_mo/config0_3_flops.yaml, name: smk}

@@ -1,6 +1,7 @@
 # moq-nas/core/fairness/data.py
 
 import json
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -275,4 +276,6 @@ def create_eval_loader(
     else:
         raise ValueError(f"Evaluation dataset '{dataset_name}' is not supported. Use 'facet' or 'fairface'.")
 
-    return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    # macOS starts loader workers with spawn (~20 s per loader): load in-process there.
+    num_workers = 0 if sys.platform == 'darwin' else 4
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
