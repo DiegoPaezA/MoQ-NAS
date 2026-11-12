@@ -109,11 +109,16 @@ These fairness metrics are then saved alongside other evaluation results, allowi
 
 ### 1. Installation
 
-Clone the repository and install the required dependencies.
+Clone the repository, create the environment and install the dependencies
+(PyTorch first, then the rest). The full step-by-step guide, including the
+Miniconda setup, is in [4. Environment Configuration](#4-environment-configuration).
 
 ```bash
 git clone https://github.com/DiegoPaezA/MoQ-NAS.git
 cd MoQ-NAS
+conda create -n moqnas python=3.10
+conda activate moqnas
+pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 ```
 
@@ -346,7 +351,8 @@ The following steps are used to configure the environment for the project.
 
 **Notes**: 
 - An NVIDIA GPU is required to run the project. 
-- The project is tested on Ubuntu 22.04 LTS with NVIDIA L40S GPU.
+- The project is tested on Ubuntu 22.04 LTS with NVIDIA L40S GPU (driver
+  570.195), Python 3.10, PyTorch 2.14.1 and torchvision 0.29.1 (CUDA 12.6 build).
 
 #### 4.1 Miniconda Installation
 
@@ -371,11 +377,17 @@ conda create -n moqnas python=3.10
 conda activate moqnas
 ```
 
+Python 3.10 is the validated version. If an environment with the previous
+PyTorch 2.5.1 already exists, do not upgrade it in place: create the new one
+under another name (for example `conda create -n moqnas-t214 python=3.10`) and
+keep the old one until the new one is verified.
+
 #### 4.3 Package Installation
 
 PyTorch no longer publishes conda packages (since 2.6), so it is installed
 with `pip` inside the conda environment. Validated combination: PyTorch 2.14.1
-with torchvision 0.29.1 and the CUDA 12.6 build (NVIDIA driver 570 or newer).
+with torchvision 0.29.1 and the CUDA 12.6 build (validated with NVIDIA driver
+570.195).
 
 ```bash
 pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu126
@@ -383,12 +395,36 @@ pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytor
 pip install -r requirements.txt
 ```
 
+Install PyTorch **before** `requirements.txt`, so that `pip` does not pull a
+different PyTorch build as a dependency. Check the installed NVIDIA driver
+with `nvidia-smi`.
+
+Verify the installation:
+
+```bash
+python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
+# expected: 2.14.1+cu126 0.29.1+cu126 True <number of GPUs>
+```
+
+`requirements.txt` does not pin versions. To reproduce the validated
+environment exactly, install from the freeze file instead:
+
+```bash
+pip install -r requirements_freeze_torch214.txt --extra-index-url https://download.pytorch.org/whl/cu126
+```
+
 `requirements_freeze_torch214.txt` lists the exact package versions of the
 environment in which this combination was validated (2x NVIDIA L40S, Ubuntu
 22.04). `requirements_freeze.txt` is the previous PyTorch 2.5.1 environment
 (installed with `conda install pytorch==2.5.1 torchvision==0.20.1
-pytorch-cuda=12.4 -c pytorch -c nvidia`); results obtained with one version
-are not bit-identical to results obtained with the other.
+pytorch-cuda=12.4 -c pytorch -c nvidia`).
+
+**Results are not bit-identical across PyTorch versions.** Within one version,
+runs with the same seed reproduce exactly; between 2.5.1 and 2.14.1 the FLOPs
+and parameter counts are identical but the accuracy of a candidate changes
+(a few percentage points in short runs). Do not mix runs of both versions in
+the same comparison. A checkpoint written with 2.5.1 can be resumed with
+2.14.1 (`--resume`).
 
 ## To-Do
 - [ ] Add more search algorithms (e.g., DARTS, ENAS).
