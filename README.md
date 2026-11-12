@@ -373,11 +373,22 @@ conda activate moqnas
 
 #### 4.3 Package Installation
 
+PyTorch no longer publishes conda packages (since 2.6), so it is installed
+with `pip` inside the conda environment. Validated combination: PyTorch 2.14.1
+with torchvision 0.29.1 and the CUDA 12.6 build (NVIDIA driver 570 or newer).
+
 ```bash
-conda install pytorch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 pytorch-cuda=12.4 -c pytorch -c nvidia
+pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu126
 
 pip install -r requirements.txt
 ```
+
+`requirements_freeze_torch214.txt` lists the exact package versions of the
+environment in which this combination was validated (2x NVIDIA L40S, Ubuntu
+22.04). `requirements_freeze.txt` is the previous PyTorch 2.5.1 environment
+(installed with `conda install pytorch==2.5.1 torchvision==0.20.1
+pytorch-cuda=12.4 -c pytorch -c nvidia`); results obtained with one version
+are not bit-identical to results obtained with the other.
 
 ## To-Do
 - [ ] Add more search algorithms (e.g., DARTS, ENAS).
