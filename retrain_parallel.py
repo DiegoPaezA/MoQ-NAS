@@ -12,6 +12,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.cnn import input, master
+from core import device as device_utils
 from utils.helpers import load_log_params_evolution, init_log
 
 
@@ -127,6 +128,8 @@ def _environment_info():
         'cuda': torch.version.cuda,
         'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu',
     }
+    if not torch.cuda.is_available() and device_utils.mps_available():
+        info['gpu'] = f"mps ({platform.processor() or platform.machine()})"
     # Libraries that differ between the GPU servers (split via sklearn/numpy, augmentation via torchvision).
     for name in ('torchvision', 'numpy', 'sklearn'):
         try:
@@ -309,8 +312,7 @@ def worker(task_args):
                 logger.error(f"{cid} seed={seed}: {traceback.format_exc()}")
             finally:
                 _release_loaders(train_loader, val_loader, test_loader)
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                device_utils.empty_cache(device)
 
             entry = res if isinstance(res, dict) else {}
             entry.update({'status': status, 'seed': seed, 'protocol_tag': args.tag,
@@ -400,7 +402,7 @@ def main(arguments):
             return 1
 
         devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
-        if not devices: devices = ["cpu"]
+        if not devices: devices = ["mps"] if device_utils.mps_available() else ["cpu"]
 
         if arguments.max_parallel_workers:
             num_workers = min(arguments.max_parallel_workers, len(candidate_ids))

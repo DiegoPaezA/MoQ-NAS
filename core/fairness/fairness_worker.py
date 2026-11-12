@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Tuple
 import os, torch
 import traceback
 from utils.helpers import update_yaml_file
+from core import device as device_utils
 
 def fairness_worker_cuda(
     shard: List[Tuple[int, dict]],
@@ -21,14 +22,7 @@ def fairness_worker_cuda(
     torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
 
     # Select device inside the spawned child (safe)
-    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-        if device_idx is None:
-            device_idx = 0
-        device_idx = device_idx % torch.cuda.device_count()
-        device = f"cuda:{device_idx}"
-        torch.cuda.set_device(device_idx)
-    else:
-        device = "cpu"
+    device = device_utils.pick_device(device_idx or 0)
 
     results: Dict[int, Dict[str, float]] = {}
     fairness_params = fairness_params or {}
@@ -96,17 +90,13 @@ def fairness_worker_cuda(
             except: pass
             try: del net
             except: pass
-            if str(device).startswith("cuda"):
-                torch.cuda.empty_cache()
+            device_utils.empty_cache(device)
 
     return results
 
 
 def device_count_probe() -> int:
-    try:
-        return torch.cuda.device_count()
-    except Exception:
-        return 0
+    return device_utils.device_slots()
 
 def device_count_probe_runner(q):
     q.put(device_count_probe())

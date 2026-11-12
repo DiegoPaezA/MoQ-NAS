@@ -6,12 +6,15 @@
 """
 
 import os
+import sys
+import queue
 import torch
 import time
 import copy
 from typing import Dict, Any, List
 import torch.multiprocessing as mp
 from .cnn import input, master
+from . import device as device_utils
 from utils.helpers import init_log, setup_dataset_info
 from utils.seeding import seed_candidate
 
@@ -35,6 +38,7 @@ class EvalPopulation(object):
     """
     def __init__(self, params: dict, fn_dict: dict, log_level: str = 'INFO'):
         self.fn_dict = fn_dict
+        self.log_level = log_level
         self.logger = init_log(log_level, name=__name__)
         self.global_seed = int(params.get('seed', 42))
         self.loader = input.GenericDataLoader(params=params)
@@ -146,7 +150,7 @@ class EvalPopulation(object):
         results: Dict[int, Dict[str, Any]] = {}
         model_specs = [None] * pop_size
         for _ in range(pop_size):
-            idx, res_dict, model_path = result_queue.get()
+            idx, res_dict, model_path = self._next_result(result_queue, processes)
             results[idx] = res_dict
 
             if model_path and os.path.exists(model_path):
@@ -224,6 +228,23 @@ class EvalPopulation(object):
 
         return results
 
+    @staticmethod
+    def _next_result(result_queue, processes):
+        """Next worker result; raises instead of waiting forever if every
+        worker died (e.g. killed by the OS) with results still missing."""
+        while True:
+            try:
+                return result_queue.get(timeout=30)
+            except queue.Empty:
+                if any(p.is_alive() for p in processes):
+                    continue
+                try:
+                    return result_queue.get(timeout=5)
+                except queue.Empty:
+                    raise RuntimeError(
+                        "All evaluation workers exited before returning every result "
+                        f"(exit codes: {[p.exitcode for p in processes]}).")
+
     def run_individuals(self, generation, train_params, fn_dict, worker_rank,
                         task_queue: mp.Queue, result_queue: mp.Queue, stats_queue: mp.Queue):
         """Worker loop: pull candidates from ``task_queue`` until a sentinel.
@@ -233,17 +254,16 @@ class EvalPopulation(object):
         is independent of which worker ran it or how many it ran before.
         """
         global worker_data_loader
+        # A spawned worker (macOS) receives the logger without its handlers.
+        if not self.logger.handlers:
+            self.logger = init_log(self.log_level, name=__name__)
         gpu_device = 'cpu'
         try:
-            if torch.cuda.is_available():
-                num_gpus = torch.cuda.device_count()
-                if num_gpus > 0:
-                    gpu_idx = worker_rank % num_gpus
-                    torch.cuda.set_device(gpu_idx)
-                    gpu_device = f'cuda:{gpu_idx}'
+            gpu_device = device_utils.pick_device(worker_rank)
         except Exception as e:
             self.logger.error(f"CUDA initialization failed for worker {worker_rank}: {e}. Falling back to CPU.")
             gpu_device = 'cpu'
+        self.logger.info(f"Worker {worker_rank} using device {gpu_device}")
 
         os.environ.setdefault("OMP_NUM_THREADS", "1")
         os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -293,8 +313,7 @@ class EvalPopulation(object):
                         self.logger.error(
                             f"CUDA OOM training model {id_str} (worker {worker_rank}); "
                             f"clearing cache and retrying once.")
-                        if str(gpu_device).startswith('cuda'):
-                            torch.cuda.empty_cache()
+                        device_utils.empty_cache(gpu_device)
                         continue
                     self.logger.error(
                         f"{'CUDA OOM' if is_oom else 'RuntimeError'} training model "
@@ -353,6 +372,9 @@ class EvalPopulation(object):
         if not indices:
             return {i: {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names} for i in range(len(model_specs))}
 
+        if sys.platform == 'darwin':
+            # One shared Apple GPU: more than two processes do not add throughput.
+            processes_per_gpu = min(int(processes_per_gpu), 2)
         slots = max(0, num_gpus * max(1, int(processes_per_gpu)))
         if slots == 0:
             merged = {}
