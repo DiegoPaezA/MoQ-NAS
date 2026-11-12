@@ -6,6 +6,8 @@ from typing import Tuple, Union, Sequence
 import torch
 import torch.nn as nn
 
+from core.device import synchronize
+
 
 def _normalize_input_shape(shape: Union[int, Sequence[int]]) -> Tuple[int, int, int, int]:
     """
@@ -157,12 +159,10 @@ class ModelMetrics:
             for _ in range(warmup_runs):
                 _ = self.model(x)
             for _ in range(measure_runs):
-                if 'cuda' in self.device and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                synchronize(self.device)
                 t0 = time.time()
                 _ = self.model(x)
-                if 'cuda' in self.device and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                synchronize(self.device)
                 t1 = time.time()
                 times.append(t1 - t0)
 
@@ -323,14 +323,12 @@ class ModelMetrics:
 
             # measure
             for _ in range(measure_runs):
-                if 'cuda' in self.device and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                synchronize(self.device)
 
                 t0 = time.time()
                 power_start = self.pynvml.nvmlDeviceGetPowerUsage(self.handle) / 1000.0
                 _ = self.model(x)
-                if 'cuda' in self.device and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                synchronize(self.device)
                 t1 = time.time()
                 power_end = self.pynvml.nvmlDeviceGetPowerUsage(self.handle) / 1000.0
 

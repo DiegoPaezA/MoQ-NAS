@@ -379,6 +379,12 @@ if __name__ == '__main__':
                              'Overrides the config value; takes precedence over threads.')
     parser.add_argument('--threads', type=int, default=None,
                         help='Total evaluation worker processes (legacy; overrides the config).')
+    parser.add_argument('--num_workers', type=int, default=None,
+                        help='DataLoader worker processes per loader. Overrides the config value. '
+                             'Use 0 on macOS, where starting loader workers every epoch is slow.')
+    parser.add_argument('--persistent_workers', action='store_const', const=True, default=None,
+                        help='Keep the DataLoader workers alive across epochs and candidates '
+                             '(overrides the config). Useful on macOS with datasets read from disk.')
     parser.add_argument('--train_timeout', type=int, default=None,
                         help='Per-candidate training timeout in seconds. Overrides the config '
                              'value and the global TRAIN_TIMEOUT in settings.py.')

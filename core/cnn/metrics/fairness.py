@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from .base import BaseMetric
 from core.fairness.data import create_eval_loader
+from core.device import check_precision
 
 class FairnessMetric(BaseMetric):
     name = "FairnessMetric"
@@ -55,6 +56,12 @@ class FairnessMetric(BaseMetric):
         bf16 hardware support acts only as a guard, never as a selector.
         Disabled on CPU and for fp32.
         """
+        if self.device.type == 'mps':
+            if self.precision == 'fp32':
+                return dict(device_type='mps', enabled=False)
+            check_precision(self.device, self.precision)
+            dtype = torch.bfloat16 if self.precision == 'bf16' else torch.float16
+            return dict(device_type='mps', dtype=dtype, enabled=True)
         if self.device.type != 'cuda':
             return dict(device_type='cpu', enabled=False)
         if self.precision == 'fp32':

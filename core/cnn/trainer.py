@@ -24,6 +24,7 @@ from .artifacts import BaseArtifact
 from .metrics.base import BaseMetric
 from utils.helpers import create_info_file, init_log
 from core.precision import resolve_precision
+from core.device import check_precision
 from settings import TRAIN_TIMEOUT
 
 
@@ -105,6 +106,7 @@ class BaseTrainer:
                 f"precision='bf16' was requested but CUDA device "
                 f"'{torch.cuda.get_device_name(self.device)}' has no native "
                 f"bfloat16 support. Use precision='fp16' or 'fp32'.")
+        check_precision(self.device, self.precision)
         self._autocast_dtype = {'fp16': torch.float16,
                                 'bf16': torch.bfloat16}.get(self.precision, torch.float16)
         self._autocast_enabled = self.precision in ('fp16', 'bf16')
@@ -552,6 +554,9 @@ class BaseTrainer:
         to free up unused memory.
         If CUDA is not available, the method exits without performing any action.
         """
+        if self.device.type == 'mps':
+            torch.mps.empty_cache()
+            return
         if not torch.cuda.is_available():
             #self.logger.info("CUDA is not available. No GPU memory to release.")
             return

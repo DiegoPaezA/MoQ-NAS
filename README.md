@@ -350,7 +350,9 @@ The following steps are used to configure the environment for the project.
 - Package Installation
 
 **Notes**: 
-- An NVIDIA GPU is required to run the project. 
+- A GPU is required to run the project: an NVIDIA GPU on Linux (CUDA), or an
+  Apple Silicon Mac (the Apple GPU through the MPS backend, see
+  [4.4 macOS](#44-macos-apple-silicon)).
 - The project is tested on Ubuntu 22.04 LTS with NVIDIA L40S GPU (driver
   570.195), Python 3.10, PyTorch 2.14.1 and torchvision 0.29.1 (CUDA 12.6 build).
 
@@ -425,6 +427,60 @@ and parameter counts are identical but the accuracy of a candidate changes
 (a few percentage points in short runs). Do not mix runs of both versions in
 the same comparison. A checkpoint written with 2.5.1 can be resumed with
 2.14.1 (`--resume`).
+
+#### 4.4 macOS (Apple Silicon)
+
+The search, the fairness evaluation and the retraining run on the Apple GPU
+through PyTorch's MPS backend. Workers pick the device by themselves (CUDA if
+present, otherwise MPS, otherwise CPU); the `device` key of the experiment
+configs does not need to be changed. Requirements: Apple Silicon, macOS 14 or
+newer and PyTorch 2.8 or newer (mixed precision on MPS does not work before
+2.8). Validated on an Apple M5 Pro with macOS 27 and PyTorch 2.14.1.
+
+```bash
+conda create -n moqnas-mps -c conda-forge python=3.10
+conda activate moqnas-mps
+pip install torch==2.14.1 torchvision==0.29.1
+pip install -r requirements.txt
+python -c "import torch; print(torch.__version__, torch.backends.mps.is_available())"   # 2.14.1 True
+```
+
+Install every package with `pip`. Mixing NumPy/SciPy from conda-forge with the
+PyTorch wheel loads two OpenMP runtimes and the process aborts
+(`OMP: Error #15`).
+
+Run the smoke matrix and check that every candidate trained on the GPU:
+
+```bash
+python launch.py experiment_matrices/smoke_mac.yaml
+grep -h "^device:" /tmp/launch_smoke_mac/nsga2/*/results/gen_0/*/training_params.txt | sort | uniq -c
+# expected: 4 device: mps
+```
+
+Each worker also logs `Worker <n> using device mps`. If the GPU cannot be used
+on a Mac, the worker warns that it is training on the CPU instead of doing it
+silently.
+
+Settings that matter on a Mac (all of them can go in the matrix `defaults`):
+
+| Setting | Value | Why |
+|---|---|---|
+| `workers_per_gpu` | `2` | All workers share one GPU. Two workers gave about 18 % more throughput than one in the smoke run; more than two did not help. The result of a candidate does not depend on the number of workers. |
+| `num_workers` | `0` for datasets held in memory (CIFAR, MedMNIST) | macOS starts DataLoader workers with `spawn`; restarting them every epoch costs about 20 s per loader. |
+| `num_workers` + `persistent_workers` | `4` + `true` for datasets read from disk (e.g. the person/FACET images) | Keeps the loader workers alive, so the start-up cost is paid once. |
+| `precision` | `bf16` (as on the servers) | About 1.5x faster than `fp32` on MPS for a full 50-epoch training in the smoke run. |
+
+Limitations on macOS:
+
+- Results are not comparable bit by bit with CUDA runs (different backend);
+  FLOPs and parameter counts are identical. Do not mix Mac and server runs in
+  one comparison.
+- `cuda_inference_time` keeps its historical name; on a Mac it is the time
+  measured on the Apple GPU. GPU memory and energy metrics are reported as 0,
+  as on CPU.
+- `retrain_parallel.py` uses the Apple GPU automatically when no CUDA device
+  exists. The single-model script `retrain_model.py` has not been validated on
+  macOS.
 
 ## To-Do
 - [ ] Add more search algorithms (e.g., DARTS, ENAS).
