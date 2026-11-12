@@ -36,6 +36,10 @@ def _make_gen(seed: int) -> torch.Generator:
 
 def _supports_pin_memory_device() -> bool:
     try:
+        # torch >= 2.9 deprecates ``pin_memory_device``: it is ignored with a
+        # UserWarning and the current accelerator is used instead.
+        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 9):
+            return False
         from inspect import signature
         return "pin_memory_device" in signature(DataLoader).parameters
     except Exception:
