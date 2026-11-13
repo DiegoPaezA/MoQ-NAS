@@ -468,6 +468,11 @@ falls back to the CPU silently: if the Apple GPU cannot be used, the launcher
 and the workers stop with an error. Set `MOQNAS_ALLOW_CPU=1` to train on the
 CPU on purpose.
 
+`experiment_matrices/smoke_coverage.yaml` runs a short search through the paths
+the main smoke does not touch (NSGA-III, MOEA/D, mixed search space,
+mono-objective search, pretrained backbone, MedMNIST); use it to validate a new
+PyTorch version or machine.
+
 After any run, on any platform, check that no candidate failed silently (a
 training error scores the candidate 0.0 and the search continues):
 
@@ -481,7 +486,7 @@ Settings that matter on a Mac (all of them can go in the matrix `defaults`):
 |---|---|---|
 | `workers_per_gpu` | `2` | All workers share one GPU. Two workers gave about 18 % more throughput than one in the smoke run; more than two did not help. The result of a candidate does not depend on the number of workers. |
 | `num_workers` | `0` for datasets held in memory (CIFAR, MedMNIST) | macOS starts DataLoader workers with `spawn`; restarting them every epoch costs about 20 s per loader. |
-| `num_workers` + `persistent_workers` | `4` + `true` for datasets read from disk (e.g. the person/FACET images) | Keeps the loader workers alive, so the start-up cost is paid once. |
+| `num_workers` + `persistent_workers` | `4` + `true` for datasets read from disk (e.g. the person/FACET images) | Keeps the loader workers alive, so the start-up cost is paid once (about 1.7x faster in the fairness smoke run). In the search it is only a speed option: with `data_augmentation: false` (every search config) the result of each candidate is identical with and without it, and does not depend on the worker that trains the candidate. |
 | `precision` | `bf16` (as on the servers) | About 1.5x faster than `fp32` on MPS for a full 50-epoch training in the smoke run. |
 
 Limitations on macOS:
