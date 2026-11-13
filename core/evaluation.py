@@ -273,8 +273,17 @@ class EvalPopulation(object):
 
         n_done = 0
         busy = 0.0
+        parent_pid = os.getppid()
         while True:
-            task = task_queue.get()
+            # If the launcher was killed, stop instead of training the rest of
+            # its queue as an orphan that keeps the GPU busy.
+            if os.getppid() != parent_pid:
+                self.logger.error(f"Worker {worker_rank}: the parent process is gone; exiting.")
+                return
+            try:
+                task = task_queue.get(timeout=30)
+            except queue.Empty:
+                continue
             if task is None:  # sentinel: no more work for this worker
                 break
             original_idx, decoded_net, decoded_params = task
