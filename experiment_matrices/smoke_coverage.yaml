@@ -1,0 +1,38 @@
+# Coverage smoke: one short run of every code path the main smoke matrices do
+# not exercise (many-objective GAs, mixed search space, mono-objective search,
+# pretrained backbone, MedMNIST). Used to validate a new PyTorch version or
+# platform; not for reported results.
+#
+#   python launch.py experiment_matrices/smoke_coverage.yaml
+#   python scripts/health_check.py /tmp/smoke_coverage
+exp_root: /tmp/smoke_coverage
+gpus: [0, 1]          # on a Mac use gpus: [0]
+repeats: 1
+seed_base: 42
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  log_level: INFO
+  population_size: 4
+  num_generations: 2
+  limit_data_value: 2000
+  workers_per_gpu: 4
+
+experiments:
+  - {algo: nsga3, config: experiment_configs/cifar_mo/config0_3_flops.yaml, name: nsga3,
+     overrides: {ref_divisions: 4}, flags: [--multi_objective]}
+  - {algo: moead, config: experiment_configs/cifar_mo/config0_3_flops.yaml, name: moead,
+     overrides: {ref_divisions: 4, moead_scalar: tchebycheff, moead_pneighbor: 0.9}, flags: [--multi_objective]}
+  - {algo: moqnas, config: experiment_configs/cifar_mo/config7_1_mixed.yaml, name: mixed,
+     flags: [--multi_objective]}
+  - {algo: qnas, config: experiment_configs/cifar/config0_3.yaml, name: qnas_mono}
+  - {algo: ga, config: experiment_configs/cifar/config0.yaml, name: ga_mono,
+     overrides: {max_num_nodes: 20, crossover_rate: 0.5, mutation_rate: 0.2}}
+  - {algo: nsga2, config: experiment_configs/cifar_mo/config0_3_flops.yaml, name: backbone,
+     overrides: {network_config: backbone, backbone_name: resnet18}, flags: [--multi_objective]}
+  - {algo: nsga2, config: experiment_configs/medmnist_mo/config0.yaml, name: organamnist,
+     overrides: {data_path: datasets/organamnist_data, dataset: organamnist,
+                 config_path_dataset: dataset_configs/organamnist.yaml},
+     flags: [--multi_objective]}
