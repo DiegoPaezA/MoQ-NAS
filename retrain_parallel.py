@@ -402,7 +402,8 @@ def main(arguments):
             return 1
 
         devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
-        if not devices: devices = ["mps"] if device_utils.mps_available() else ["cpu"]
+        if not devices:
+            devices = ["mps"] if device_utils.mps_available() else [device_utils._cpu_fallback()]
 
         if arguments.max_parallel_workers:
             num_workers = min(arguments.max_parallel_workers, len(candidate_ids))

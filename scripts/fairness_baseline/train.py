@@ -15,6 +15,7 @@ sys.path.append(str(project_root))
 from core.cnn import input as cnn_input
 from core.fairness.models import make_baseline_model, REGISTRY
 from core.precision import resolve_precision
+from core import device as device_utils
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import MultiStepLR
 
@@ -37,7 +38,7 @@ def load_config_robust(args):
         'weight_decay': 1e-4,
         'max_epochs': 10,
         'num_workers': 4,
-        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+        'device': device_utils.resolve_device('auto'),
         'data_augmentation': True,
         'split_seed': 2025,
         'loader_seed': 777,
@@ -152,9 +153,12 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
     # Precision policy shared with the MoQ-NAS trainer: autocast + GradScaler for
     # fp16, autocast only for bf16, plain fp32 otherwise (the historical default).
     precision = resolve_precision(params)
-    use_amp = precision in ('fp16', 'bf16') and device.type == 'cuda'
+    amp_device = device_utils.autocast_device_type(device)
+    use_amp = precision in ('fp16', 'bf16') and amp_device != 'cpu'
+    if use_amp:
+        device_utils.check_precision(device, precision)
     amp_dtype = torch.bfloat16 if precision == 'bf16' else torch.float16
-    scaler = GradScaler('cuda') if (precision == 'fp16' and device.type == 'cuda') else None
+    scaler = GradScaler(amp_device) if (precision == 'fp16' and use_amp) else None
 
     max_epochs = int(params.get('max_epochs', 10))
     scheduler = None
@@ -194,7 +198,7 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
             labels = labels.long()
 
             optimizer.zero_grad()
-            with autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+            with autocast(amp_device, dtype=amp_dtype, enabled=use_amp):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
             if scaler is not None:
@@ -225,7 +229,7 @@ def train_one_model(arch, train_loader, val_loader, device, params, results_csv=
                     labels = labels.squeeze()
                 labels = labels.long()
                 
-                with autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+                with autocast(amp_device, dtype=amp_dtype, enabled=use_amp):
                     outputs = model(inputs)
                 _, predicted = outputs.max(1)
                 val_total += labels.size(0)
@@ -311,7 +315,7 @@ def main():
     # Use Robust Loader instead of core.config.ConfigParameters
     train_spec = load_config_robust(args)
     
-    device_str = train_spec.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    device_str = device_utils.resolve_device(train_spec.get('device'))
     device = torch.device(device_str)
     set_seed(train_spec.get('run_seed', train_spec.get('split_seed', 42)))
     

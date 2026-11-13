@@ -17,7 +17,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
-import GPUtil
+try:  # NVIDIA only; absent on macOS installs
+    import GPUtil
+except ImportError:
+    GPUtil = None
 from pymoo.indicators.hv import Hypervolume
 
 from utils.io import load_pkl, load_retrain_results
@@ -189,6 +192,8 @@ def get_gpu_memory():
     Returns:
     - Used memory in MB.
     """
+    if GPUtil is None:
+        return None
     gpus = GPUtil.getGPUs()
     if gpus:
         return gpus[0].memoryUsed  # Assuming single-GPU use; modify if using multiple GPUs

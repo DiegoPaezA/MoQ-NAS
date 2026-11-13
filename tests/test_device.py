@@ -41,16 +41,59 @@ class PickDevice(_Case):
         self.use(_cuda(False) + [mock.patch.object(dev, 'mps_available', return_value=True)])
         self.assertEqual(dev.pick_device(4), 'mps')
 
-    def test_cpu_fallback_warns_on_macos_only(self):
+    def test_cpu_fallback_is_an_error_on_macos_only(self):
         self.use(_cuda(False) + [mock.patch.object(dev, 'mps_available', return_value=False)])
-        with mock.patch.object(sys, 'platform', 'darwin'), warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter('always')
-            self.assertEqual(dev.pick_device(), 'cpu')
-            self.assertEqual(len(w), 1)
+        with mock.patch.object(sys, 'platform', 'darwin'), mock.patch.dict('os.environ', clear=False) as env:
+            env.pop('MOQNAS_ALLOW_CPU', None)
+            with self.assertRaises(RuntimeError):
+                dev.pick_device()
+            with self.assertRaises(RuntimeError):
+                dev.resolve_device('auto')
+            with self.assertRaises(RuntimeError):
+                dev.require_gpu_on_macos()
+            env['MOQNAS_ALLOW_CPU'] = '1'
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter('always')
+                self.assertEqual(dev.pick_device(), 'cpu')
+                self.assertEqual(len(w), 1)
         with mock.patch.object(sys, 'platform', 'linux'), warnings.catch_warnings(record=True) as w:
             warnings.simplefilter('always')
             self.assertEqual(dev.pick_device(), 'cpu')
+            self.assertEqual(dev.resolve_device(None), 'cpu')
+            dev.require_gpu_on_macos()
             self.assertEqual(len(w), 0)
+
+
+class ResolveDevice(_Case):
+    def test_auto_prefers_cuda_then_mps(self):
+        self.use(_cuda(True, 2) + [mock.patch.object(dev, 'mps_available', return_value=True)])
+        self.assertEqual(dev.resolve_device('auto'), 'cuda')
+        self.assertEqual(dev.resolve_device(None), 'cuda')
+
+    def test_auto_mps(self):
+        self.use(_cuda(False) + [mock.patch.object(dev, 'mps_available', return_value=True)])
+        self.assertEqual(dev.resolve_device('auto'), 'mps')
+
+    def test_explicit_device_is_kept(self):
+        self.use(_cuda(False) + [mock.patch.object(dev, 'mps_available', return_value=False)])
+        self.assertEqual(dev.resolve_device('cuda'), 'cuda')
+        self.assertEqual(dev.resolve_device('cuda:1'), 'cuda:1')
+        self.assertEqual(dev.resolve_device('cpu'), 'cpu')
+        with self.assertRaises(RuntimeError):
+            dev.resolve_device('mps')
+
+    def test_autocast_device_type(self):
+        self.assertEqual(dev.autocast_device_type('cuda:1'), 'cuda')
+        self.assertEqual(dev.autocast_device_type(torch.device('mps')), 'mps')
+        self.assertEqual(dev.autocast_device_type('cpu'), 'cpu')
+
+    def test_require_gpu_on_macos_never_queries_cuda(self):
+        with mock.patch.object(torch.cuda, 'is_available', side_effect=AssertionError('cuda queried')), \
+                mock.patch.object(torch.cuda, 'device_count', side_effect=AssertionError('cuda queried')), \
+                mock.patch.object(dev, 'mps_available', return_value=True):
+            for platform in ('darwin', 'linux'):
+                with mock.patch.object(sys, 'platform', platform):
+                    dev.require_gpu_on_macos()
 
 
 class DeviceSlots(_Case):

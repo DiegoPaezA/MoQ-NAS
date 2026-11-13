@@ -442,8 +442,14 @@ conda create -n moqnas-mps -c conda-forge python=3.10
 conda activate moqnas-mps
 pip install torch==2.14.1 torchvision==0.29.1
 pip install -r requirements.txt
-python -c "import torch; print(torch.__version__, torch.backends.mps.is_available())"   # 2.14.1 True
+python -m core.device     # must end with: result   : OK - the GPU trains in mixed precision
 ```
+
+`python -m core.device` prints the PyTorch version and the device, and runs one
+`bf16` and one `fp16` training step on the GPU; its exit code is 0 only if the
+GPU trained. It works on the Linux servers too. To reproduce the exact
+environment validated on the Mac, install
+`requirements_freeze_mac_torch214.txt` instead of `requirements.txt`.
 
 Install every package with `pip`. Mixing NumPy/SciPy from conda-forge with the
 PyTorch wheel loads two OpenMP runtimes and the process aborts
@@ -457,9 +463,22 @@ grep -h "^device:" /tmp/launch_smoke_mac/nsga2/*/results/gen_0/*/training_params
 # expected: 4 device: mps
 ```
 
-Each worker also logs `Worker <n> using device mps`. If the GPU cannot be used
-on a Mac, the worker warns that it is training on the CPU instead of doing it
-silently.
+Each worker also logs `Worker <n> using device mps`. On a Mac the code never
+falls back to the CPU silently: if the Apple GPU cannot be used, the launcher
+and the workers stop with an error. Set `MOQNAS_ALLOW_CPU=1` to train on the
+CPU on purpose.
+
+`experiment_matrices/smoke_coverage.yaml` runs a short search through the paths
+the main smoke does not touch (NSGA-III, MOEA/D, mixed search space,
+mono-objective search, pretrained backbone, MedMNIST); use it to validate a new
+PyTorch version or machine.
+
+After any run, on any platform, check that no candidate failed silently (a
+training error scores the candidate 0.0 and the search continues):
+
+```bash
+python scripts/health_check.py /tmp/launch_smoke_mac --expect_device mps
+```
 
 Settings that matter on a Mac (all of them can go in the matrix `defaults`):
 
@@ -467,7 +486,7 @@ Settings that matter on a Mac (all of them can go in the matrix `defaults`):
 |---|---|---|
 | `workers_per_gpu` | `2` | All workers share one GPU. Two workers gave about 18 % more throughput than one in the smoke run; more than two did not help. The result of a candidate does not depend on the number of workers. |
 | `num_workers` | `0` for datasets held in memory (CIFAR, MedMNIST) | macOS starts DataLoader workers with `spawn`; restarting them every epoch costs about 20 s per loader. |
-| `num_workers` + `persistent_workers` | `4` + `true` for datasets read from disk (e.g. the person/FACET images) | Keeps the loader workers alive, so the start-up cost is paid once. |
+| `num_workers` + `persistent_workers` | `4` + `true` for datasets read from disk (e.g. the person/FACET images) | Keeps the loader workers alive, so the start-up cost is paid once (about 1.7x faster in the fairness smoke run). In the search it is only a speed option: with `data_augmentation: false` (every search config) the result of each candidate is identical with and without it, and does not depend on the worker that trains the candidate. |
 | `precision` | `bf16` (as on the servers) | About 1.5x faster than `fp32` on MPS for a full 50-epoch training in the smoke run. |
 
 Limitations on macOS:
@@ -478,9 +497,10 @@ Limitations on macOS:
 - `cuda_inference_time` keeps its historical name; on a Mac it is the time
   measured on the Apple GPU. GPU memory and energy metrics are reported as 0,
   as on CPU.
-- `retrain_parallel.py` uses the Apple GPU automatically when no CUDA device
-  exists. The single-model script `retrain_model.py` has not been validated on
-  macOS.
+- `retrain_parallel.py`, `retrain_model.py` (`--device auto`, the default) and
+  the fairness baselines (`scripts/fairness_baseline/train.py` and
+  `evaluate.py`) use the Apple GPU automatically when no CUDA device exists,
+  with the same mixed-precision policy as on CUDA.
 
 ## To-Do
 - [ ] Add more search algorithms (e.g., DARTS, ENAS).

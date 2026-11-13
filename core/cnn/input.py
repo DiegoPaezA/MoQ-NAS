@@ -98,6 +98,28 @@ def _compute_sampled_mean_std(dataset, max_batches: int = 10, batch_size: int = 
 # -------------------------
 # Main loader (YAML-only)
 # -------------------------
+class _EpochSeededLoader(DataLoader):
+    """DataLoader whose shuffle order does not depend on ``persistent_workers``.
+
+    PyTorch draws one number from the loader generator every time it creates an
+    iterator. Without persistent workers that happens once per epoch; with them
+    the iterator is created on first use and only reset afterwards, so the draw
+    happens once per process. In the search, where one loader serves every
+    candidate of a worker process and its generator is reseeded per candidate,
+    that made a candidate's result depend on whether it was the first one the
+    process trained. Repeating the draw on every reuse gives the generator the
+    same sequence in both modes: identical results with and without persistent
+    workers (as long as the transforms are not random) and no dependence on the
+    worker that trains a candidate.
+    """
+
+    def __iter__(self):
+        if (self.persistent_workers and self.num_workers > 0
+                and self._iterator is not None and self.generator is not None):
+            torch.empty((), dtype=torch.int64).random_(generator=self.generator)
+        return super().__iter__()
+
+
 class GenericDataLoader:
     """A generic data loader for PyTorch, supporting various datasets and data augmentation."""
 
@@ -232,8 +254,11 @@ class GenericDataLoader:
 
         drop_last = True if self.params["dataset"].lower() == "organamnist" else False
 
+        # The retrain keeps the stock DataLoader: its results were produced with it.
+        loader_cls = DataLoader if self.params.get("phase") == "retrain" else _EpochSeededLoader
+
         if not for_train:
-            test_loader = DataLoader(
+            test_loader = loader_cls(
                 self.test_dataset,
                 batch_size=int(self.params["eval_batch_size"]),
                 shuffle=False,
@@ -244,7 +269,7 @@ class GenericDataLoader:
             create_info_file(out_path=self.data_path, info_dict=self.info_dict)
             return test_loader
 
-        train_loader = DataLoader(
+        train_loader = loader_cls(
             self.train_dataset,
             batch_size=int(self.params["batch_size"]),
             shuffle=True,
@@ -252,7 +277,7 @@ class GenericDataLoader:
             **common,
         )
 
-        val_loader = DataLoader(
+        val_loader = loader_cls(
             self.val_dataset,
             batch_size=int(self.params["eval_batch_size"]),
             shuffle=False,
