@@ -10,6 +10,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(project_root))
 
 from core.cnn.metrics.fairness import FairnessMetric
+from core import device as device_utils
 from core.fairness.models import make_baseline_model
 
 def print_detailed_results(arch, data):
@@ -127,10 +128,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(device_utils.resolve_device(args.device))
+    print(f"Device: {device}")
     
     ckpt_dir = Path(args.ckpt_dir)
     if not ckpt_dir.exists():

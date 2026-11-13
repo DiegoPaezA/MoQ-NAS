@@ -9,12 +9,16 @@ import os
 import time
 
 from core import config as cfg
+from core import device as device_utils
 from utils.helpers import check_files, init_log, save_results_file
 from core.cnn import input, master
 
 def main(**args):
 
     logger = init_log(args['log_level'], name=__name__)
+    # 'auto' picks cuda > mps; an explicit device is used unchanged.
+    args['device'] = device_utils.resolve_device(args['device'])
+    logger.info(f"Using device {args['device']}")
     # Check if *experiment_path* contains all the necessary files to retrain an evolved model
     experiment_path = args['experiment_path']
     check_files(args['experiment_path'])
@@ -99,8 +103,9 @@ if __name__ == '__main__':
                             'entire validation dataset at once).')
     parser.add_argument('--limit_data', action='store_true',
                     help='Disable limit data during training. Default = False.')
-    parser.add_argument('--device', type=str, default='cuda',
-                        help='Device to be used during training. Default = cuda.')
+    parser.add_argument('--device', type=str, default='auto',
+                        help="Device to be used during training: 'auto' (cuda, else the Apple GPU), "
+                             "'cuda', 'cuda:N', 'mps' or 'cpu'. Default = auto.")
     parser.add_argument('--num_repetitions', type=int, default=1,
                         help='Number of times the training will be repeated. Default = 1.')
     parser.add_argument('--lr_scheduler', type=str, default="None", choices=['cosine', 'reduce_on_plateau', 'exponential','multistep', 'None'],

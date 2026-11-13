@@ -4,6 +4,7 @@ from typing import Tuple
 
 from core import config as cfg
 from core import evaluation
+from core import device as device_utils
 from core.eval_cache import CachedEvaluator, compute_fingerprint
 from utils.helpers import check_files, init_log, download_dataset
 from utils.seeding import set_global_seeds
@@ -105,6 +106,8 @@ def _setup_checkpoint(engine, config, args, logger):
 
 
 def main(**args):
+    # Fails here, before any work, if a Mac has no usable GPU. Never queries CUDA.
+    device_utils.require_gpu_on_macos()
     set_global_seeds(args.get('seed', 42))
     logger = init_log(args['log_level'], name=__name__)
     logger.info(f"Global seed set to {args.get('seed', 42)}")
