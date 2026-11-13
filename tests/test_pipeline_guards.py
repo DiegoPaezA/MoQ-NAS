@@ -8,6 +8,7 @@ from unittest import mock
 
 import torch
 
+from core.cnn.input import _EpochSeededLoader
 from core.cnn.metrics.fairness import FairnessMetric
 from core.evaluation import EvalPopulation
 
@@ -63,6 +64,39 @@ class NextResult(unittest.TestCase):
         with mock.patch.object(q, 'get', side_effect=queue_mod.Empty):
             with self.assertRaisesRegex(RuntimeError, 'All evaluation workers exited'):
                 EvalPopulation._next_result(q, [_Dead(), _Dead()])
+
+
+class _Numbers(torch.utils.data.Dataset):
+    def __len__(self):
+        return 64
+
+    def __getitem__(self, i):
+        return i
+
+
+def _orders(persistent, first_in_process, workers=2):
+    """Shuffle order of 2 epochs of a 'candidate' seeded with 123, as the search does:
+    one loader per process, generator reseeded before each candidate."""
+    gen = torch.Generator()
+    kwargs = dict(persistent_workers=True, prefetch_factor=4) if persistent else {}
+    loader = _EpochSeededLoader(_Numbers(), batch_size=16, shuffle=True, num_workers=workers,
+                                generator=gen, multiprocessing_context='spawn', **kwargs)
+    if not first_in_process:  # a previous candidate, cut short in its second epoch
+        gen.manual_seed(7)
+        for _ in loader:
+            pass
+        next(iter(loader))
+    gen.manual_seed(123)
+    return [[int(i) for batch in loader for i in batch] for _ in range(2)]
+
+
+class PersistentWorkersShuffle(unittest.TestCase):
+    def test_order_does_not_depend_on_persistence_or_history(self):
+        reference = _orders(persistent=False, first_in_process=True)
+        self.assertNotEqual(reference[0], reference[1])
+        self.assertEqual(_orders(persistent=False, first_in_process=False), reference)
+        self.assertEqual(_orders(persistent=True, first_in_process=True), reference)
+        self.assertEqual(_orders(persistent=True, first_in_process=False), reference)
 
 
 if __name__ == '__main__':
